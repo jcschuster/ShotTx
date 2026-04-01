@@ -1,11 +1,13 @@
 defmodule ShotMain.Prover.BranchWorker do
   require Logger
   use GenServer
+  alias ShotMain.Simplifyer
   alias ShotMain.Generation
   alias ShotMain.Data.Parameters
   alias ShotMain.Prover.Rules
   alias ShotMain.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Stt.TermFactory, as: TF
+  import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
 
@@ -13,11 +15,10 @@ defmodule ShotMain.Prover.BranchWorker do
   defstruct id: nil,
             queue: nil,
             defs: %{},
-            params: nil,
+            params: %Parameters{},
             sleeping_gamma_rules: [],
-            sleeping_prim_rules: [],
             current_gamma_limit: 1,
-            current_prim_limit: 1
+            local_atoms: []
 
   def start_branch(branch_id, formulas, defs \\ %{}, %Parameters{} = params) do
     initial_queue = Enum.reduce(formulas, FPQ.new(), &insert_formula(&2, &1, params))
@@ -61,7 +62,8 @@ defmodule ShotMain.Prover.BranchWorker do
             defs: parent_state.defs,
             params: parent_state.params,
             sleeping_gamma_rules: parent_state.sleeping_gamma_rules,
-            current_gamma_limit: parent_state.current_gamma_limit
+            current_gamma_limit: parent_state.current_gamma_limit,
+            local_atoms: parent_state.local_atoms
           }
 
           DynamicSupervisor.start_child(
@@ -86,8 +88,10 @@ defmodule ShotMain.Prover.BranchWorker do
 
   @impl true
   def init(%__MODULE__{} = state) do
+    Registry.register(ShotMain.Prover.PubSub, "global_branch_control", [])
+
     if poisoned?(state.id) do
-      {:stop, :normal}
+      {:stop, :normal, state}
     else
       broadcast_manager(state.id, :active)
       send(self(), :process_next)
@@ -115,6 +119,20 @@ defmodule ShotMain.Prover.BranchWorker do
     {:noreply, new_state}
   end
 
+  @impl true
+  def handle_info({:poison_prefix, poisoned_prefix}, state) do
+    if String.starts_with?(state.id, poisoned_prefix) do
+      Logger.debug("Branch #{state.id} caught poison from #{poisoned_prefix}. Terminating.")
+
+      broadcast_manager(state.id, :closed)
+      :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
+
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
+  end
+
   ##### Main Processing Loop #####
 
   @impl true
@@ -131,7 +149,7 @@ defmodule ShotMain.Prover.BranchWorker do
 
       FPQ.empty?(state.queue) ->
         Logger.info("Branch #{state.id} fully saturated. Found a counter-model!")
-        broadcast_manager(state.id, {:saturated, state.defs})
+        broadcast_manager(state.id, {:saturated, {state.defs, state.local_atoms}})
 
         :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
 
@@ -188,9 +206,6 @@ defmodule ShotMain.Prover.BranchWorker do
     my_new_id = state.id <> "_A"
     sibling_id = state.id <> "_B"
 
-    :ets.insert(:tableau_lineage, {my_new_id, state.id})
-    :ets.insert(:tableau_lineage, {sibling_id, state.id})
-
     spawn_child_branch(sibling_id, b2, state)
 
     broadcast_manager(state.id, :split)
@@ -202,11 +217,6 @@ defmodule ShotMain.Prover.BranchWorker do
 
   defp apply_rule({:instantiate, branches_stream, count}, %__MODULE__{} = state) do
     branches = Enum.to_list(branches_stream)
-
-    lineage_atoms =
-      state.id
-      |> trace_lineage_ids([])
-      |> fetch_raw_atoms_from_ids()
 
     keep_idx = count - 1
 
@@ -220,13 +230,12 @@ defmodule ShotMain.Prover.BranchWorker do
           new_defs = Map.put(state.defs, k_decl, k_tid)
 
           keep_child_id = "#{state.id}_K"
-          :ets.insert(:tableau_lineage, {keep_child_id, state.id})
 
           broadcast_manager(state.id, :split)
           broadcast_manager(keep_child_id, :active)
 
           queue_with_unfolded =
-            Enum.reduce(lineage_atoms, state.queue, fn term_id, acc_queue ->
+            Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
               case unfold_if_possible(term_id, new_defs) do
                 nil ->
                   acc_queue
@@ -243,10 +252,9 @@ defmodule ShotMain.Prover.BranchWorker do
           new_defs = Map.put(state.defs, decl, tid)
 
           child_id = "#{state.id}_I#{idx}"
-          :ets.insert(:tableau_lineage, {child_id, state.id})
 
           queue_with_unfolded =
-            Enum.reduce(lineage_atoms, state.queue, fn term_id, acc_queue ->
+            Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
               case unfold_if_possible(term_id, new_defs) do
                 nil ->
                   acc_queue
@@ -303,13 +311,10 @@ defmodule ShotMain.Prover.BranchWorker do
 
     case unfolded_cf do
       nil ->
-        :ets.insert(:tableau_board, {state.id, term_id})
+        check_local_closures(term_id, state.local_atoms, state)
 
-        Registry.dispatch(ShotMain.Prover.PubSub, "atoms", fn entries ->
-          for {pid, _} <- entries, do: send(pid, {:new_atom, state.id, term_id})
-        end)
-
-        state
+        new_atoms = [term_id | state.local_atoms]
+        %{state | local_atoms: new_atoms}
 
       cf ->
         %{state | queue: FPQ.insert(state.queue, cf, state.params.formula_cost.(cf))}
@@ -321,10 +326,13 @@ defmodule ShotMain.Prover.BranchWorker do
   ##############################################################################
 
   defp poisoned?(branch_id) do
-    lineage = [branch_id | trace_lineage_ids(branch_id, [])]
+    segments = String.split(branch_id, "_")
 
-    Enum.any?(lineage, fn id ->
-      :ets.member(:tableau_tombstones, id)
+    prefixes =
+      Enum.scan(segments, fn segment, acc -> acc <> "_" <> segment end)
+
+    Enum.any?(prefixes, fn prefix ->
+      :ets.member(:tableau_tombstones, prefix)
     end)
   end
 
@@ -353,6 +361,51 @@ defmodule ShotMain.Prover.BranchWorker do
     end
   end
 
+  defp check_local_closures(new_term, existing_atoms, %__MODULE__{} = state) do
+    if Simplifyer.o_simplify(new_term) == false_term() do
+      trigger_local_ground_closure(state.id)
+    else
+      neg_new_term = lit_neg(new_term)
+
+      closures =
+        Enum.flat_map(existing_atoms, fn existing_term ->
+          neg_existing = lit_neg(existing_term)
+
+          sols1 =
+            {neg_new_term, existing_term}
+            |> ShotUnify.unify(state.params.unify_depth)
+            |> Enum.to_list()
+
+          sols2 =
+            {new_term, neg_existing}
+            |> ShotUnify.unify(state.params.unify_depth)
+            |> Enum.to_list()
+
+          sols1 ++ sols2
+        end)
+
+      if not Enum.empty?(closures) do
+        has_ground_closure? =
+          Enum.any?(closures, &(Enum.empty?(&1.substitutions) && Enum.empty?(&1.flex_pairs)))
+
+        if has_ground_closure? do
+          trigger_local_ground_closure(state.id)
+        else
+          broadcast_closures(state.id, closures)
+        end
+      end
+    end
+  end
+
+  defp trigger_local_ground_closure(branch_id) do
+    Logger.debug("Branch #{branch_id} found local ground closure. Initiating tombstone.")
+    :ets.insert(:tableau_tombstones, {branch_id, true})
+
+    Registry.dispatch(ShotMain.Prover.PubSub, "global_branch_control", fn entries ->
+      for {pid, _} <- entries, do: send(pid, {:poison_prefix, branch_id})
+    end)
+  end
+
   defp lit_neg(term_id) do
     case TF.get_term(term_id) do
       negated(inner) -> inner
@@ -366,22 +419,9 @@ defmodule ShotMain.Prover.BranchWorker do
     end)
   end
 
-  defp trace_lineage_ids(nil, acc), do: Enum.reverse(acc)
-
-  defp trace_lineage_ids(branch_id, acc) do
-    parent_id =
-      case :ets.lookup(:tableau_lineage, branch_id) do
-        [{^branch_id, pid}] -> pid
-        [] -> nil
-      end
-
-    trace_lineage_ids(parent_id, [branch_id | acc])
-  end
-
-  defp fetch_raw_atoms_from_ids(branch_ids) do
-    Enum.flat_map(branch_ids, fn b_id ->
-      :ets.lookup(:tableau_board, b_id)
-      |> Enum.map(fn {_id, term} -> term end)
+  defp broadcast_closures(branch_id, closures) do
+    Registry.dispatch(ShotMain.Prover.PubSub, "local_closures", fn entries ->
+      for {pid, _} <- entries, do: send(pid, {:local_closures, branch_id, closures})
     end)
   end
 end

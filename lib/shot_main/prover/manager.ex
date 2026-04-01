@@ -43,8 +43,6 @@ defmodule ShotMain.Prover.Manager do
       write_concurrency: true
     ])
 
-    :ets.new(:tableau_lineage, [:set, :public, :named_table, read_concurrency: true])
-
     :ets.new(:tableau_stats, [:set, :public, :named_table, write_concurrency: true])
 
     :ets.new(:tableau_tombstones, [:set, :public, :named_table, read_concurrency: true])
@@ -126,10 +124,10 @@ defmodule ShotMain.Prover.Manager do
   end
 
   @impl true
-  def handle_info({:branch_status, branch_id, {:saturated, branch_defs}}, state) do
+  def handle_info({:branch_status, branch_id, {:saturated, {branch_defs, local_atoms}}}, state) do
     new_active = MapSet.delete(state.active_branches, branch_id)
     new_idle = MapSet.delete(state.idle_branches, branch_id)
-    new_sat = Map.put(state.saturated_branches, branch_id, branch_defs)
+    new_sat = Map.put(state.saturated_branches, branch_id, {branch_defs, local_atoms})
 
     new_state = %{
       state
@@ -246,7 +244,6 @@ defmodule ShotMain.Prover.Manager do
     terminate_all_branches()
 
     :ets.delete_all_objects(:tableau_board)
-    :ets.delete_all_objects(:tableau_lineage)
     :ets.delete_all_objects(:tableau_tombstones)
 
     flush_manager_mailbox()

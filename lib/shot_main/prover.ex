@@ -102,10 +102,11 @@ defmodule ShotMain.Prover do
 
     atoms_string = Enum.map_join(model_atoms, ", ", &format(&1, true))
 
-    if defs_string == "" do
-      atoms_string
-    else
-      "[#{defs_string}] \nModel: #{atoms_string}"
+    case {defs_string, atoms_string} do
+      {"", ""} -> ""
+      {"", _} -> atoms_string
+      {_, ""} -> "[#{defs_string}]"
+      {_, _} -> "[#{defs_string}] \nModel: #{atoms_string}"
     end
   end
 end
