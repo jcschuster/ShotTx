@@ -15,7 +15,9 @@ defmodule ShotMain.Prover.BranchWorker do
             defs: %{},
             params: nil,
             sleeping_gamma_rules: [],
-            current_gamma_limit: 1
+            sleeping_prim_rules: [],
+            current_gamma_limit: 1,
+            current_prim_limit: 1
 
   def start_branch(branch_id, formulas, defs \\ %{}, %Parameters{} = params) do
     initial_queue = Enum.reduce(formulas, FPQ.new(), &insert_formula(&2, &1, params))
@@ -84,9 +86,13 @@ defmodule ShotMain.Prover.BranchWorker do
 
   @impl true
   def init(%__MODULE__{} = state) do
-    broadcast_manager(state.id, :active)
-    send(self(), :process_next)
-    {:ok, state}
+    if poisoned?(state.id) do
+      {:stop, :normal}
+    else
+      broadcast_manager(state.id, :active)
+      send(self(), :process_next)
+      {:ok, state}
+    end
   end
 
   @impl true
@@ -114,6 +120,11 @@ defmodule ShotMain.Prover.BranchWorker do
   @impl true
   def handle_info(:process_next, state) do
     cond do
+      poisoned?(state.id) ->
+        Logger.debug("Branch #{state.id} noticed it is poisoned. Terminating.")
+        :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
+        {:stop, :normal, state}
+
       FPQ.empty?(state.queue) and not Enum.empty?(state.sleeping_gamma_rules) ->
         broadcast_manager(state.id, :idle)
         {:noreply, state}
@@ -121,6 +132,9 @@ defmodule ShotMain.Prover.BranchWorker do
       FPQ.empty?(state.queue) ->
         Logger.info("Branch #{state.id} fully saturated. Found a counter-model!")
         broadcast_manager(state.id, {:saturated, state.defs})
+
+        :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
+
         {:stop, :normal, state}
 
       true ->
@@ -144,6 +158,9 @@ defmodule ShotMain.Prover.BranchWorker do
   defp apply_rule(:contradiction, state) do
     Logger.info("Branch #{state.id} closed explicitly.")
     broadcast_manager(state.id, :closed)
+
+    :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
+
     {:stop, :normal, state}
   end
 
@@ -302,6 +319,14 @@ defmodule ShotMain.Prover.BranchWorker do
   ##############################################################################
   # HELPERS
   ##############################################################################
+
+  defp poisoned?(branch_id) do
+    lineage = [branch_id | trace_lineage_ids(branch_id, [])]
+
+    Enum.any?(lineage, fn id ->
+      :ets.member(:tableau_tombstones, id)
+    end)
+  end
 
   defp insert_formula(queue, formula, params) do
     cf = Rules.classify_formula(formula)

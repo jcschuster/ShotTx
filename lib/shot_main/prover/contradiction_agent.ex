@@ -3,6 +3,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
   use GenServer
   require Logger
 
+  alias ShotMain.Simplifyer
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotUnify
   alias ShotUnify.UnifSolution
@@ -34,9 +35,9 @@ defmodule ShotMain.Prover.ContradictionAgent do
   end
 
   @impl true
-  def handle_info(:reset_state, _state) do
-    Logger.debug("ContradictionAgent resetting state.")
-    {:noreply, %__MODULE__{}}
+  def handle_call(:reset_state, _from, _state) do
+    Logger.debug("ContradictionAgent safely resetting state.")
+    {:reply, :ok, %__MODULE__{}}
   end
 
   @impl true
@@ -88,6 +89,8 @@ defmodule ShotMain.Prover.ContradictionAgent do
           Enum.uniq([%{} | existing])
         end)
 
+      trigger_ground_closure(branch_id)
+
       new_state = %{state | branch_closures: updated_closures}
       check_global_closure(new_state)
     else
@@ -99,6 +102,15 @@ defmodule ShotMain.Prover.ContradictionAgent do
         Logger.debug(
           "Branch #{branch_id} found local closure options: #{inspect(new_local_closures)}"
         )
+
+        has_ground_closure? =
+          Enum.any?(new_local_closures, fn sol ->
+            Enum.empty?(sol.substitutions) && Enum.empty?(sol.flex_pairs)
+          end)
+
+        if has_ground_closure? do
+          trigger_ground_closure(branch_id)
+        end
 
         updated_closures =
           Map.update(state.branch_closures, branch_id, new_local_closures, fn existing ->
@@ -135,6 +147,40 @@ defmodule ShotMain.Prover.ContradictionAgent do
       [] ->
         Logger.warning(
           "All branches have local closures, but global unification failed. Returning UNK."
+        )
+
+        Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+          for {pid, _} <- entries,
+              do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
+        end)
+    end
+
+    {:noreply, state}
+  end
+
+  defp do_handle_info(:verify_all_closed, state) do
+    active_options_lists =
+      state.active_branches
+      |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
+
+    case find_valid_combination(active_options_lists) do
+      {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
+        final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
+
+        if Enum.empty?(flex) do
+          Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+            for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
+          end)
+        else
+          Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+            for {pid, _} <- entries,
+                do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
+          end)
+        end
+
+      :error ->
+        Logger.warning(
+          "All branches closed locally, but global unification failed. Returning UNK."
         )
 
         Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
@@ -245,6 +291,10 @@ defmodule ShotMain.Prover.ContradictionAgent do
     end
   end
 
+  defp trigger_ground_closure(branch_id) do
+    :ets.insert(:tableau_tombstones, {branch_id, true})
+  end
+
   ##############################################################################
   # HELPERS
   ##############################################################################
@@ -253,6 +303,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
     branch_id
     |> trace_lineage_ids([])
     |> fetch_raw_atoms_from_ids()
+    |> Enum.map(&Simplifyer.o_simplify/1)
   end
 
   defp trace_lineage_ids(nil, acc), do: Enum.reverse(acc)

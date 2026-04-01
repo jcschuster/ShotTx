@@ -47,6 +47,8 @@ defmodule ShotMain.Prover.Manager do
 
     :ets.new(:tableau_stats, [:set, :public, :named_table, write_concurrency: true])
 
+    :ets.new(:tableau_tombstones, [:set, :public, :named_table, read_concurrency: true])
+
     {:ok, state}
   end
 
@@ -206,6 +208,16 @@ defmodule ShotMain.Prover.Manager do
         send(ShotMain.Prover.ContradictionAgent, {:verify_csa, state.saturated_branches})
         {:noreply, state}
 
+      MapSet.size(state.active_branches) == 0 and
+        MapSet.size(state.idle_branches) == 0 and
+          Kernel.map_size(state.saturated_branches) == 0 ->
+        Logger.debug(
+          "All branches closed explicitly. Asking Agent to verify global unification..."
+        )
+
+        send(ShotMain.Prover.ContradictionAgent, :verify_all_closed)
+        {:noreply, state}
+
       MapSet.size(state.active_branches) == 0 and MapSet.size(state.idle_branches) > 0 ->
         new_limit = state.current_gamma_limit + 1
         Logger.debug("All branches idle. Increasing Gamma Limit to #{new_limit}...")
@@ -235,8 +247,21 @@ defmodule ShotMain.Prover.Manager do
 
     :ets.delete_all_objects(:tableau_board)
     :ets.delete_all_objects(:tableau_lineage)
+    :ets.delete_all_objects(:tableau_tombstones)
 
-    send(ShotMain.Prover.ContradictionAgent, :reset_state)
+    flush_manager_mailbox()
+
+    GenServer.call(ShotMain.Prover.ContradictionAgent, :reset_state, :infinity)
+  end
+
+  defp flush_manager_mailbox do
+    receive do
+      {:branch_status, _, _} -> flush_manager_mailbox()
+      {:proof_result, _} -> flush_manager_mailbox()
+      {:wake_up, _} -> flush_manager_mailbox()
+    after
+      0 -> :ok
+    end
   end
 
   defp terminate_all_branches do
@@ -246,8 +271,7 @@ defmodule ShotMain.Prover.Manager do
 
       children ->
         Enum.each(children, fn {_, pid, _, _} ->
-          # Process.exit(pid, :kill)
-          DynamicSupervisor.terminate_child(ShotMain.Prover.BranchSupervisor, pid)
+          Process.exit(pid, :kill)
         end)
 
         Process.sleep(1)

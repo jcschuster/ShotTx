@@ -4,8 +4,18 @@ defmodule ShotMain.Prover do
   use ShotDs.Hol.Patterns
   import ShotDs.Util.Formatter
   alias ShotDs.Stt.TermFactory, as: TF
-  alias ShotDs.Data.{Declaration, Term}
+  alias ShotDs.Data.{Declaration, Term, Problem}
   import ShotDs.Hol.{Definitions, Dsl}
+
+  def prove(%Problem{} = problem) do
+    if is_nil(problem.conjecture) do
+      "Error: no conjecture found"
+    else
+      {_name, conclusion} = problem.conjecture
+      assumptions = Enum.map(problem.axioms, fn {_name, axiom} -> axiom end)
+      prove(conclusion, assumptions, problem.definitions)
+    end
+  end
 
   def prove(conclusion, assumptions \\ [], defs \\ %{}, opts \\ [])
       when is_list(assumptions) do
