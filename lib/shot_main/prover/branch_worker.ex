@@ -11,6 +11,9 @@ defmodule ShotMain.Prover.BranchWorker do
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
 
+  alias ShotMain.BranchSupervisor
+  alias ShotMain.Prover.ContradictionAgent, as: CA
+
   # State tracking
   defstruct id: nil,
             queue: nil,
@@ -32,7 +35,7 @@ defmodule ShotMain.Prover.BranchWorker do
       current_gamma_limit: params.initial_gamma_limit
     }
 
-    DynamicSupervisor.start_child(ShotMain.Prover.BranchSupervisor, {__MODULE__, state})
+    DynamicSupervisor.start_child(BranchSupervisor, {__MODULE__, state})
   end
 
   def spawn_child_branch(child_id, new_formula, %__MODULE__{} = parent_state) do
@@ -66,10 +69,7 @@ defmodule ShotMain.Prover.BranchWorker do
             local_atoms: parent_state.local_atoms
           }
 
-          DynamicSupervisor.start_child(
-            ShotMain.Prover.BranchSupervisor,
-            {__MODULE__, child_state}
-          )
+          DynamicSupervisor.start_child(BranchSupervisor, {__MODULE__, child_state})
         end
     end
   end
@@ -93,9 +93,8 @@ defmodule ShotMain.Prover.BranchWorker do
     if poisoned?(state.id) do
       {:stop, :normal, state}
     else
-      broadcast_manager(state.id, :active)
-      send(self(), :process_next)
-      {:ok, state}
+      broadcast_status(state.id, :active)
+      {:ok, state, {:continue, :process_next}}
     end
   end
 
@@ -113,10 +112,9 @@ defmodule ShotMain.Prover.BranchWorker do
         queue: new_queue
     }
 
-    broadcast_manager(state.id, :active)
-    send(self(), :process_next)
+    broadcast_status(state.id, :active)
 
-    {:noreply, new_state}
+    {:noreply, new_state, {:continue, :process_next}}
   end
 
   @impl true
@@ -124,7 +122,8 @@ defmodule ShotMain.Prover.BranchWorker do
     if String.starts_with?(state.id, poisoned_prefix) do
       Logger.debug("Branch #{state.id} caught poison from #{poisoned_prefix}. Terminating.")
 
-      broadcast_manager(state.id, :closed)
+      broadcast_status(state.id, :closed)
+
       :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
 
       {:stop, :normal, state}
@@ -136,20 +135,22 @@ defmodule ShotMain.Prover.BranchWorker do
   ##### Main Processing Loop #####
 
   @impl true
-  def handle_info(:process_next, state) do
+  def handle_continue(:process_next, state) do
     cond do
       poisoned?(state.id) ->
         Logger.debug("Branch #{state.id} noticed it is poisoned. Terminating.")
+        broadcast_status(state.id, :closed)
         :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
         {:stop, :normal, state}
 
       FPQ.empty?(state.queue) and not Enum.empty?(state.sleeping_gamma_rules) ->
-        broadcast_manager(state.id, :idle)
+        broadcast_status(state.id, :idle)
         {:noreply, state}
 
       FPQ.empty?(state.queue) ->
         Logger.info("Branch #{state.id} fully saturated. Found a counter-model!")
-        broadcast_manager(state.id, {:saturated, {state.defs, state.local_atoms}})
+
+        broadcast_status(state.id, {:saturated, {state.defs, state.local_atoms}})
 
         :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
 
@@ -163,8 +164,7 @@ defmodule ShotMain.Prover.BranchWorker do
             {:stop, reason, final_state}
 
           new_state ->
-            send(self(), :process_next)
-            {:noreply, new_state}
+            {:noreply, new_state, {:continue, :process_next}}
         end
     end
   end
@@ -175,7 +175,7 @@ defmodule ShotMain.Prover.BranchWorker do
 
   defp apply_rule(:contradiction, state) do
     Logger.info("Branch #{state.id} closed explicitly.")
-    broadcast_manager(state.id, :closed)
+    broadcast_status(state.id, :closed)
 
     :ets.update_counter(:tableau_stats, :branch_count, {2, -1})
 
@@ -208,8 +208,8 @@ defmodule ShotMain.Prover.BranchWorker do
 
     spawn_child_branch(sibling_id, b2, state)
 
-    broadcast_manager(state.id, :split)
-    broadcast_manager(my_new_id, :active)
+    broadcast_status(state.id, :split)
+    broadcast_status(my_new_id, :active)
 
     new_queue = insert_formula(state.queue, b1, state.params)
     %{state | id: my_new_id, queue: new_queue}
@@ -231,8 +231,8 @@ defmodule ShotMain.Prover.BranchWorker do
 
           keep_child_id = "#{state.id}_K"
 
-          broadcast_manager(state.id, :split)
-          broadcast_manager(keep_child_id, :active)
+          broadcast_status(state.id, :split)
+          broadcast_status(keep_child_id, :active)
 
           queue_with_unfolded =
             Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
@@ -391,7 +391,7 @@ defmodule ShotMain.Prover.BranchWorker do
         if has_ground_closure? do
           trigger_local_ground_closure(state.id)
         else
-          broadcast_closures(state.id, closures)
+          GenServer.cast(CA, {:local_closures, state.id, closures})
         end
       end
     end
@@ -413,15 +413,9 @@ defmodule ShotMain.Prover.BranchWorker do
     end
   end
 
-  defp broadcast_manager(branch_id, status) do
+  defp broadcast_status(branch_id, status) do
     Registry.dispatch(ShotMain.Prover.PubSub, "branch_events", fn entries ->
       for {pid, _} <- entries, do: send(pid, {:branch_status, branch_id, status})
-    end)
-  end
-
-  defp broadcast_closures(branch_id, closures) do
-    Registry.dispatch(ShotMain.Prover.PubSub, "local_closures", fn entries ->
-      for {pid, _} <- entries, do: send(pid, {:local_closures, branch_id, closures})
     end)
   end
 end

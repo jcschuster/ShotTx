@@ -47,6 +47,8 @@ defmodule ShotMain.Prover.Manager do
 
     :ets.new(:tableau_tombstones, [:set, :public, :named_table, read_concurrency: true])
 
+    :ets.new(:term_cache, [:set, :public, :named_table, read_concurrency: true])
+
     {:ok, state}
   end
 
@@ -262,7 +264,7 @@ defmodule ShotMain.Prover.Manager do
   end
 
   defp terminate_all_branches do
-    case DynamicSupervisor.which_children(ShotMain.Prover.BranchSupervisor) do
+    case DynamicSupervisor.which_children(ShotMain.BranchSupervisor) do
       [] ->
         :ok
 

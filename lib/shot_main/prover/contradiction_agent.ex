@@ -49,6 +49,17 @@ defmodule ShotMain.Prover.ContradictionAgent do
     end
   end
 
+  @impl true
+  def handle_cast(event, state) do
+    case :ets.lookup(:tableau_stats, :aborted) do
+      [{:aborted, true}] ->
+        {:noreply, state}
+
+      _ ->
+        do_handle_cast(event, state)
+    end
+  end
+
   defp do_handle_info({:branch_status, branch_id, :active}, state) do
     new_active = MapSet.put(state.active_branches, branch_id)
     {:noreply, %{state | active_branches: new_active}}
@@ -74,18 +85,6 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
   defp do_handle_info({:branch_status, _branch_id, _other}, state) do
     {:noreply, state}
-  end
-
-  defp do_handle_info({:local_closures, branch_id, new_closures}, state) do
-    Logger.debug("Agent received #{length(new_closures)} valid local closures from #{branch_id}")
-
-    updated_closures =
-      Map.update(state.branch_closures, branch_id, new_closures, fn existing ->
-        Enum.uniq(existing ++ new_closures)
-      end)
-
-    new_state = %{state | branch_closures: updated_closures}
-    check_global_closure(new_state)
   end
 
   defp do_handle_info({:verify_csa, saturated_branch_map}, state) do
@@ -156,8 +155,43 @@ defmodule ShotMain.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
+  defp do_handle_info({:global_closure_found, solution}, state) do
+    %UnifSolution{substitutions: final_substs, flex_pairs: flex} = solution
+
+    final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
+
+    if Enum.empty?(flex) do
+      Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
+
+      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+        for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
+      end)
+    else
+      Logger.warning("CONDITIONAL CLOSURE FOUND! Dependent on Flex-Flex constraints.")
+
+      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+        for {pid, _} <- entries,
+            do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
+      end)
+    end
+
+    {:noreply, state}
+  end
+
   defp do_handle_info(_, state) do
     {:noreply, state}
+  end
+
+  defp do_handle_cast({:local_closures, branch_id, new_closures}, state) do
+    Logger.debug("Agent received #{length(new_closures)} valid local closures from #{branch_id}")
+
+    updated_closures =
+      Map.update(state.branch_closures, branch_id, new_closures, fn existing ->
+        Enum.uniq(existing ++ new_closures)
+      end)
+
+    new_state = %{state | branch_closures: updated_closures}
+    check_global_closure(new_state)
   end
 
   ##############################################################################
@@ -187,30 +221,14 @@ defmodule ShotMain.Prover.ContradictionAgent do
         state.active_branches
         |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
 
-      case find_valid_combination(active_options_lists) do
-        {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
-          final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
+      Task.Supervisor.start_child(ShotMain.TaskSupervisor, fn ->
+        case find_valid_combination(active_options_lists) do
+          {:ok, solution} -> send(__MODULE__, {:global_closure_found, solution})
+          :error -> :ok
+        end
+      end)
 
-          if Enum.empty?(flex) do
-            Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
-
-            Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-              for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
-            end)
-          else
-            Logger.warning("CONDITIONAL CLOSURE FOUND! Dependent on Flex-Flex constraints.")
-
-            Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-              for {pid, _} <- entries,
-                  do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
-            end)
-          end
-
-          {:noreply, state}
-
-        :error ->
-          {:noreply, state}
-      end
+      {:noreply, state}
     else
       {:noreply, state}
     end

@@ -3,14 +3,14 @@ defmodule ShotMain.Simplifyer do
   alias ShotDs.Stt.TermFactory, as: TF
 
   def o_simplify(term_id) do
-    case Process.get({:simp, term_id}) do
-      nil ->
-        simplified = do_o_simplify(term_id)
-        Process.put({:simp, term_id}, simplified)
-        simplified
-
-      cached_result ->
+    case :ets.lookup(:term_cache, {:simp, term_id}) do
+      [{{:simp, ^term_id}, cached_result}] ->
         cached_result
+
+      [] ->
+        simplified = do_o_simplify(term_id)
+        :ets.insert(:term_cache, {{:simp, term_id}, simplified})
+        simplified
     end
   end
 
