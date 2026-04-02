@@ -54,7 +54,17 @@ defmodule ShotMain.Prover do
   def sat(formulas, defs, opts) when is_list(formulas) do
     params = struct!(Parameters, opts)
 
-    case ShotMain.Prover.Manager.prove(formulas, defs, params) do
+    session_id = make_ref() |> inspect()
+
+    {:ok, _session_pid} =
+      DynamicSupervisor.start_child(
+        ShotMain.SessionSpawner,
+        {ShotMain.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
+      )
+
+    manager_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :manager}}}
+
+    case GenServer.call(manager_via, :start_proof, :infinity) do
       {:sat, {model_atoms, model_defs}} ->
         {:sat, format_model(model_atoms, model_defs)}
 
