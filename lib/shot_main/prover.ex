@@ -53,18 +53,20 @@ defmodule ShotMain.Prover do
 
   def sat(formulas, defs, opts) when is_list(formulas) do
     params = struct!(Parameters, opts)
-
     session_id = make_ref() |> inspect()
 
-    {:ok, _session_pid} =
+    {:ok, session_pid} =
       DynamicSupervisor.start_child(
         ShotMain.SessionSpawner,
         {ShotMain.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
       )
 
     manager_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :manager}}}
+    result = GenServer.call(manager_via, :start_proof, :infinity)
 
-    case GenServer.call(manager_via, :start_proof, :infinity) do
+    DynamicSupervisor.terminate_child(ShotMain.SessionSpawner, session_pid)
+
+    case result do
       {:sat, {model_atoms, model_defs}} ->
         {:sat, format_model(model_atoms, model_defs)}
 
@@ -83,8 +85,8 @@ defmodule ShotMain.Prover do
       :timeout ->
         :timeout
 
-      {:error, reason} ->
-        {:error, reason}
+      other ->
+        other
     end
   end
 

@@ -4,6 +4,9 @@ defmodule ShotMain.Application do
 
   @impl true
   def start(_type, _args) do
+    # cache simplifications
+    :ets.new(:term_cache, [:set, :public, :named_table, read_concurrency: true])
+
     children = [
       {Registry, keys: :duplicate, name: ShotMain.Prover.PubSub},
       {Registry, keys: :unique, name: ShotMain.Prover.ProcessRegistry},

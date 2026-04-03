@@ -10,15 +10,18 @@ defmodule ShotMain.Prover.ContradictionAgent do
   @unify_depth 10
 
   # State tracking
-  defstruct active_branches: MapSet.new(),
+  defstruct session_id: nil,
+            ets_tables: %{},
+            active_branches: MapSet.new(),
             branch_closures: %{}
 
   ##############################################################################
   # PUBLIC API
   ##############################################################################
 
-  def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, %__MODULE__{}, name: __MODULE__)
+  def start_link(session_id) do
+    name = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :ca}}}
+    GenServer.start_link(__MODULE__, session_id, name: name)
   end
 
   ##############################################################################
@@ -26,39 +29,35 @@ defmodule ShotMain.Prover.ContradictionAgent do
   ##############################################################################
 
   @impl true
-  def init(state) do
-    Registry.register(ShotMain.Prover.PubSub, "local_closures", [])
-    Registry.register(ShotMain.Prover.PubSub, "branch_events", [])
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_call(:reset_state, _from, _state) do
-    Logger.debug("ContradictionAgent safely resetting state.")
-    {:reply, :ok, %__MODULE__{}}
+  def init(session_id) do
+    Registry.register(ShotMain.Prover.PubSub, "local_closures_#{session_id}", [])
+    Registry.register(ShotMain.Prover.PubSub, "branch_events_#{session_id}", [])
+    {:ok, %__MODULE__{session_id: session_id}}
   end
 
   @impl true
   def handle_info(event, state) do
-    case :ets.lookup(:tableau_stats, :aborted) do
-      [{:aborted, true}] ->
-        {:noreply, state}
+    stats_table = Map.get(state.ets_tables, :stats)
 
-      _ ->
-        do_handle_info(event, state)
+    if stats_table && :ets.lookup(stats_table, :aborted) == [{:aborted, true}] do
+      {:noreply, state}
+    else
+      do_handle_info(event, state)
     end
   end
 
   @impl true
   def handle_cast(event, state) do
-    case :ets.lookup(:tableau_stats, :aborted) do
-      [{:aborted, true}] ->
-        {:noreply, state}
+    stats_table = Map.get(state.ets_tables, :stats)
 
-      _ ->
-        do_handle_cast(event, state)
+    if stats_table && :ets.lookup(stats_table, :aborted) == [{:aborted, true}] do
+      {:noreply, state}
+    else
+      do_handle_cast(event, state)
     end
   end
+
+  # ---- INFO CALLBACKS ---- #
 
   defp do_handle_info({:branch_status, branch_id, :active}, state) do
     new_active = MapSet.put(state.active_branches, branch_id)
@@ -83,11 +82,27 @@ defmodule ShotMain.Prover.ContradictionAgent do
     check_global_closure(new_state)
   end
 
+  defp do_handle_info({:branch_status, branch_id, {:saturated, _}}, state) do
+    new_active = MapSet.delete(state.active_branches, branch_id)
+    {:noreply, %{state | active_branches: new_active}}
+  end
+
   defp do_handle_info({:branch_status, _branch_id, _other}, state) do
     {:noreply, state}
   end
 
-  defp do_handle_info({:verify_csa, saturated_branch_map}, state) do
+  defp do_handle_info(_event, state) do
+    {:noreply, state}
+  end
+
+  # ---- CAST CALLBACKS ----
+
+  defp do_handle_cast({:set_ets_tables, tables}, state) do
+    Logger.debug("ContradictionAgent received ETS tables.")
+    {:noreply, %{state | ets_tables: tables}}
+  end
+
+  defp do_handle_cast({:verify_csa, saturated_branch_map}, state) do
     open_branches =
       saturated_branch_map
       |> Map.keys()
@@ -102,26 +117,34 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
         Logger.info("Agent confirmed CSA on genuinely open branch #{model_branch_id}")
 
-        Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-          for {pid, _} <- entries,
-              do: send(pid, {:proof_result, {:sat, {model_atoms, model_defs}}})
-        end)
+        Registry.dispatch(
+          ShotMain.Prover.PubSub,
+          "proof_results_#{state.session_id}",
+          fn entries ->
+            for {pid, _} <- entries,
+                do: send(pid, {:proof_result, {:sat, {model_atoms, model_defs}}})
+          end
+        )
 
       [] ->
         Logger.warning(
           "All branches have local closures, but global unification failed. Returning UNK."
         )
 
-        Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-          for {pid, _} <- entries,
-              do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
-        end)
+        Registry.dispatch(
+          ShotMain.Prover.PubSub,
+          "proof_results_#{state.session_id}",
+          fn entries ->
+            for {pid, _} <- entries,
+                do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
+          end
+        )
     end
 
     {:noreply, state}
   end
 
-  defp do_handle_info(:verify_all_closed, state) do
+  defp do_handle_cast(:verify_all_closed, state) do
     active_options_lists =
       state.active_branches
       |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
@@ -131,14 +154,22 @@ defmodule ShotMain.Prover.ContradictionAgent do
         final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
         if Enum.empty?(flex) do
-          Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-            for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
-          end)
+          Registry.dispatch(
+            ShotMain.Prover.PubSub,
+            "proof_results_#{state.session_id}",
+            fn entries ->
+              for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
+            end
+          )
         else
-          Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-            for {pid, _} <- entries,
-                do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
-          end)
+          Registry.dispatch(
+            ShotMain.Prover.PubSub,
+            "proof_results_#{state.session_id}",
+            fn entries ->
+              for {pid, _} <- entries,
+                  do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
+            end
+          )
         end
 
       :error ->
@@ -146,16 +177,20 @@ defmodule ShotMain.Prover.ContradictionAgent do
           "All branches closed locally, but global unification failed. Returning UNK."
         )
 
-        Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
-          for {pid, _} <- entries,
-              do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
-        end)
+        Registry.dispatch(
+          ShotMain.Prover.PubSub,
+          "proof_results_#{state.session_id}",
+          fn entries ->
+            for {pid, _} <- entries,
+                do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
+          end
+        )
     end
 
     {:noreply, state}
   end
 
-  defp do_handle_info({:global_closure_found, solution}, state) do
+  defp do_handle_cast({:global_closure_found, solution}, state) do
     %UnifSolution{substitutions: final_substs, flex_pairs: flex} = solution
 
     final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
@@ -163,22 +198,18 @@ defmodule ShotMain.Prover.ContradictionAgent do
     if Enum.empty?(flex) do
       Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
 
-      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
         for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
       end)
     else
       Logger.warning("CONDITIONAL CLOSURE FOUND! Dependent on Flex-Flex constraints.")
 
-      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results", fn entries ->
+      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
         for {pid, _} <- entries,
             do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
       end)
     end
 
-    {:noreply, state}
-  end
-
-  defp do_handle_info(_, state) do
     {:noreply, state}
   end
 
@@ -192,6 +223,10 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
     new_state = %{state | branch_closures: updated_closures}
     check_global_closure(new_state)
+  end
+
+  defp do_handle_cast(_event, state) do
+    {:noreply, state}
   end
 
   ##############################################################################
@@ -211,20 +246,28 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
   defp check_global_closure(state) do
     all_branches_can_close? =
-      Enum.all?(state.active_branches, fn b_id ->
-        closures = get_inherited_closures(b_id, state)
-        not Enum.empty?(closures)
-      end)
+      MapSet.size(state.active_branches) > 0 and
+        Enum.all?(state.active_branches, fn b_id ->
+          closures = get_inherited_closures(b_id, state)
+          not Enum.empty?(closures)
+        end)
 
     if all_branches_can_close? do
       active_options_lists =
         state.active_branches
         |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
 
-      Task.Supervisor.start_child(ShotMain.TaskSupervisor, fn ->
+      task_sup_via =
+        {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
+
+      Task.Supervisor.start_child(task_sup_via, fn ->
         case find_valid_combination(active_options_lists) do
-          {:ok, solution} -> send(__MODULE__, {:global_closure_found, solution})
-          :error -> :ok
+          {:ok, solution} ->
+            ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+            GenServer.cast(ca_via, {:global_closure_found, solution})
+
+          :error ->
+            :ok
         end
       end)
 
