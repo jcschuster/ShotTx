@@ -1,6 +1,6 @@
-defmodule ShotMain.Prover do
+defmodule ShotTx.Prover do
   import ShotDs.Hol.Dsl
-  alias ShotMain.Data.Parameters
+  alias ShotTx.Data.Parameters
   use ShotDs.Hol.Patterns
   import ShotDs.Util.Formatter
   alias ShotDs.Stt.TermFactory, as: TF
@@ -57,14 +57,14 @@ defmodule ShotMain.Prover do
 
     {:ok, session_pid} =
       DynamicSupervisor.start_child(
-        ShotMain.SessionSpawner,
-        {ShotMain.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
+        ShotTx.SessionSpawner,
+        {ShotTx.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
       )
 
-    manager_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :manager}}}
+    manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     result = GenServer.call(manager_via, :start_proof, :infinity)
 
-    DynamicSupervisor.terminate_child(ShotMain.SessionSpawner, session_pid)
+    DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
 
     case result do
       {:sat, {model_atoms, model_defs}} ->
@@ -93,13 +93,13 @@ defmodule ShotMain.Prover do
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
 
   defp close_formula(term_id) do
-    case TF.get_term(term_id) do
+    case TF.get_term!(term_id) do
       %Term{fvars: []} ->
         term_id
 
       %Term{fvars: fvars} ->
         Enum.reduce(fvars, term_id, fn %Declaration{type: t} = fv, acc_term ->
-          TF.make_abstr_term(acc_term, fv)
+          TF.make_abstr_term!(acc_term, fv)
           |> then(&app(pi_term(t), &1))
         end)
     end
@@ -109,10 +109,10 @@ defmodule ShotMain.Prover do
     defs_string =
       model_defs
       |> Enum.map_join(", ", fn {head, term_id} ->
-        "#{format(head, true)} <- #{format(term_id, true)}"
+        "#{format!(head)} <- #{format!(term_id)}"
       end)
 
-    atoms_string = Enum.map_join(model_atoms, ", ", &format(&1, true))
+    atoms_string = Enum.map_join(model_atoms, ", ", &format!(&1))
 
     case {defs_string, atoms_string} do
       {"", ""} -> ""

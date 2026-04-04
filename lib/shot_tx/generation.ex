@@ -1,8 +1,7 @@
-defmodule ShotMain.Generation do
+defmodule ShotTx.Generation do
   alias ShotDs.Data.{Type, Term}
   alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.{Definitions, Dsl, Patterns}
-  import ShotMain.Simplifyer
 
   @o %Type{goal: :o, args: []}
   @oo %Type{goal: :o, args: [@o]}
@@ -68,13 +67,10 @@ defmodule ShotMain.Generation do
       [{_x_last, y_last} | rest_pairs] = Enum.reverse(pairs)
 
       lambda(alpha, fn var_x ->
-        body =
-          Enum.reduce(rest_pairs, y_last, fn {x_i, y_i}, prev_body ->
-            c = equiv(alpha, var_x, x_i)
-            ite(beta, c, y_i, prev_body)
-          end)
-
-        o_simplify(body)
+        Enum.reduce(rest_pairs, y_last, fn {x_i, y_i}, prev_body ->
+          c = equiv(alpha, var_x, x_i)
+          ite(beta, c, y_i, prev_body)
+        end)
       end)
     end)
   end
@@ -92,17 +88,13 @@ defmodule ShotMain.Generation do
   end
 
   defp ite(@o, c, u, v) do
-    c_s = o_simplify(c)
-    u_s = o_simplify(u)
-    v_s = o_simplify(v)
-
-    if u_s == v_s do
-      u_s
+    if u == v do
+      u
     else
-      case TF.get_term(c_s) do
-        truth() -> u_s
-        falsity() -> v_s
-        _ -> o_simplify((c_s &&& u_s) ||| (neg(c_s) &&& v_s))
+      case TF.get_term!(c) do
+        truth() -> u
+        falsity() -> v
+        _ -> (c &&& u) ||| (neg(c) &&& v)
       end
     end
   end
@@ -112,13 +104,13 @@ defmodule ShotMain.Generation do
     lambda(alpha, fn x -> ite(beta, c, app(u, x), app(v, x)) end)
   end
 
-  defp equiv(@o, p, q), do: o_simplify(p <~> q)
+  defp equiv(@o, p, q), do: p <~> q
 
   defp equiv(%Type{goal: :o, args: [alpha | rest]}, f, g) do
     beta = %Type{goal: :o, args: rest}
 
     gen_o(alpha)
     |> Stream.map(fn x -> equiv(beta, app(f, x), app(g, x)) end)
-    |> Enum.reduce(fn eq_i, acc -> o_simplify(eq_i &&& acc) end)
+    |> Enum.reduce(fn eq_i, acc -> eq_i &&& acc end)
   end
 end

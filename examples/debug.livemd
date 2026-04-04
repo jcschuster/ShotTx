@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:shot_main, path: Path.join(__DIR__, "..")},
+  {:shot_tx, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.19.0"}
 ])
 ```
@@ -11,7 +11,7 @@ Mix.install([
 
 ```elixir
 import ShotDs.Hol.Definitions
-import ShotMain.Generation
+import ShotTx.Generation
 import ShotDs.Util.Formatter
 alias ShotDs.Data.Type
 ```
@@ -44,35 +44,35 @@ form
 ```elixir
 gen_o(type_o())
 |> Enum.with_index(1)
-|> Enum.map(fn {t, idx} -> "(#{idx}) #{format(t, true)}" end)
+|> Enum.map(fn {t, idx} -> "(#{idx}) #{format!(t, true)}" end)
 |> Enum.join("\n") |> IO.puts()
 ```
 
 ```elixir
 gen_o(type_oo())
 |> Enum.with_index(1)
-|> Enum.map(fn {t, idx} -> "(#{idx}) #{format(t, true)}" end)
+|> Enum.map(fn {t, idx} -> "(#{idx}) #{format!(t, true)}" end)
 |> Enum.join("\n") |> IO.puts()
 ```
 
 ```elixir
 gen_o(type_ooo())
 |> Enum.with_index(1)
-|> Enum.map(fn {t, idx} -> "(#{idx}) #{format(t, true)}" end)
+|> Enum.map(fn {t, idx} -> "(#{idx}) #{format!(t, true)}" end)
 |> Enum.join("\n") |> IO.puts()
 ```
 
 ```elixir
 gen_o(Type.new(:o, [type_oo()]))
 |> Enum.with_index(1)
-|> Enum.map(fn {t, idx} -> "(#{idx}) #{format(t, true)}" end)
+|> Enum.map(fn {t, idx} -> "(#{idx}) #{format!(t, true)}" end)
 |> Enum.join("\n") |> IO.puts()
 ```
 
 ```elixir
 gen_o(Type.new(:o, [:o, :o, :o]))
 |> Enum.with_index(1)
-|> Enum.map(fn {t, idx} -> "(#{idx}) #{format(t, true)}" end)
+|> Enum.map(fn {t, idx} -> "(#{idx}) #{format!(t, true)}" end)
 |> Enum.join("\n") |> IO.puts()
 ```
 
@@ -81,36 +81,36 @@ gen_o(Type.new(:o, [:o, :o, :o]))
 ## Tableaux Proving
 
 ```elixir
-import ShotDs.Parser
-import ShotMain.Prover
+import ShotDs.Hol.Sigils
+import ShotTx.Prover
 ```
 
 ```elixir
-"?[X: $o]: X" |> parse |> prove
+~f"?[X: $o]: X" |> prove
 ```
 
 ```elixir
-"a & b => a" |> parse |> prove
+~f"a & b => a" |> prove
 ```
 
 ```elixir
-"a => (a | b)" |> parse |> prove
+~f"a => (a | b)" |> prove
 ```
 
 ```elixir
-"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> parse |> prove
+~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> prove
 ```
 
 ```elixir
-"p @ (a & b) => p @ (b & a)" |> parse |> prove
+~f"p @ (a & b) => p @ (b & a)" |> prove
 ```
 
 ```elixir
-"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> parse |> prove
+~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
 ```
 
 ```elixir
-"
+~f"""
 (
   (p @ ^[X : $o]: X) &
   (p @ ^[X : $o]: ~X) &
@@ -119,12 +119,12 @@ import ShotMain.Prover
 )
 =>
 ![Y : $o>$o]: p @ Y
-"
-|> parse |> prove
+"""
+|> prove
 ```
 
 ```elixir
-"
+~f"""
 (
   (p @ ^[X : $o]: X) &
   (p @ ^[X : $o]: ~X) &
@@ -133,12 +133,12 @@ import ShotMain.Prover
 )
 =>
 ?[Y : $o>$o]: ~ p @ Y
-"
-|> parse |> prove
+"""
+|> prove
 ```
 
 ```elixir
-"p @ a & p @ b => p @ (a & b)" |> parse |> prove
+~f"p @ a & p @ b => p @ (a & b)" |> prove
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
@@ -147,10 +147,10 @@ import ShotMain.Prover
 
 ```elixir
 alias ShotDs.Tptp
-import ShotMain.Prover
+import ShotTx.Prover
 ```
 
 ```elixir
-{:ok, problem} = Tptp.parse_tptp_file("/Problems/SYP/SYP000^1.p")
+{:ok, problem} = Tptp.parse_tptp_file("CSR145^1")
 prove(problem)
 ```

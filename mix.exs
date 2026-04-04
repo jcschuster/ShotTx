@@ -1,9 +1,9 @@
-defmodule ShotMain.MixProject do
+defmodule ShotTx.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :shot_main,
+      app: :shot_tx,
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
@@ -15,7 +15,7 @@ defmodule ShotMain.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {ShotMain.Application, []}
+      mod: {ShotTx.Application, []}
     ]
   end
 
@@ -23,9 +23,9 @@ defmodule ShotMain.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, "~> 0.5"},
+      {:shot_ds, "~> 1.0"},
       # Unification algorithm
-      {:shot_unify, git: "https://github.com/jcschuster/ShotUnify"},
+      {:shot_un, "~> 0.1"},
       # Code analyzer, duplication checker and security analyzer
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       # Code analyzer and type checker

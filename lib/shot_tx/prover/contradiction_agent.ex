@@ -1,11 +1,11 @@
-defmodule ShotMain.Prover.ContradictionAgent do
+defmodule ShotTx.Prover.ContradictionAgent do
   # GenServer, listens to PubSub and searches for closure
   use GenServer
   require Logger
 
   alias ShotDs.Stt.TermFactory, as: TF
-  alias ShotUnify
-  alias ShotUnify.UnifSolution
+  alias ShotUn
+  alias ShotUn.UnifSolution
 
   @unify_depth 10
 
@@ -20,7 +20,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
   ##############################################################################
 
   def start_link(session_id) do
-    name = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :ca}}}
+    name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
     GenServer.start_link(__MODULE__, session_id, name: name)
   end
 
@@ -30,8 +30,8 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
   @impl true
   def init(session_id) do
-    Registry.register(ShotMain.Prover.PubSub, "local_closures_#{session_id}", [])
-    Registry.register(ShotMain.Prover.PubSub, "branch_events_#{session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "local_closures_#{session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
     {:ok, %__MODULE__{session_id: session_id}}
   end
 
@@ -118,7 +118,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
         Logger.info("Agent confirmed CSA on genuinely open branch #{model_branch_id}")
 
         Registry.dispatch(
-          ShotMain.Prover.PubSub,
+          ShotTx.Prover.PubSub,
           "proof_results_#{state.session_id}",
           fn entries ->
             for {pid, _} <- entries,
@@ -132,7 +132,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
         )
 
         Registry.dispatch(
-          ShotMain.Prover.PubSub,
+          ShotTx.Prover.PubSub,
           "proof_results_#{state.session_id}",
           fn entries ->
             for {pid, _} <- entries,
@@ -155,7 +155,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
         if Enum.empty?(flex) do
           Registry.dispatch(
-            ShotMain.Prover.PubSub,
+            ShotTx.Prover.PubSub,
             "proof_results_#{state.session_id}",
             fn entries ->
               for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
@@ -163,7 +163,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
           )
         else
           Registry.dispatch(
-            ShotMain.Prover.PubSub,
+            ShotTx.Prover.PubSub,
             "proof_results_#{state.session_id}",
             fn entries ->
               for {pid, _} <- entries,
@@ -178,7 +178,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
         )
 
         Registry.dispatch(
-          ShotMain.Prover.PubSub,
+          ShotTx.Prover.PubSub,
           "proof_results_#{state.session_id}",
           fn entries ->
             for {pid, _} <- entries,
@@ -198,13 +198,13 @@ defmodule ShotMain.Prover.ContradictionAgent do
     if Enum.empty?(flex) do
       Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
 
-      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
+      Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
         for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
       end)
     else
       Logger.warning("CONDITIONAL CLOSURE FOUND! Dependent on Flex-Flex constraints.")
 
-      Registry.dispatch(ShotMain.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
+      Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
         for {pid, _} <- entries,
             do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
       end)
@@ -258,12 +258,12 @@ defmodule ShotMain.Prover.ContradictionAgent do
         |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
 
       task_sup_via =
-        {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
+        {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
 
       Task.Supervisor.start_child(task_sup_via, fn ->
         case find_valid_combination(active_options_lists) do
           {:ok, solution} ->
-            ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+            ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
             GenServer.cast(ca_via, {:global_closure_found, solution})
 
           :error ->
@@ -299,7 +299,7 @@ defmodule ShotMain.Prover.ContradictionAgent do
 
     all_pairs = pairs1 ++ pairs2 ++ sol1.flex_pairs ++ sol2.flex_pairs
 
-    stream = ShotUnify.unify(all_pairs, @unify_depth)
+    stream = ShotUn.unify(all_pairs, @unify_depth)
 
     case Enum.take(stream, 1) do
       [] -> :error

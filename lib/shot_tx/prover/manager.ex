@@ -1,10 +1,10 @@
-defmodule ShotMain.Prover.Manager do
+defmodule ShotTx.Prover.Manager do
   # GenServer, orchestrator and public API
   use GenServer
   require Logger
 
-  alias ShotMain.Data.Parameters
-  alias ShotMain.Prover.BranchWorker
+  alias ShotTx.Data.Parameters
+  alias ShotTx.Prover.BranchWorker
 
   # State tracking
   defstruct session_id: nil,
@@ -24,7 +24,7 @@ defmodule ShotMain.Prover.Manager do
   ##############################################################################
 
   def start_link({session_id, formulas, defs, params}) do
-    name = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :manager}}}
+    name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     GenServer.start_link(__MODULE__, {session_id, formulas, defs, params}, name: name)
   end
 
@@ -38,8 +38,8 @@ defmodule ShotMain.Prover.Manager do
 
   @impl true
   def init({session_id, formulas, defs, params}) do
-    Registry.register(ShotMain.Prover.PubSub, "proof_results_#{session_id}", [])
-    Registry.register(ShotMain.Prover.PubSub, "branch_events_#{session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "proof_results_#{session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
 
     board_ref =
       :ets.new(:tableau_board, [:bag, :public, read_concurrency: true, write_concurrency: true])
@@ -70,7 +70,7 @@ defmodule ShotMain.Prover.Manager do
       :ets.insert(state.ets_tables.stats, {:aborted, false})
       :ets.insert(state.ets_tables.stats, {:branch_count, 1})
 
-      ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+      ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
       GenServer.cast(ca_via, {:set_ets_tables, state.ets_tables})
 
       BranchWorker.start_branch(
@@ -221,7 +221,7 @@ defmodule ShotMain.Prover.Manager do
           Kernel.map_size(state.saturated_branches) > 0 ->
         Logger.debug("All workers finished. Asking Agent to investigate CSA...")
 
-        ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+        ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
         GenServer.cast(ca_via, {:verify_csa, state.saturated_branches})
 
         {:noreply, state}
@@ -233,7 +233,7 @@ defmodule ShotMain.Prover.Manager do
           "All branches closed explicitly. Asking Agent to verify global unification..."
         )
 
-        ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+        ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
         GenServer.cast(ca_via, :verify_all_closed)
 
         {:noreply, state}
@@ -243,7 +243,7 @@ defmodule ShotMain.Prover.Manager do
         Logger.debug("All branches idle. Increasing Gamma Limit to #{new_limit}...")
 
         Registry.dispatch(
-          ShotMain.Prover.PubSub,
+          ShotTx.Prover.PubSub,
           "branch_events_#{state.session_id}",
           fn entries ->
             for {pid, _} <- entries, do: send(pid, {:wake_up, new_limit})

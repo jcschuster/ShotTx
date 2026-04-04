@@ -1,5 +1,5 @@
-defmodule ShotMain.Data.Parameters do
-  alias ShotMain.Prover.Rules
+defmodule ShotTx.Data.Parameters do
+  alias ShotTx.Prover.Rules
 
   defstruct timeout: 30_000,
             initial_gamma_limit: 1,

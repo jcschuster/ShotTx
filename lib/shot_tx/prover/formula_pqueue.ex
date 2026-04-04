@@ -1,5 +1,5 @@
-defmodule ShotMain.Prover.FormulaPqueue do
-  alias ShotMain.Prover.Rules
+defmodule ShotTx.Prover.FormulaPqueue do
+  alias ShotTx.Prover.Rules
 
   @type t :: :gb_trees.tree(non_neg_integer(), Rules.rule_t())
 

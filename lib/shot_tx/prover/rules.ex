@@ -1,9 +1,9 @@
-defmodule ShotMain.Prover.Rules do
+defmodule ShotTx.Prover.Rules do
   alias ShotDs.Data.{Type, Declaration, Term}
   alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
-  import ShotMain.Generation
+  import ShotTx.Generation
   use ShotDs.Hol.Patterns
 
   @typep definition_t :: {Declaration.t(), Term.term_id()}
@@ -100,7 +100,7 @@ defmodule ShotMain.Prover.Rules do
 
   @spec classify_formula(Term.term_id()) :: rule_t()
   def classify_formula(term_id) when is_integer(term_id) do
-    case TF.get_term(term_id) do
+    case TF.get_term!(term_id) do
       negated(inner) ->
         classify_neg_formula(inner)
 
@@ -142,7 +142,7 @@ defmodule ShotMain.Prover.Rules do
         end
 
       typed_existential_quantification(pred, t) ->
-        fvars = TF.get_term(pred).fvars
+        fvars = TF.get_term!(pred).fvars
         {:delta, app(pred, sk_term(fvars, t))}
 
       atomic ->
@@ -152,7 +152,7 @@ defmodule ShotMain.Prover.Rules do
 
   @spec classify_neg_formula(Term.term_id()) :: rule_t()
   defp classify_neg_formula(term_id) do
-    case TF.get_term(term_id) do
+    case TF.get_term!(term_id) do
       negated(inner) ->
         {:alpha, [inner]}
 
@@ -187,7 +187,7 @@ defmodule ShotMain.Prover.Rules do
         {:beta, {neg(p) &&& q, p &&& neg(q)}}
 
       typed_universal_quantification(pred, t) ->
-        fvars = TF.get_term(pred).fvars
+        fvars = TF.get_term!(pred).fvars
         {:delta, neg(app(pred, sk_term(fvars, t)))}
 
       typed_existential_quantification(pred, t) ->
@@ -229,7 +229,7 @@ defmodule ShotMain.Prover.Rules do
       is_nil(rename_candidate) ->
         # instantiate
         [{to_instantiate, idx} | _] = non_val_o_args
-        %Term{head: decl, type: type} = TF.get_term(to_instantiate)
+        %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
 
         branches =
           Stream.map(gen_o(type), fn instance ->
@@ -244,7 +244,7 @@ defmodule ShotMain.Prover.Rules do
       true ->
         # rename
         {rename_id, idx} = rename_candidate
-        rename_term = TF.get_term(rename_id)
+        rename_term = TF.get_term!(rename_id)
 
         c = sk_term(rename_term.fvars, rename_term.type)
 
@@ -260,7 +260,7 @@ defmodule ShotMain.Prover.Rules do
   defp pure_o_type?(_), do: false
 
   def simple_term?(term_id) when is_integer(term_id) do
-    term = TF.get_term(term_id)
+    term = TF.get_term!(term_id)
 
     if length(term.args) === length(term.bvars) do
       pairs = Enum.zip(Enum.reverse(term.bvars), term.args)
@@ -271,7 +271,7 @@ defmodule ShotMain.Prover.Rules do
   end
 
   defp non_signature_o_constant?(term_id) do
-    term = TF.get_term(term_id)
+    term = TF.get_term!(term_id)
 
     pure_o_type?(term.type) &&
       term.head.kind == :co &&

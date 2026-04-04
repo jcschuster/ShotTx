@@ -1,6 +1,6 @@
-defmodule ShotMain do
+defmodule ShotTx do
   @moduledoc """
-  Documentation for `ShotMain`.
+  Documentation for `ShotTx`.
   """
 
   @doc """
@@ -8,7 +8,7 @@ defmodule ShotMain do
 
   ## Examples
 
-      iex> ShotMain.hello()
+      iex> ShotTx.hello()
       :world
 
   """

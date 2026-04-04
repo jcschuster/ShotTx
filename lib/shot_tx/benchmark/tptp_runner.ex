@@ -1,7 +1,7 @@
-defmodule ShotMain.Benchmark.TptpRunner do
+defmodule ShotTx.Benchmark.TptpRunner do
   require Logger
   alias ShotDs.Tptp
-  alias ShotMain.Prover
+  alias ShotTx.Prover
 
   @doc """
   Runs the prover against all TH0 files in the TPTP library.
@@ -36,7 +36,7 @@ defmodule ShotMain.Benchmark.TptpRunner do
     {time_micro, result_data} =
       :timer.tc(fn ->
         try do
-          case Tptp.parse_tptp_file(file_path, true) do
+          case Tptp.parse_tptp_file(file_path) do
             {:ok, problem} -> run_proof(problem)
             {:error, reason} -> {:parser_error, reason}
           end

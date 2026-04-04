@@ -1,11 +1,10 @@
-defmodule ShotMain.Prover.BranchWorker do
+defmodule ShotTx.Prover.BranchWorker do
   require Logger
   use GenServer
-  alias ShotMain.Simplifyer
-  alias ShotMain.Generation
-  alias ShotMain.Data.Parameters
-  alias ShotMain.Prover.Rules
-  alias ShotMain.Prover.FormulaPqueue, as: FPQ
+  alias ShotTx.Generation
+  alias ShotTx.Data.Parameters
+  alias ShotTx.Prover.Rules
+  alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
@@ -41,7 +40,7 @@ defmodule ShotMain.Prover.BranchWorker do
     }
 
     supervisor_via =
-      {:via, Registry, {ShotMain.Prover.ProcessRegistry, {session_id, :branch_supervisor}}}
+      {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :branch_supervisor}}}
 
     DynamicSupervisor.start_child(supervisor_via, {__MODULE__, state})
   end
@@ -60,7 +59,7 @@ defmodule ShotMain.Prover.BranchWorker do
           )
 
           Registry.dispatch(
-            ShotMain.Prover.PubSub,
+            ShotTx.Prover.PubSub,
             "proof_results_#{parent_state.session_id}",
             fn entries ->
               for {pid, _} <- entries do
@@ -85,7 +84,7 @@ defmodule ShotMain.Prover.BranchWorker do
 
           supervisor_via =
             {:via, Registry,
-             {ShotMain.Prover.ProcessRegistry, {parent_state.session_id, :branch_supervisor}}}
+             {ShotTx.Prover.ProcessRegistry, {parent_state.session_id, :branch_supervisor}}}
 
           DynamicSupervisor.start_child(supervisor_via, {__MODULE__, child_state})
         end
@@ -106,7 +105,7 @@ defmodule ShotMain.Prover.BranchWorker do
 
   @impl true
   def init(%__MODULE__{} = state) do
-    Registry.register(ShotMain.Prover.PubSub, "global_branch_control_#{state.session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "global_branch_control_#{state.session_id}", [])
 
     if poisoned?(state.id, state.ets_tables) do
       {:stop, :normal, state}
@@ -356,13 +355,13 @@ defmodule ShotMain.Prover.BranchWorker do
   end
 
   defp unfold_if_possible(term_id, defs) do
-    case TF.get_term(term_id) do
+    case TF.get_term!(term_id) do
       %ShotDs.Data.Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
         unfolded = app(Map.fetch!(defs, head), args)
         Rules.classify_formula(unfolded)
 
       _ ->
-        case TF.get_term(lit_neg(term_id)) do
+        case TF.get_term!(lit_neg(term_id)) do
           %ShotDs.Data.Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
             unfolded = neg(app(Map.fetch!(defs, head), args))
             Rules.classify_formula(unfolded)
@@ -374,7 +373,7 @@ defmodule ShotMain.Prover.BranchWorker do
   end
 
   defp check_local_closures(new_term, existing_atoms, %__MODULE__{} = state) do
-    if Simplifyer.o_simplify(new_term) == false_term() do
+    if new_term == false_term() do
       trigger_local_ground_closure(state.id, state.session_id, state.ets_tables)
     else
       neg_new_term = lit_neg(new_term)
@@ -385,12 +384,12 @@ defmodule ShotMain.Prover.BranchWorker do
 
           sols1 =
             {neg_new_term, existing_term}
-            |> ShotUnify.unify(state.params.unify_depth)
+            |> ShotUn.unify(state.params.unify_depth)
             |> Enum.to_list()
 
           sols2 =
             {new_term, neg_existing}
-            |> ShotUnify.unify(state.params.unify_depth)
+            |> ShotUn.unify(state.params.unify_depth)
             |> Enum.to_list()
 
           sols1 ++ sols2
@@ -403,7 +402,7 @@ defmodule ShotMain.Prover.BranchWorker do
         if has_ground_closure? do
           trigger_local_ground_closure(state.id, state.session_id, state.ets_tables)
         else
-          ca_via = {:via, Registry, {ShotMain.Prover.ProcessRegistry, {state.session_id, :ca}}}
+          ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
           GenServer.cast(ca_via, {:local_closures, state.id, closures})
         end
       end
@@ -415,20 +414,20 @@ defmodule ShotMain.Prover.BranchWorker do
 
     :ets.insert(ets_tables.tombs, {branch_id, true})
 
-    Registry.dispatch(ShotMain.Prover.PubSub, "global_branch_control_#{session_id}", fn entries ->
+    Registry.dispatch(ShotTx.Prover.PubSub, "global_branch_control_#{session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, {:poison_prefix, branch_id})
     end)
   end
 
   defp lit_neg(term_id) do
-    case TF.get_term(term_id) do
+    case TF.get_term!(term_id) do
       negated(inner) -> inner
       _ -> neg(term_id)
     end
   end
 
   defp broadcast_status(branch_id, status, state) do
-    Registry.dispatch(ShotMain.Prover.PubSub, "branch_events_#{state.session_id}", fn entries ->
+    Registry.dispatch(ShotTx.Prover.PubSub, "branch_events_#{state.session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, {:branch_status, branch_id, status})
     end)
   end
