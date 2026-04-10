@@ -219,8 +219,8 @@ defmodule ShotTx.Prover.BranchWorker do
 
     spawn_child_branch(sibling_id, b2, state)
 
-    broadcast_status(state.id, :split, state)
     broadcast_status(my_new_id, :active, state)
+    broadcast_status(state.id, :split, state)
 
     new_queue = insert_formula(state.queue, b1, state.params)
     %{state | id: my_new_id, queue: new_queue}
@@ -242,8 +242,8 @@ defmodule ShotTx.Prover.BranchWorker do
 
           keep_child_id = "#{state.id}_K"
 
-          broadcast_status(state.id, :split, state)
           broadcast_status(keep_child_id, :active, state)
+          broadcast_status(state.id, :split, state)
 
           queue_with_unfolded =
             Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
