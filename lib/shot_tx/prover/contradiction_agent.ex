@@ -13,6 +13,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   defstruct session_id: nil,
             ets_tables: %{},
             active_branches: MapSet.new(),
+            clashing_local_pairs: %{},
             branch_closures: %{}
 
   ##############################################################################
@@ -213,15 +214,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
-  defp do_handle_cast({:local_closures, branch_id, new_closures}, state) do
-    Logger.debug("Agent received #{length(new_closures)} valid local closures from #{branch_id}")
+  defp do_handle_cast({:local_clashes, branch_id, new_candidates}, %__MODULE__{} = state) do
+    Logger.debug(
+      "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
+    )
 
-    updated_closures =
-      Map.update(state.branch_closures, branch_id, new_closures, fn existing ->
-        Enum.uniq(existing ++ new_closures)
-      end)
+    updated_local_clashes =
+      Map.update(
+        state.clashing_local_pairs,
+        branch_id,
+        new_candidates,
+        &MapSet.union(&1, new_candidates)
+      )
 
-    new_state = %{state | branch_closures: updated_closures}
+    new_state = %{state | clashing_local_pairs: updated_local_clashes}
     check_global_closure(new_state)
   end
 
@@ -232,6 +238,17 @@ defmodule ShotTx.Prover.ContradictionAgent do
   ##############################################################################
   # INTERNAL LOGIC
   ##############################################################################
+
+  defp get_inherited_clashes(branch_id, %__MODULE__{} = state) do
+    prefixes =
+      branch_id
+      |> String.split("_")
+      |> Enum.scan(&(&2 <> "_" <> &1))
+
+    for prefix <- prefixes, reduce: MapSet.new() do
+      acc -> Map.get(state.clashing_local_pairs, prefix, MapSet.new()) |> MapSet.union(acc)
+    end
+  end
 
   defp get_inherited_closures(branch_id, state) do
     segments = String.split(branch_id, "_")
@@ -245,34 +262,37 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp check_global_closure(state) do
-    all_branches_can_close? =
-      MapSet.size(state.active_branches) > 0 and
-        Enum.all?(state.active_branches, fn b_id ->
-          closures = get_inherited_closures(b_id, state)
-          not Enum.empty?(closures)
-        end)
+    branch_clash_candidates = Enum.map(state.active_branches, &get_inherited_clashes(&1, state))
 
-    if all_branches_can_close? do
-      active_options_lists =
-        state.active_branches
-        |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
+    some_branch_cannot_close? =
+      Enum.empty?(state.active_branches) || Enum.any?(branch_clash_candidates, &Enum.empty?/1)
 
+    if some_branch_cannot_close? do
+      {:noreply, state}
+    else
       task_sup_via =
         {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
 
       Task.Supervisor.start_child(task_sup_via, fn ->
-        case find_valid_combination(active_options_lists) do
-          {:ok, solution} ->
-            ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-            GenServer.cast(ca_via, {:global_closure_found, solution})
+        Enum.reduce(branch_clash_candidates, [[]], fn set, acc ->
+          Stream.flat_map(acc, fn combination ->
+            Stream.map(set, &[&1 | combination])
+          end)
+        end)
+        |> Stream.map(&ShotUn.unify(&1, @unify_depth))
+        |> Enum.reduce_while(:ok, fn sols, _acc ->
+          case Enum.take(sols, 1) do
+            [] ->
+              {:cont, :ok}
 
-          :error ->
-            :ok
-        end
+            [global_sol] ->
+              ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
+              GenServer.cast(ca_via, {:global_closure_found, global_sol})
+              {:halt, :ok}
+          end
+        end)
       end)
 
-      {:noreply, state}
-    else
       {:noreply, state}
     end
   end

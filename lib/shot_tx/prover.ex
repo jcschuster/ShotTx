@@ -7,24 +7,44 @@ defmodule ShotTx.Prover do
   alias ShotDs.Data.{Declaration, Term, Problem}
   import ShotDs.Hol.{Definitions, Dsl}
 
-  def prove(%Problem{} = problem) do
+  require Logger
+
+  def prove(problem) when is_struct(problem, Problem), do: prove(problem, [])
+
+  def prove(conclusion) when is_integer(conclusion), do: prove(conclusion, [], [])
+
+  def prove(conclusion, [{key, _} | _] = opts) when is_integer(conclusion) and is_atom(key),
+    do: prove(conclusion, [], opts)
+
+  def prove(conclusion, assumptions) when is_integer(conclusion) and is_list(assumptions),
+    do: prove(conclusion, assumptions, [defs: %{}])
+
+  def prove(%Problem{} = problem, opts) when is_struct(problem, Problem) do
     if is_nil(problem.conjecture) do
       "Error: no conjecture found"
     else
       {_name, conclusion} = problem.conjecture
       assumptions = Enum.map(problem.axioms, fn {_name, axiom} -> axiom end)
-      prove(conclusion, assumptions, problem.definitions)
+      prove(conclusion, assumptions, [{:defs, problem.definitions} | opts])
     end
   end
 
-  def prove(conclusion, assumptions \\ [], defs \\ %{}, opts \\ [])
-      when is_list(assumptions) do
+  def prove(conclusion, assumptions, opts) when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
+    {defs, params} = Keyword.pop(opts, :defs, %{})
+
+    Logger.info(
+      "Attempting to prove:\n" <>
+      Enum.map_join(assumptions, ", ", &format!(&1, false)) <>
+      " ⊢ " <>
+      format!(conclusion, false)
+      )
+
     closed_conclusion = close_formula(conclusion)
     closed_assms = Enum.map(assumptions, &close_formula/1)
 
     formulas = [neg(closed_conclusion) | closed_assms]
 
-    case sat(formulas, defs, opts) do
+    case sat(formulas, defs, params) do
       {:sat, model} ->
         "CSA: #{model}"
 
@@ -46,8 +66,8 @@ defmodule ShotTx.Prover do
   end
 
   @doc """
-  Checks the satisfiability of a list of formulas.
-  Delegates the execution to the global Manager GenServer.
+  Checks the satisfiability of a list of formulas. Delegates the execution to
+  the Manager GenServer.
   """
   def sat(formulas, defs \\ %{}, opts \\ [])
 
@@ -112,7 +132,9 @@ defmodule ShotTx.Prover do
         "#{format!(head)} <- #{format!(term_id)}"
       end)
 
-    atoms_string = Enum.map_join(model_atoms, ", ", &format!(&1))
+    atoms_string =
+      Enum.reject(model_atoms, & &1 in [true_term(), neg(false_term())])
+      |> Enum.map_join(", ", &format!(&1))
 
     case {defs_string, atoms_string} do
       {"", ""} -> ""

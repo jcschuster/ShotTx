@@ -244,7 +244,7 @@ defmodule ShotTx.Prover.Manager do
 
         Registry.dispatch(
           ShotTx.Prover.PubSub,
-          "branch_events_#{state.session_id}",
+          "branch_control_#{state.session_id}",
           fn entries ->
             for {pid, _} <- entries, do: send(pid, {:wake_up, new_limit})
           end

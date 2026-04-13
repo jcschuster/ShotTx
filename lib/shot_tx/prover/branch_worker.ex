@@ -16,10 +16,10 @@ defmodule ShotTx.Prover.BranchWorker do
             ets_tables: %{},
             queue: nil,
             defs: %{},
+            literals: MapSet.new(),
             params: %Parameters{},
             sleeping_gamma_rules: [],
-            current_gamma_limit: 1,
-            local_atoms: []
+            current_gamma_limit: 1
 
   def start_link(state) do
     GenServer.start_link(__MODULE__, state)
@@ -34,6 +34,7 @@ defmodule ShotTx.Prover.BranchWorker do
       ets_tables: ets_tables,
       queue: initial_queue,
       defs: defs,
+      literals: MapSet.new([true_term(), neg(false_term())]),
       params: params,
       sleeping_gamma_rules: [],
       current_gamma_limit: params.initial_gamma_limit
@@ -76,10 +77,10 @@ defmodule ShotTx.Prover.BranchWorker do
             ets_tables: parent_state.ets_tables,
             queue: inherited_queue,
             defs: parent_state.defs,
+            literals: parent_state.literals,
             params: parent_state.params,
             sleeping_gamma_rules: parent_state.sleeping_gamma_rules,
-            current_gamma_limit: parent_state.current_gamma_limit,
-            local_atoms: parent_state.local_atoms
+            current_gamma_limit: parent_state.current_gamma_limit
           }
 
           supervisor_via =
@@ -99,13 +100,13 @@ defmodule ShotTx.Prover.BranchWorker do
     %{
       id: __MODULE__,
       start: {GenServer, :start_link, [__MODULE__, state, []]},
-      restart: :temporary
+      restart: :transient
     }
   end
 
   @impl true
   def init(%__MODULE__{} = state) do
-    Registry.register(ShotTx.Prover.PubSub, "global_branch_control_#{state.session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "branch_control_#{state.session_id}", [])
 
     if poisoned?(state.id, state.ets_tables) do
       {:stop, :normal, state}
@@ -120,7 +121,7 @@ defmodule ShotTx.Prover.BranchWorker do
     Logger.debug("Branch #{state.id} waking up. New Gamma limit: #{new_limit}")
 
     new_queue =
-      Enum.reduce(state.sleeping_gamma_rules, state.queue, &insert_formula(&2, &1, state.params))
+      Enum.reduce(state.sleeping_gamma_rules, state.queue, &reinsert_rule(&2, &1, state.params))
 
     new_state = %{
       state
@@ -154,7 +155,14 @@ defmodule ShotTx.Prover.BranchWorker do
       poisoned?(state.id, state.ets_tables) ->
         Logger.debug("Branch #{state.id} noticed it is poisoned. Terminating.")
         broadcast_status(state.id, :closed, state)
-        :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
+
+        try do
+          :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
+        rescue
+          _e in ArgumentError ->
+            Logger.debug("Branch #{state.id} could not decrement counter as the ETS is missing.")
+        end
+
         {:stop, :normal, state}
 
       FPQ.empty?(state.queue) and not Enum.empty?(state.sleeping_gamma_rules) ->
@@ -163,7 +171,7 @@ defmodule ShotTx.Prover.BranchWorker do
 
       FPQ.empty?(state.queue) ->
         Logger.info("Branch #{state.id} fully saturated. Found a counter-model!")
-        broadcast_status(state.id, {:saturated, {state.defs, state.local_atoms}}, state)
+        broadcast_status(state.id, {:saturated, {state.defs, state.literals}}, state)
         :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
         {:stop, :normal, state}
 
@@ -246,7 +254,7 @@ defmodule ShotTx.Prover.BranchWorker do
           broadcast_status(state.id, :split, state)
 
           queue_with_unfolded =
-            Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
+            Enum.reduce(state.literals, state.queue, fn term_id, acc_queue ->
               case unfold_if_possible(term_id, new_defs) do
                 nil ->
                   acc_queue
@@ -265,7 +273,7 @@ defmodule ShotTx.Prover.BranchWorker do
           child_id = "#{state.id}_I#{idx}"
 
           queue_with_unfolded =
-            Enum.reduce(state.local_atoms, state.queue, fn term_id, acc_queue ->
+            Enum.reduce(state.literals, state.queue, fn term_id, acc_queue ->
               case unfold_if_possible(term_id, new_defs) do
                 nil ->
                   acc_queue
@@ -297,7 +305,7 @@ defmodule ShotTx.Prover.BranchWorker do
       new_queue =
         state.queue
         |> insert_formula(instantiated, state.params)
-        |> FPQ.insert(updated_gamma, state.params.formula_cost.(updated_gamma))
+        |> reinsert_rule(updated_gamma, state.params)
 
       %{state | queue: new_queue}
     end
@@ -322,10 +330,10 @@ defmodule ShotTx.Prover.BranchWorker do
 
     case unfolded_cf do
       nil ->
-        check_local_closures(term_id, state.local_atoms, state)
+        check_local_clashes(term_id, state.literals, state)
 
-        new_atoms = [term_id | state.local_atoms]
-        %{state | local_atoms: new_atoms}
+        new_literals = MapSet.put(state.literals, term_id)
+        %{state | literals: new_literals}
 
       cf ->
         %{state | queue: FPQ.insert(state.queue, cf, state.params.formula_cost.(cf))}
@@ -342,9 +350,13 @@ defmodule ShotTx.Prover.BranchWorker do
     prefixes =
       Enum.scan(segments, fn segment, acc -> acc <> "_" <> segment end)
 
-    Enum.any?(prefixes, fn prefix ->
-      :ets.member(ets_tables.tombs, prefix)
-    end)
+    try do
+      Enum.any?(prefixes, fn prefix ->
+        :ets.member(ets_tables.tombs, prefix)
+      end)
+    rescue
+      _e in ArgumentError -> true
+    end
   end
 
   defp insert_formula(queue, formula, params) do
@@ -352,6 +364,11 @@ defmodule ShotTx.Prover.BranchWorker do
     c = params.formula_cost.(cf)
 
     FPQ.insert(queue, cf, c)
+  end
+
+  defp reinsert_rule(queue, rule, params) do
+    cost = params.formula_cost.(rule)
+    FPQ.insert(queue, rule, cost)
   end
 
   defp unfold_if_possible(term_id, defs) do
@@ -372,39 +389,28 @@ defmodule ShotTx.Prover.BranchWorker do
     end
   end
 
-  defp check_local_closures(new_term, existing_atoms, %__MODULE__{} = state) do
-    if new_term == false_term() do
+  defp check_local_clashes(new_term, existing_atoms, %__MODULE__{} = state) do
+    neg_new_term = lit_neg(new_term)
+
+    if MapSet.member?(state.literals, neg_new_term) do
       trigger_local_ground_closure(state.id, state.session_id, state.ets_tables)
     else
-      neg_new_term = lit_neg(new_term)
-
-      closures =
-        Enum.flat_map(existing_atoms, fn existing_term ->
+      clash_candidates =
+        Enum.reduce(existing_atoms, MapSet.new(), fn existing_term, acc_pairs ->
           neg_existing = lit_neg(existing_term)
 
-          sols1 =
-            {neg_new_term, existing_term}
-            |> ShotUn.unify(state.params.unify_depth)
-            |> Enum.to_list()
+          clashing =
+            for pair <- [{neg_new_term, existing_term}, {new_term, neg_existing}],
+                !Enum.empty?(ShotUn.unify(pair)),
+                into: MapSet.new(),
+                do: pair
 
-          sols2 =
-            {new_term, neg_existing}
-            |> ShotUn.unify(state.params.unify_depth)
-            |> Enum.to_list()
-
-          sols1 ++ sols2
+          MapSet.union(acc_pairs, clashing)
         end)
 
-      if not Enum.empty?(closures) do
-        has_ground_closure? =
-          Enum.any?(closures, &(Enum.empty?(&1.substitutions) && Enum.empty?(&1.flex_pairs)))
-
-        if has_ground_closure? do
-          trigger_local_ground_closure(state.id, state.session_id, state.ets_tables)
-        else
-          ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-          GenServer.cast(ca_via, {:local_closures, state.id, closures})
-        end
+      if not Enum.empty?(clash_candidates) do
+        ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
+        GenServer.cast(ca_via, {:local_clashes, state.id, clash_candidates})
       end
     end
   end

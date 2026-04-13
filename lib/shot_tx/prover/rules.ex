@@ -220,7 +220,12 @@ defmodule ShotTx.Prover.Rules do
       |> Enum.with_index()
       |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
 
-    rename_candidate = Enum.find(non_val_o_args, nil, fn {a_id, _idx} -> !simple_term?(a_id) end)
+    rename_candidate = Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
+      case TF.primitive_term?(a_id) do
+        {:ok, primitive?} -> !primitive?
+        _error -> false
+      end
+    end)
 
     cond do
       Enum.empty?(non_val_o_args) ->
@@ -258,17 +263,6 @@ defmodule ShotTx.Prover.Rules do
   @spec pure_o_type?(Type.t()) :: boolean()
   defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
   defp pure_o_type?(_), do: false
-
-  def simple_term?(term_id) when is_integer(term_id) do
-    term = TF.get_term!(term_id)
-
-    if length(term.args) === length(term.bvars) do
-      pairs = Enum.zip(Enum.reverse(term.bvars), term.args)
-      Enum.all?(pairs, fn {bv, arg_id} -> TF.make_term(bv) === arg_id end)
-    else
-      false
-    end
-  end
 
   defp non_signature_o_constant?(term_id) do
     term = TF.get_term!(term_id)
