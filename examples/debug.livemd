@@ -141,6 +141,10 @@ import ShotTx.Prover
 ~f"p @ a & p @ b => p @ (a & b)" |> prove
 ```
 
+```elixir
+~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b" |> prove
+```
+
 <!-- livebook:{"branch_parent_index":0} -->
 
 ## TPTP Problems

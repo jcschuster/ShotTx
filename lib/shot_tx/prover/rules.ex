@@ -8,24 +8,16 @@ defmodule ShotTx.Prover.Rules do
 
   @typep definition_t :: {Declaration.t(), Term.term_id()}
 
-  @typedoc """
-  A tautology disregards the formula as it doesn't add information.
-  """
+  @typedoc "A tautology disregards the formula as it doesn't add information."
   @type tautology_t :: :tautology
 
-  @typedoc """
-  A contradiction trivially closes the tableau branch.
-  """
+  @typedoc "A contradiction trivially closes the tableau branch."
   @type contradiction_t :: :contradiction
 
-  @typedoc """
-  An alpha-rule decomposes the formula linrarly into a list of formulas.
-  """
+  @typedoc "An alpha-rule decomposes the formula linearly into a list of formulas."
   @type alpha_t :: {:alpha, nonempty_list(Term.term_id())}
 
-  @typedoc """
-  A beta-rule decomposes the formula into two tuples corresponding to branches.
-  """
+  @typedoc "A beta-rule decomposes the formula into two tuples corresponding to branches."
   @type beta_t :: {:beta, {Term.term_id(), Term.term_id()}}
 
   @typedoc """
@@ -37,9 +29,7 @@ defmodule ShotTx.Prover.Rules do
   """
   @type gamma_t :: {:gamma, Term.term_id(), Type.t(), non_neg_integer()}
 
-  @typedoc """
-  Rule for consuming a gamma-formula when the domain is finite.
-  """
+  @typedoc "Rule for consuming a gamma-formula when the domain is finite."
   @type gamma_finite_t :: {:gamma_finite, Term.term_id(), Type.t()}
 
   @typedoc """
@@ -47,6 +37,19 @@ defmodule ShotTx.Prover.Rules do
   skolem term dependent on the predicates free variables.
   """
   @type delta_t :: {:delta, Term.term_id()}
+
+  @typep prim_subst_progress ::
+           %{base_offset: non_neg_integer(), covered_types: MapSet.t(Type.t())}
+
+  @typedoc """
+  Primitive substitution rule. Instantiates a universally quantified formula
+  with general bindings that fix a logical head symbol while leaving
+  sub-formula positions as fresh holes. Fields: recipe, element type, current
+  binding depth, and a progress map recording consumed base bindings and
+  covered types at the current depth.
+  """
+  @type prim_subst_t ::
+          {:prim_subst, Term.term_id(), Type.t(), pos_integer(), prim_subst_progress()}
 
   @typedoc """
   For introducing extensionality, complex argument terms are renamed with a
@@ -59,14 +62,14 @@ defmodule ShotTx.Prover.Rules do
   @typedoc """
   This produces a lazy stream of `{instantiated_term, corresponding_def}` if the
   _(rename)_-rule is not applicable and one of the arguments is an _o-type_ that
-  can be instantiated. Additionally captures the number or instances.
+  can be instantiated. Additionally captures the number of instances.
   """
   @type instantiate_t ::
           {:instantiate, Enumerable.t({Term.term_id(), definition_t()}), pos_integer()}
 
   @typedoc """
   Formulas not matching any of the rules above are considered _atomic_ and can
-  for example processed with unification.
+  for example be processed with unification.
   """
   @type atomic_t :: {:atomic, Term.term_id()}
 
@@ -76,6 +79,7 @@ defmodule ShotTx.Prover.Rules do
           | gamma_t()
           | gamma_finite_t()
           | delta_t()
+          | prim_subst_t()
           | tautology_t()
           | contradiction_t()
           | rename_t()
@@ -92,11 +96,16 @@ defmodule ShotTx.Prover.Rules do
       {:gamma, _, _, c} -> 5 + 2 * c
       {:gamma_finite, _, _} -> 3
       {:delta, _} -> 2
+      {:prim_subst, _, _, d, %{base_offset: c}} -> 20 + 5 * d + 2 * c
       {:rename, _} -> 3
       {:instantiate, _, c} -> 2 + c
       {:atomic, _} -> 1
     end
   end
+
+  ##############################################################################
+  # CLASSIFICATION
+  ##############################################################################
 
   @spec classify_formula(Term.term_id()) :: rule_t()
   def classify_formula(term_id) when is_integer(term_id) do
@@ -149,6 +158,10 @@ defmodule ShotTx.Prover.Rules do
         classify_atom(atomic)
     end
   end
+
+  ##############################################################################
+  # NEGATED CLASSIFICATION
+  ##############################################################################
 
   @spec classify_neg_formula(Term.term_id()) :: rule_t()
   defp classify_neg_formula(term_id) do
@@ -211,6 +224,10 @@ defmodule ShotTx.Prover.Rules do
     end
   end
 
+  ##############################################################################
+  # ATOM CLASSIFICATION
+  ##############################################################################
+
   @spec classify_atom(Term.t()) :: rename_t() | instantiate_t() | atomic_t()
   defp classify_atom(term)
 
@@ -220,45 +237,44 @@ defmodule ShotTx.Prover.Rules do
       |> Enum.with_index()
       |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
 
-    rename_candidate = Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
-      case TF.primitive_term?(a_id) do
-        {:ok, primitive?} -> !primitive?
-        _error -> false
-      end
-    end)
+    rename_candidate =
+      Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
+        case TF.primitive_term?(a_id) do
+          {:ok, primitive?} -> !primitive?
+          _error -> false
+        end
+      end)
 
     cond do
       Enum.empty?(non_val_o_args) ->
         {:atomic, TF.memoize(term)}
 
       is_nil(rename_candidate) ->
-        # instantiate
         [{to_instantiate, idx} | _] = non_val_o_args
         %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
 
         branches =
           Stream.map(gen_o(type), fn instance ->
             inst_term = %Term{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
-            inst_def = {decl, instance}
-
-            {inst_term, inst_def}
+            {inst_term, {decl, instance}}
           end)
 
         {:instantiate, branches, o_type_size(type)}
 
       true ->
-        # rename
         {rename_id, idx} = rename_candidate
         rename_term = TF.get_term!(rename_id)
-
         c = sk_term(rename_term.fvars, rename_term.type)
-
         replaced_term = %Term{term | args: List.replace_at(args, idx, c)} |> TF.memoize()
         {:rename, {replaced_term, eq(c, rename_id)}}
     end
   end
 
   defp classify_atom(term), do: {:atomic, TF.memoize(term)}
+
+  ##############################################################################
+  # HELPERS
+  ##############################################################################
 
   @spec pure_o_type?(Type.t()) :: boolean()
   defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)

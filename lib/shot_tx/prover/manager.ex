@@ -1,12 +1,10 @@
 defmodule ShotTx.Prover.Manager do
-  # GenServer, orchestrator and public API
   use GenServer
   require Logger
 
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover.BranchWorker
 
-  # State tracking
   defstruct session_id: nil,
             ets_tables: %{},
             formulas: [],
@@ -15,6 +13,7 @@ defmodule ShotTx.Prover.Manager do
             active_caller: nil,
             timer_ref: nil,
             current_gamma_limit: 1,
+            current_prim_depth_limit: 1,
             active_branches: MapSet.new(),
             idle_branches: MapSet.new(),
             saturated_branches: %{}
@@ -41,13 +40,12 @@ defmodule ShotTx.Prover.Manager do
     Registry.register(ShotTx.Prover.PubSub, "proof_results_#{session_id}", [])
     Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
 
-    board_ref =
-      :ets.new(:tableau_board, [:bag, :public, read_concurrency: true, write_concurrency: true])
-
-    stats_ref = :ets.new(:tableau_stats, [:set, :public, write_concurrency: true])
-    tomb_ref = :ets.new(:tableau_tombstones, [:set, :public, read_concurrency: true])
-
-    ets_tables = %{board: board_ref, stats: stats_ref, tombs: tomb_ref}
+    ets_tables = %{
+      board:
+        :ets.new(:tableau_board, [:bag, :public, read_concurrency: true, write_concurrency: true]),
+      stats: :ets.new(:tableau_stats, [:set, :public, write_concurrency: true]),
+      tombs: :ets.new(:tableau_tombstones, [:set, :public, read_concurrency: true])
+    }
 
     state = %__MODULE__{
       session_id: session_id,
@@ -84,27 +82,27 @@ defmodule ShotTx.Prover.Manager do
 
       timer = Process.send_after(self(), :timeout, state.params.timeout)
 
-      new_state = %{
-        state
-        | active_caller: from,
-          timer_ref: timer,
-          current_gamma_limit: 1,
-          active_branches: MapSet.new(["root"]),
-          idle_branches: MapSet.new()
-      }
-
-      {:noreply, new_state}
+      {:noreply,
+       %{
+         state
+         | active_caller: from,
+           timer_ref: timer,
+           current_gamma_limit: state.params.initial_gamma_limit,
+           current_prim_depth_limit: state.params.initial_prim_limit,
+           active_branches: MapSet.new(["root"]),
+           idle_branches: MapSet.new()
+       }}
     end
   end
 
   ##### Kill Switches #####
 
   @impl true
-  def handle_info({:proof_result, final_result}, state) do
+  def handle_info({:proof_result, result}, state) do
     if state.active_caller do
-      Logger.info("Manager received final result: #{inspect(final_result)}")
+      Logger.info("Manager received final result: #{inspect(result)}")
       if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-      GenServer.reply(state.active_caller, final_result)
+      GenServer.reply(state.active_caller, result)
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}
@@ -122,86 +120,33 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  ##### Iterative Deepening and Branch Tracking #####
+  ##### Branch Tracking #####
 
   @impl true
-  def handle_info({:branch_status, branch_id, :active}, state) do
-    new_active = MapSet.put(state.active_branches, branch_id)
-    new_idle = MapSet.delete(state.idle_branches, branch_id)
-    new_sat = Map.delete(state.saturated_branches, branch_id)
-
-    new_state = %{
-      state
-      | active_branches: new_active,
-        idle_branches: new_idle,
-        saturated_branches: new_sat
-    }
-
-    {:noreply, new_state}
+  def handle_info({:branch_status, id, :active}, state) do
+    {:noreply, track(state, add: id, to: :active)}
   end
 
   @impl true
-  def handle_info({:branch_status, branch_id, {:saturated, {branch_defs, local_atoms}}}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    new_idle = MapSet.delete(state.idle_branches, branch_id)
-    new_sat = Map.put(state.saturated_branches, branch_id, {branch_defs, local_atoms})
-
-    new_state = %{
-      state
-      | active_branches: new_active,
-        idle_branches: new_idle,
-        saturated_branches: new_sat
-    }
-
-    check_and_trigger_deepening(new_state)
+  def handle_info({:branch_status, id, {:saturated, data}}, state) do
+    new = track(state, remove: id)
+    new = %{new | saturated_branches: Map.put(new.saturated_branches, id, data)}
+    check_and_trigger_deepening(new)
   end
 
   @impl true
-  def handle_info({:branch_status, branch_id, :closed}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    new_idle = MapSet.delete(state.idle_branches, branch_id)
-    new_sat = Map.delete(state.saturated_branches, branch_id)
-
-    new_state = %{
-      state
-      | active_branches: new_active,
-        idle_branches: new_idle,
-        saturated_branches: new_sat
-    }
-
-    check_and_trigger_deepening(new_state)
+  def handle_info({:branch_status, id, :closed}, state) do
+    check_and_trigger_deepening(track(state, remove: id))
   end
 
   @impl true
-  def handle_info({:branch_status, branch_id, :idle}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    new_idle = MapSet.put(state.idle_branches, branch_id)
-    new_sat = Map.delete(state.saturated_branches, branch_id)
-
-    new_state = %{
-      state
-      | active_branches: new_active,
-        idle_branches: new_idle,
-        saturated_branches: new_sat
-    }
-
-    check_and_trigger_deepening(new_state)
+  def handle_info({:branch_status, id, :idle}, state) do
+    check_and_trigger_deepening(track(state, add: id, to: :idle))
   end
 
   @impl true
-  def handle_info({:branch_status, branch_id, :split}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    new_idle = MapSet.delete(state.idle_branches, branch_id)
-    new_sat = Map.delete(state.saturated_branches, branch_id)
-
-    new_state = %{
-      state
-      | active_branches: new_active,
-        idle_branches: new_idle,
-        saturated_branches: new_sat
-    }
-
-    check_and_trigger_deepening(new_state)
+  def handle_info({:branch_status, id, :split}, state) do
+    check_and_trigger_deepening(track(state, remove: id))
   end
 
   @impl true
@@ -211,56 +156,73 @@ defmodule ShotTx.Prover.Manager do
   # HELPERS
   ##############################################################################
 
+  # Moves a branch id between tracking sets.
+  defp track(state, opts) do
+    id = opts[:add] || opts[:remove]
+
+    base = %{
+      state
+      | active_branches: MapSet.delete(state.active_branches, id),
+        idle_branches: MapSet.delete(state.idle_branches, id),
+        saturated_branches: Map.delete(state.saturated_branches, id)
+    }
+
+    case opts[:to] do
+      :active -> %{base | active_branches: MapSet.put(base.active_branches, id)}
+      :idle -> %{base | idle_branches: MapSet.put(base.idle_branches, id)}
+      nil -> base
+    end
+  end
+
   defp check_and_trigger_deepening(state) do
+    active = MapSet.size(state.active_branches)
+    idle = MapSet.size(state.idle_branches)
+    sat = map_size(state.saturated_branches)
+
     cond do
       is_nil(state.active_caller) ->
         {:noreply, state}
 
-      MapSet.size(state.active_branches) == 0 and
-        MapSet.size(state.idle_branches) == 0 and
-          Kernel.map_size(state.saturated_branches) > 0 ->
+      active == 0 and idle == 0 and sat > 0 ->
         Logger.debug("All workers finished. Asking Agent to investigate CSA...")
-
-        ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-        GenServer.cast(ca_via, {:verify_csa, state.saturated_branches})
-
+        ca_cast(state, {:verify_csa, state.saturated_branches})
         {:noreply, state}
 
-      MapSet.size(state.active_branches) == 0 and
-        MapSet.size(state.idle_branches) == 0 and
-          Kernel.map_size(state.saturated_branches) == 0 ->
-        Logger.debug(
-          "All branches closed explicitly. Asking Agent to verify global unification..."
-        )
-
-        ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-        GenServer.cast(ca_via, :verify_all_closed)
-
+      active == 0 and idle == 0 and sat == 0 ->
+        Logger.debug("All branches closed. Asking Agent to verify global unification...")
+        ca_cast(state, :verify_all_closed)
         {:noreply, state}
 
-      MapSet.size(state.active_branches) == 0 and MapSet.size(state.idle_branches) > 0 ->
-        new_limit = state.current_gamma_limit + 1
-        Logger.debug("All branches idle. Increasing Gamma Limit to #{new_limit}...")
+      active == 0 and idle > 0 ->
+        new_gamma = state.current_gamma_limit + 1
+        new_prim = state.current_prim_depth_limit + 1
+
+        Logger.debug("All branches idle. Gamma: #{new_gamma}, Prim depth: #{new_prim}")
 
         Registry.dispatch(
           ShotTx.Prover.PubSub,
           "branch_control_#{state.session_id}",
           fn entries ->
-            for {pid, _} <- entries, do: send(pid, {:wake_up, new_limit})
+            for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
           end
         )
 
-        new_state = %{
-          state
-          | current_gamma_limit: new_limit,
-            active_branches: state.idle_branches,
-            idle_branches: MapSet.new()
-        }
-
-        {:noreply, new_state}
+        {:noreply,
+         %{
+           state
+           | current_gamma_limit: new_gamma,
+             current_prim_depth_limit: new_prim,
+             active_branches: state.idle_branches,
+             idle_branches: MapSet.new()
+         }}
 
       true ->
         {:noreply, state}
     end
+  end
+
+  defp ca_cast(state, msg) do
+    ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
+    GenServer.cast(ca_via, msg)
   end
 end
