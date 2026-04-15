@@ -41,8 +41,6 @@ defmodule ShotTx.Prover.Manager do
     Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
 
     ets_tables = %{
-      board:
-        :ets.new(:tableau_board, [:bag, :public, read_concurrency: true, write_concurrency: true]),
       stats: :ets.new(:tableau_stats, [:set, :public, write_concurrency: true]),
       tombs: :ets.new(:tableau_tombstones, [:set, :public, read_concurrency: true])
     }
@@ -175,25 +173,25 @@ defmodule ShotTx.Prover.Manager do
   end
 
   defp check_and_trigger_deepening(state) do
-    active = MapSet.size(state.active_branches)
-    idle = MapSet.size(state.idle_branches)
-    sat = map_size(state.saturated_branches)
+    active? = not Enum.empty?(state.active_branches)
+    idle? = not Enum.empty?(state.idle_branches)
+    sat? = not Enum.empty?(state.saturated_branches)
 
     cond do
       is_nil(state.active_caller) ->
         {:noreply, state}
 
-      active == 0 and idle == 0 and sat > 0 ->
+      not active? and not idle? and sat? ->
         Logger.debug("All workers finished. Asking Agent to investigate CSA...")
         ca_cast(state, {:verify_csa, state.saturated_branches})
         {:noreply, state}
 
-      active == 0 and idle == 0 and sat == 0 ->
+      not (active? or idle? or sat?) ->
         Logger.debug("All branches closed. Asking Agent to verify global unification...")
         ca_cast(state, :verify_all_closed)
         {:noreply, state}
 
-      active == 0 and idle > 0 ->
+      not active? and idle? ->
         new_gamma = state.current_gamma_limit + 1
         new_prim = state.current_prim_depth_limit + 1
 

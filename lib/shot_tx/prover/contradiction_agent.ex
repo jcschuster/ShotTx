@@ -3,26 +3,27 @@ defmodule ShotTx.Prover.ContradictionAgent do
   use GenServer
   require Logger
 
+  alias ShotTx.Data.Parameters
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotUn
   alias ShotUn.UnifSolution
-
-  @unify_depth 10
 
   # State tracking
   defstruct session_id: nil,
             ets_tables: %{},
             active_branches: MapSet.new(),
             clashing_local_pairs: %{},
-            branch_closures: %{}
+            branch_closures: %{},
+            params: %Parameters{}
 
   ##############################################################################
   # PUBLIC API
   ##############################################################################
 
-  def start_link(session_id) do
+  def start_link({session_id, params}) do
     name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
-    GenServer.start_link(__MODULE__, session_id, name: name)
+
+    GenServer.start_link(__MODULE__, {session_id, params}, name: name)
   end
 
   ##############################################################################
@@ -30,10 +31,10 @@ defmodule ShotTx.Prover.ContradictionAgent do
   ##############################################################################
 
   @impl true
-  def init(session_id) do
+  def init({session_id, params}) do
     Registry.register(ShotTx.Prover.PubSub, "local_closures_#{session_id}", [])
     Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
-    {:ok, %__MODULE__{session_id: session_id}}
+    {:ok, %__MODULE__{session_id: session_id, params: params}}
   end
 
   @impl true
@@ -150,7 +151,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       state.active_branches
       |> Enum.map(fn b_id -> get_inherited_closures(b_id, state) end)
 
-    case find_valid_combination(active_options_lists) do
+    case find_valid_combination(active_options_lists, state) do
       {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
         final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
@@ -279,7 +280,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
             Stream.map(set, &[&1 | combination])
           end)
         end)
-        |> Stream.map(&ShotUn.unify(&1, @unify_depth))
+        |> Stream.map(&ShotUn.unify(&1, state.params.unification_depth))
         |> Enum.reduce_while(:ok, fn sols, _acc ->
           case Enum.take(sols, 1) do
             [] ->
@@ -297,12 +298,13 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  defp find_valid_combination([]), do: {:ok, %UnifSolution{substitutions: [], flex_pairs: []}}
+  defp find_valid_combination([], _state),
+    do: {:ok, %UnifSolution{substitutions: [], flex_pairs: []}}
 
-  defp find_valid_combination([branch_options | rest]) do
+  defp find_valid_combination([branch_options | rest], %__MODULE__{} = state) do
     Enum.reduce_while(branch_options, :error, fn current_solution, _acc ->
-      with {:ok, remaining_merged_solution} <- find_valid_combination(rest) do
-        case merge_solutions(current_solution, remaining_merged_solution) do
+      with {:ok, remaining_merged_solution} <- find_valid_combination(rest, state) do
+        case merge_solutions(current_solution, remaining_merged_solution, state) do
           {:ok, final_merged} -> {:halt, {:ok, final_merged}}
           :error -> {:cont, :error}
         end
@@ -313,13 +315,13 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end)
   end
 
-  defp merge_solutions(%UnifSolution{} = sol1, %UnifSolution{} = sol2) do
+  defp merge_solutions(%UnifSolution{} = sol1, %UnifSolution{} = sol2, %__MODULE__{} = state) do
     pairs1 = Enum.map(sol1.substitutions, fn s -> {TF.make_term(s.fvar), s.term_id} end)
     pairs2 = Enum.map(sol2.substitutions, fn s -> {TF.make_term(s.fvar), s.term_id} end)
 
     all_pairs = pairs1 ++ pairs2 ++ sol1.flex_pairs ++ sol2.flex_pairs
 
-    stream = ShotUn.unify(all_pairs, @unify_depth)
+    stream = ShotUn.unify(all_pairs, state.params.unification_depth)
 
     case Enum.take(stream, 1) do
       [] -> :error

@@ -53,47 +53,48 @@ defmodule ShotTx.Prover.BranchWorker do
   end
 
   def spawn_child_branch(child_id, new_formula, %__MODULE__{} = parent) do
-    case :ets.lookup(parent.ets_tables.stats, :aborted) do
-      [{:aborted, true}] ->
+    cond do
+      :ets.lookup(parent.ets_tables.stats, :aborted) == [{:aborted, true}] ->
         :ok
 
-      _ ->
-        current = :ets.update_counter(parent.ets_tables.stats, :branch_count, {2, 1})
+      :ets.update_counter(parent.ets_tables.stats, :branch_count, {2, 1}) >
+          parent.params.max_branches ->
+        Logger.error("Branch limit (#{parent.params.max_branches}) exceeded! Aborting search.")
 
-        if current > parent.params.max_branches do
-          Logger.error("Branch limit (#{parent.params.max_branches}) exceeded! Aborting search.")
+        Registry.dispatch(
+          ShotTx.Prover.PubSub,
+          "proof_results_#{parent.session_id}",
+          fn entries ->
+            Enum.each(entries, fn {pid, _} ->
+              send(pid, {:proof_result, {:unknown, :max_branches_reached}})
+            end)
+          end
+        )
 
-          Registry.dispatch(
-            ShotTx.Prover.PubSub,
-            "proof_results_#{parent.session_id}",
-            fn entries ->
-              for {pid, _} <- entries do
-                send(pid, {:proof_result, {:unknown, :max_branches_reached}})
-              end
-            end
-          )
-        else
-          child = %__MODULE__{
-            id: child_id,
-            session_id: parent.session_id,
-            ets_tables: parent.ets_tables,
-            queue: insert_formula(parent.queue, new_formula, parent.params),
-            defs: parent.defs,
-            literals: parent.literals,
-            params: parent.params,
-            sleeping_gamma_rules: parent.sleeping_gamma_rules,
-            current_gamma_limit: parent.current_gamma_limit,
-            current_prim_depth_limit: parent.current_prim_depth_limit,
-            type_universe: parent.type_universe
-          }
-
-          supervisor_via =
-            {:via, Registry,
-             {ShotTx.Prover.ProcessRegistry, {parent.session_id, :branch_supervisor}}}
-
-          DynamicSupervisor.start_child(supervisor_via, {__MODULE__, child})
-        end
+      true ->
+        do_spawn_child_branch(child_id, new_formula, parent)
     end
+  end
+
+  defp do_spawn_child_branch(child_id, new_formula, %__MODULE__{} = parent) do
+    child = %__MODULE__{
+      id: child_id,
+      session_id: parent.session_id,
+      ets_tables: parent.ets_tables,
+      queue: insert_formula(parent.queue, new_formula, parent.params),
+      defs: parent.defs,
+      literals: parent.literals,
+      params: parent.params,
+      sleeping_gamma_rules: parent.sleeping_gamma_rules,
+      current_gamma_limit: parent.current_gamma_limit,
+      current_prim_depth_limit: parent.current_prim_depth_limit,
+      type_universe: parent.type_universe
+    }
+
+    supervisor_via =
+      {:via, Registry, {ShotTx.Prover.ProcessRegistry, {parent.session_id, :branch_supervisor}}}
+
+    DynamicSupervisor.start_child(supervisor_via, {__MODULE__, child})
   end
 
   ##############################################################################
@@ -115,7 +116,6 @@ defmodule ShotTx.Prover.BranchWorker do
     if poisoned?(state.id, state.ets_tables) do
       {:stop, :normal, state}
     else
-      broadcast_status(state.id, :active, state)
       {:ok, state, {:continue, :process_next}}
     end
   end
@@ -137,7 +137,7 @@ defmodule ShotTx.Prover.BranchWorker do
         queue: new_queue
     }
 
-    broadcast_status(state.id, :active, state)
+    broadcast_status(state.id, :active, state.session_id)
     {:noreply, new_state, {:continue, :process_next}}
   end
 
@@ -145,7 +145,7 @@ defmodule ShotTx.Prover.BranchWorker do
   def handle_info({:poison_prefix, prefix}, state) do
     if String.starts_with?(state.id, prefix) do
       Logger.debug("Branch #{state.id} caught poison from #{prefix}. Terminating.")
-      broadcast_status(state.id, :closed, state)
+      broadcast_status(state.id, :closed, state.session_id)
       :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
       {:stop, :normal, state}
     else
@@ -158,17 +158,17 @@ defmodule ShotTx.Prover.BranchWorker do
     cond do
       poisoned?(state.id, state.ets_tables) ->
         Logger.debug("Branch #{state.id} noticed it is poisoned. Terminating.")
-        broadcast_status(state.id, :closed, state)
+        broadcast_status(state.id, :closed, state.session_id)
         safe_decrement(state.ets_tables)
         {:stop, :normal, state}
 
       FPQ.empty?(state.queue) and state.sleeping_gamma_rules != [] ->
-        broadcast_status(state.id, :idle, state)
+        broadcast_status(state.id, :idle, state.session_id)
         {:noreply, state}
 
       FPQ.empty?(state.queue) ->
         Logger.info("Branch #{state.id} fully saturated. Found a counter-model!")
-        broadcast_status(state.id, {:saturated, {state.defs, state.literals}}, state)
+        broadcast_status(state.id, {:saturated, {state.defs, state.literals}}, state.session_id)
         :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
         {:stop, :normal, state}
 
@@ -188,7 +188,7 @@ defmodule ShotTx.Prover.BranchWorker do
 
   defp apply_rule(:contradiction, state) do
     Logger.info("Branch #{state.id} closed explicitly.")
-    broadcast_status(state.id, :closed, state)
+    broadcast_status(state.id, :closed, state.session_id)
     :ets.update_counter(state.ets_tables.stats, :branch_count, {2, -1})
     {:stop, :normal, state}
   end
@@ -224,9 +224,11 @@ defmodule ShotTx.Prover.BranchWorker do
     my_id = state.id <> "_A"
     sib_id = state.id <> "_B"
 
+    broadcast_status(my_id, :active, state.session_id)
+    broadcast_status(sib_id, :active, state.session_id)
+    broadcast_status(state.id, :split, state.session_id)
+
     spawn_child_branch(sib_id, b2, state)
-    broadcast_status(my_id, :active, state)
-    broadcast_status(state.id, :split, state)
 
     %{state | id: my_id, queue: insert_formula(state.queue, b1, state.params)}
   end
@@ -245,8 +247,8 @@ defmodule ShotTx.Prover.BranchWorker do
           new_defs = Map.put(state.defs, k_decl, k_tid)
           keep_id = "#{state.id}_K"
 
-          broadcast_status(keep_id, :active, state)
-          broadcast_status(state.id, :split, state)
+          broadcast_status(keep_id, :active, state.session_id)
+          broadcast_status(state.id, :split, state.session_id)
 
           queue =
             state.literals
@@ -259,13 +261,13 @@ defmodule ShotTx.Prover.BranchWorker do
           new_defs = Map.put(state.defs, decl, tid)
           child_id = "#{state.id}_I#{idx}"
 
-          queue =
-            state.literals
-            |> unfold_literals(state.queue, new_defs, state.params)
-            |> insert_formula(b_term, state.params)
+          broadcast_status(child_id, :active, state.session_id)
+
+          queue = unfold_literals(state.literals, state.queue, new_defs, state.params)
 
           child = %{state | id: child_id, queue: queue, defs: new_defs}
           spawn_child_branch(child_id, b_term, child)
+
           acc
       end)
     end
@@ -478,7 +480,7 @@ defmodule ShotTx.Prover.BranchWorker do
           neg_existing = lit_neg(existing_term)
 
           for pair <- [{neg_new, existing_term}, {new_term, neg_existing}],
-              !Enum.empty?(ShotUn.unify(pair)),
+              !Enum.empty?(ShotUn.unify(pair, state.params.unification_depth)),
               into: acc,
               do: pair
         end)
@@ -494,7 +496,7 @@ defmodule ShotTx.Prover.BranchWorker do
     Logger.debug("Branch #{branch_id} found local ground closure. Initiating tombstone.")
     :ets.insert(ets_tables.tombs, {branch_id, true})
 
-    Registry.dispatch(ShotTx.Prover.PubSub, "global_branch_control_#{session_id}", fn entries ->
+    Registry.dispatch(ShotTx.Prover.PubSub, "branch_control_#{session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, {:poison_prefix, branch_id})
     end)
   end
@@ -513,8 +515,8 @@ defmodule ShotTx.Prover.BranchWorker do
       Logger.debug("Could not decrement branch counter — ETS already gone.")
   end
 
-  defp broadcast_status(branch_id, status, state) do
-    Registry.dispatch(ShotTx.Prover.PubSub, "branch_events_#{state.session_id}", fn entries ->
+  defp broadcast_status(branch_id, status, session_id) do
+    Registry.dispatch(ShotTx.Prover.PubSub, "branch_events_#{session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, {:branch_status, branch_id, status})
     end)
   end

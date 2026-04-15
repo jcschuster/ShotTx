@@ -17,7 +17,7 @@ defmodule ShotTx.Prover do
     do: prove(conclusion, [], opts)
 
   def prove(conclusion, assumptions) when is_integer(conclusion) and is_list(assumptions),
-    do: prove(conclusion, assumptions, [defs: %{}])
+    do: prove(conclusion, assumptions, defs: %{})
 
   def prove(%Problem{} = problem, opts) when is_struct(problem, Problem) do
     if is_nil(problem.conjecture) do
@@ -29,15 +29,16 @@ defmodule ShotTx.Prover do
     end
   end
 
-  def prove(conclusion, assumptions, opts) when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
+  def prove(conclusion, assumptions, opts)
+      when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
     {defs, params} = Keyword.pop(opts, :defs, %{})
 
     Logger.info(
       "Attempting to prove:\n" <>
-      Enum.map_join(assumptions, ", ", &format!(&1, false)) <>
-      " ⊢ " <>
-      format!(conclusion, false)
-      )
+        Enum.map_join(assumptions, ", ", &format!(&1, false)) <>
+        " ⊢ " <>
+        format!(conclusion, false)
+    )
 
     closed_conclusion = close_formula(conclusion)
     closed_assms = Enum.map(assumptions, &close_formula/1)
@@ -133,7 +134,7 @@ defmodule ShotTx.Prover do
       end)
 
     atoms_string =
-      Enum.reject(model_atoms, & &1 in [true_term(), neg(false_term())])
+      Enum.reject(model_atoms, &(&1 in [true_term(), neg(false_term())]))
       |> Enum.map_join(", ", &format!(&1))
 
     case {defs_string, atoms_string} do

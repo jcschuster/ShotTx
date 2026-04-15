@@ -7,8 +7,7 @@ defmodule ShotTx.Data.Parameters do
             prim_subst_batch_size: 3,
             unification_depth: 8,
             max_branches: 10_000,
-            formula_cost: &Rules.rule_cost/1,
-            unify_depth: 10
+            formula_cost: &Rules.rule_cost/1
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -17,7 +16,6 @@ defmodule ShotTx.Data.Parameters do
           prim_subst_batch_size: pos_integer(),
           unification_depth: pos_integer(),
           max_branches: pos_integer() | :infinity,
-          formula_cost: (Rules.rule_t() -> non_neg_integer()),
-          unify_depth: pos_integer()
+          formula_cost: (Rules.rule_t() -> non_neg_integer())
         }
 end

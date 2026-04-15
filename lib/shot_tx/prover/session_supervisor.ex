@@ -10,7 +10,7 @@ defmodule ShotTx.Prover.SessionSupervisor do
     children = [
       {Task.Supervisor, name: via(session_id, :task_supervisor)},
       {DynamicSupervisor, name: via(session_id, :branch_supervisor), strategy: :one_for_one},
-      {ShotTx.Prover.ContradictionAgent, session_id},
+      {ShotTx.Prover.ContradictionAgent, {session_id, params}},
       {ShotTx.Prover.Manager, {session_id, formulas, defs, params}}
     ]
 
