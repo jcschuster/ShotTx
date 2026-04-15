@@ -49,11 +49,8 @@ defmodule ShotTx.Prover do
       {:sat, model} ->
         "CSA: #{model}"
 
-      :unsat ->
+      {:unsat, _global_subst, _flex_pairs, _traces} ->
         "THM"
-
-      {:cond_unsat, _subst, flex_pairs} ->
-        "THM (Conditional on #{length(flex_pairs)} Flex-Flex constraints)"
 
       {:unknown, _partial_model} ->
         "UNK"
@@ -91,11 +88,8 @@ defmodule ShotTx.Prover do
       {:sat, {model_atoms, model_defs}} ->
         {:sat, format_model(model_atoms, model_defs)}
 
-      {:unsat, _global_substitution} ->
-        :unsat
-
-      {:cond_unsat, global_substitutions, flex_pairs} ->
-        {:cond_unsat, global_substitutions, flex_pairs}
+      {:unsat, global_substitution, remaining_flex, traces} ->
+        {:unsat, global_substitution, remaining_flex, traces}
 
       {:unknown, :max_branches_reached} ->
         {:unknown, "Branch limit (#{params.max_branches}) reached."}

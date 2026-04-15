@@ -155,6 +155,6 @@ import ShotTx.Prover
 ```
 
 ```elixir
-{:ok, problem} = Tptp.parse_tptp_file("ALG001^5")
-prove(problem)
+{:ok, problem} = Tptp.parse_tptp_file("SET008^5")
+res = prove(problem)
 ```

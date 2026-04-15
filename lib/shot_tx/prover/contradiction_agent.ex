@@ -14,6 +14,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
             active_branches: MapSet.new(),
             clashing_local_pairs: %{},
             branch_closures: %{},
+            branch_traces: %{},
             params: %Parameters{}
 
   @empty_solution %UnifSolution{substitutions: [], flex_pairs: []}
@@ -68,14 +69,15 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, %{state | active_branches: new_active}}
   end
 
-  defp do_handle_info({:branch_status, branch_id, :closed}, state) do
+  defp do_handle_info({:branch_status, branch_id, {:closed, trace}}, state) do
+    new_traces = Map.put(state.branch_traces, branch_id, trace)
+
     new_closures =
       Map.update(state.branch_closures, branch_id, [%UnifSolution{}], fn existing ->
         [%UnifSolution{} | existing]
       end)
 
-    new_state = %{state | branch_closures: new_closures}
-
+    new_state = %{state | branch_closures: new_closures, branch_traces: new_traces}
     check_global_closure(new_state)
   end
 
@@ -157,24 +159,14 @@ defmodule ShotTx.Prover.ContradictionAgent do
       {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
         final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
-        if Enum.empty?(flex) do
-          Registry.dispatch(
-            ShotTx.Prover.PubSub,
-            "proof_results_#{state.session_id}",
-            fn entries ->
-              for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
-            end
-          )
-        else
-          Registry.dispatch(
-            ShotTx.Prover.PubSub,
-            "proof_results_#{state.session_id}",
-            fn entries ->
-              for {pid, _} <- entries,
-                  do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
-            end
-          )
-        end
+        Registry.dispatch(
+          ShotTx.Prover.PubSub,
+          "proof_results_#{state.session_id}",
+          fn entries ->
+            for {pid, _} <- entries,
+                do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
+          end
+        )
 
       :error ->
         Logger.warning(
@@ -199,25 +191,17 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
     final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
-    if Enum.empty?(flex) do
-      Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
+    Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
 
-      Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
-        for {pid, _} <- entries, do: send(pid, {:proof_result, {:unsat, final_map}})
-      end)
-    else
-      Logger.warning("CONDITIONAL CLOSURE FOUND! Dependent on Flex-Flex constraints.")
-
-      Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
-        for {pid, _} <- entries,
-            do: send(pid, {:proof_result, {:cond_unsat, final_map, flex}})
-      end)
-    end
+    Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
+      for {pid, _} <- entries,
+          do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
+    end)
 
     {:noreply, state}
   end
 
-  defp do_handle_cast({:local_clashes, branch_id, new_candidates}, %__MODULE__{} = state) do
+  defp do_handle_cast({:local_clashes, branch_id, new_candidates, trace}, %__MODULE__{} = state) do
     Logger.debug(
       "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
     )
@@ -230,7 +214,14 @@ defmodule ShotTx.Prover.ContradictionAgent do
         &MapSet.union(&1, new_candidates)
       )
 
-    new_state = %{state | clashing_local_pairs: updated_local_clashes}
+    updated_traces = Map.put(state.branch_traces, branch_id, trace)
+
+    new_state = %{
+      state
+      | clashing_local_pairs: updated_local_clashes,
+        branch_traces: updated_traces
+    }
+
     check_global_closure(new_state)
   end
 

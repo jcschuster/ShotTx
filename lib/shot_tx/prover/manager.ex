@@ -3,7 +3,7 @@ defmodule ShotTx.Prover.Manager do
   require Logger
 
   alias ShotTx.Data.Parameters
-  alias ShotTx.Prover.BranchWorker
+  alias ShotTx.Prover.Branch
 
   defstruct session_id: nil,
             ets_tables: %{},
@@ -14,8 +14,10 @@ defmodule ShotTx.Prover.Manager do
             timer_ref: nil,
             current_gamma_limit: 1,
             current_prim_depth_limit: 1,
-            active_branches: MapSet.new(),
-            idle_branches: MapSet.new(),
+
+            # Worker Pool Tracking
+            worker_count: 0,
+            idle_workers: MapSet.new(),
             saturated_branches: %{}
 
   ##############################################################################
@@ -38,16 +40,17 @@ defmodule ShotTx.Prover.Manager do
   @impl true
   def init({session_id, formulas, defs, params}) do
     Registry.register(ShotTx.Prover.PubSub, "proof_results_#{session_id}", [])
-    Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
 
     ets_tables = ShotTx.Prover.EtsKeeper.get_tables(session_id)
+    worker_count = Map.get(params, :worker_pool_size, System.schedulers_online())
 
     state = %__MODULE__{
       session_id: session_id,
       ets_tables: ets_tables,
       formulas: formulas,
       defs: defs,
-      params: params
+      params: params,
+      worker_count: worker_count
     }
 
     {:ok, state}
@@ -58,22 +61,20 @@ defmodule ShotTx.Prover.Manager do
     if state.active_caller do
       {:reply, {:error, :prover_busy}, state}
     else
-      Logger.info("Manager starting proof with timeout: #{state.params.timeout}ms")
+      Logger.info(
+        "Manager starting proof with #{state.worker_count} workers. Timeout: #{state.params.timeout}ms"
+      )
 
       :ets.insert(state.ets_tables.stats, {:aborted, false})
-      :ets.insert(state.ets_tables.stats, {:branch_count, 1})
 
       ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
       GenServer.cast(ca_via, {:set_ets_tables, state.ets_tables})
 
-      BranchWorker.start_branch(
-        "root",
-        state.formulas,
-        state.defs,
-        state.params,
-        state.session_id,
-        state.ets_tables
-      )
+      root_branch = Branch.new("root", state.formulas, state.defs, state.params)
+      priority_key = {byte_size(root_branch.id), root_branch.id}
+      :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
+
+      spawn_workers(state)
 
       timer = Process.send_after(self(), :timeout, state.params.timeout)
 
@@ -84,19 +85,19 @@ defmodule ShotTx.Prover.Manager do
            timer_ref: timer,
            current_gamma_limit: state.params.initial_gamma_limit,
            current_prim_depth_limit: state.params.initial_prim_limit,
-           active_branches: MapSet.new(["root"]),
-           idle_branches: MapSet.new()
+           idle_workers: MapSet.new()
        }}
     end
   end
 
-  # --- Kill Switches ----------------------------------------------------------
+  # --- Kill Switches & Results ------------------------------------------------
 
   @impl true
   def handle_info({:proof_result, result}, state) do
     if state.active_caller do
       Logger.info("Manager received final result: #{inspect(result)}")
       if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+      :ets.insert(state.ets_tables.stats, {:aborted, true})
       GenServer.reply(state.active_caller, result)
       {:noreply, %{state | active_caller: nil}}
     else
@@ -108,6 +109,7 @@ defmodule ShotTx.Prover.Manager do
   def handle_info(:timeout, state) do
     if state.active_caller do
       Logger.warning("Proof timed out!")
+      :ets.insert(state.ets_tables.stats, {:aborted, true})
       GenServer.reply(state.active_caller, :timeout)
       {:noreply, %{state | active_caller: nil}}
     else
@@ -115,105 +117,115 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  # --- Branch Tracking --------------------------------------------------------
+  # --- Worker Tracking & Deepening --------------------------------------------
 
   @impl true
-  def handle_info({:branch_status, id, :active}, state) do
-    {:noreply, track(state, add: id, to: :active)}
+  def handle_cast({:worker_active, worker_id}, state) do
+    new_idle = MapSet.delete(state.idle_workers, worker_id)
+    {:noreply, %{state | idle_workers: new_idle}}
   end
 
   @impl true
-  def handle_info({:branch_status, id, {:saturated, data}}, state) do
-    new = track(state, remove: id)
-    new = %{new | saturated_branches: Map.put(new.saturated_branches, id, data)}
-    check_and_trigger_deepening(new)
+  def handle_cast({:worker_idle, worker_id}, state) do
+    new_idle = MapSet.put(state.idle_workers, worker_id)
+    check_and_trigger_deepening(%{state | idle_workers: new_idle})
   end
 
   @impl true
-  def handle_info({:branch_status, id, :closed}, state) do
-    check_and_trigger_deepening(track(state, remove: id))
+  def handle_cast({:branch_saturated, branch_id, data}, state) do
+    new_sat = Map.put(state.saturated_branches, branch_id, data)
+    {:noreply, %{state | saturated_branches: new_sat}}
   end
-
-  @impl true
-  def handle_info({:branch_status, id, :idle}, state) do
-    check_and_trigger_deepening(track(state, add: id, to: :idle))
-  end
-
-  @impl true
-  def handle_info({:branch_status, id, :split}, state) do
-    check_and_trigger_deepening(track(state, remove: id))
-  end
-
-  @impl true
-  def handle_info(_msg, state), do: {:noreply, state}
 
   ##############################################################################
   # HELPERS
   ##############################################################################
 
-  # Moves a branch id between tracking sets.
-  defp track(state, opts) do
-    id = opts[:add] || opts[:remove]
+  defp spawn_workers(state) do
+    supervisor_via =
+      {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :branch_supervisor}}}
 
-    base = %{
-      state
-      | active_branches: MapSet.delete(state.active_branches, id),
-        idle_branches: MapSet.delete(state.idle_branches, id),
-        saturated_branches: Map.delete(state.saturated_branches, id)
-    }
-
-    case opts[:to] do
-      :active -> %{base | active_branches: MapSet.put(base.active_branches, id)}
-      :idle -> %{base | idle_branches: MapSet.put(base.idle_branches, id)}
-      nil -> base
+    for i <- 1..state.worker_count do
+      DynamicSupervisor.start_child(
+        supervisor_via,
+        {ShotTx.Prover.Worker,
+         [
+           worker_id: "worker_#{i}",
+           session_id: state.session_id,
+           ets_tables: state.ets_tables,
+           params: state.params,
+           initial_gamma_limit: state.params.initial_gamma_limit,
+           initial_prim_limit: state.params.initial_prim_limit
+         ]}
+      )
     end
   end
 
   defp check_and_trigger_deepening(state) do
-    active? = not Enum.empty?(state.active_branches)
-    idle? = not Enum.empty?(state.idle_branches)
-    sat? = not Enum.empty?(state.saturated_branches)
+    all_idle? = MapSet.size(state.idle_workers) == state.worker_count
 
-    cond do
-      is_nil(state.active_caller) ->
-        {:noreply, state}
+    if all_idle? and not is_nil(state.active_caller) do
+      has_saturated? = map_size(state.saturated_branches) > 0
+      idle_queue_empty? = :ets.info(state.ets_tables.idle_queue, :size) == 0
 
-      not active? and not idle? and sat? ->
-        Logger.debug("All workers finished. Asking Agent to investigate CSA...")
-        ca_cast(state, {:verify_csa, state.saturated_branches})
-        {:noreply, state}
+      cond do
+        has_saturated? ->
+          Logger.debug(
+            "All workers idle. Saturated branches found. Asking Agent to investigate CSA..."
+          )
 
-      not (active? or idle? or sat?) ->
-        Logger.debug("All branches closed. Asking Agent to verify global unification...")
-        ca_cast(state, :verify_all_closed)
-        {:noreply, state}
+          ca_cast(state, {:verify_csa, state.saturated_branches})
+          {:noreply, state}
 
-      not active? and idle? ->
-        new_gamma = state.current_gamma_limit + 1
-        new_prim = state.current_prim_depth_limit + 1
+        idle_queue_empty? ->
+          Logger.debug(
+            "All workers idle and queue exhausted. Asking Agent to verify global unification..."
+          )
 
-        Logger.debug("All branches idle. Gamma: #{new_gamma}, Prim depth: #{new_prim}")
+          ca_cast(state, :verify_all_closed)
+          {:noreply, state}
 
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "branch_control_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
-          end
-        )
+        true ->
+          transfer_idle_to_work_queue(state.ets_tables, state.params.formula_cost)
 
-        {:noreply,
-         %{
-           state
-           | current_gamma_limit: new_gamma,
-             current_prim_depth_limit: new_prim,
-             active_branches: state.idle_branches,
-             idle_branches: MapSet.new()
-         }}
+          new_gamma = state.current_gamma_limit + 1
+          new_prim = state.current_prim_depth_limit + 1
 
-      true ->
-        {:noreply, state}
+          Logger.debug(
+            "Iterative deepening triggered. Gamma: #{new_gamma}, Prim depth: #{new_prim}"
+          )
+
+          Registry.dispatch(
+            ShotTx.Prover.PubSub,
+            "branch_control_#{state.session_id}",
+            fn entries ->
+              for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
+            end
+          )
+
+          {:noreply,
+           %{
+             state
+             | current_gamma_limit: new_gamma,
+               current_prim_depth_limit: new_prim,
+               idle_workers: MapSet.new()
+           }}
+      end
+    else
+      {:noreply, state}
     end
+  end
+
+  defp transfer_idle_to_work_queue(ets_tables, cost_fn) do
+    parked_branches = :ets.tab2list(ets_tables.idle_queue)
+
+    Enum.each(parked_branches, fn {id, branch} ->
+      awakened_branch = Branch.wake_up(branch, cost_fn)
+      priority_key = {byte_size(id), id}
+      :ets.insert(ets_tables.work_queue, {priority_key, awakened_branch})
+    end)
+
+    :ets.delete_all_objects(ets_tables.idle_queue)
   end
 
   defp ca_cast(state, msg) do
