@@ -40,10 +40,7 @@ defmodule ShotTx.Prover.Manager do
     Registry.register(ShotTx.Prover.PubSub, "proof_results_#{session_id}", [])
     Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
 
-    ets_tables = %{
-      stats: :ets.new(:tableau_stats, [:set, :public, write_concurrency: true]),
-      tombs: :ets.new(:tableau_tombstones, [:set, :public, read_concurrency: true])
-    }
+    ets_tables = ShotTx.Prover.EtsKeeper.get_tables(session_id)
 
     state = %__MODULE__{
       session_id: session_id,
@@ -93,7 +90,7 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  ##### Kill Switches #####
+  # --- Kill Switches ----------------------------------------------------------
 
   @impl true
   def handle_info({:proof_result, result}, state) do
@@ -118,7 +115,7 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  ##### Branch Tracking #####
+  # --- Branch Tracking --------------------------------------------------------
 
   @impl true
   def handle_info({:branch_status, id, :active}, state) do

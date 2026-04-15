@@ -8,10 +8,19 @@ defmodule ShotTx.Prover.SessionSupervisor do
   @impl true
   def init({session_id, formulas, defs, params}) do
     children = [
+      {ShotTx.Prover.EtsKeeper, {session_id, params}},
       {Task.Supervisor, name: via(session_id, :task_supervisor)},
-      {DynamicSupervisor, name: via(session_id, :branch_supervisor), strategy: :one_for_one},
+      {ShotTx.Prover.Manager, {session_id, formulas, defs, params}},
       {ShotTx.Prover.ContradictionAgent, {session_id, params}},
-      {ShotTx.Prover.Manager, {session_id, formulas, defs, params}}
+      # {DynamicSupervisor, name: via(session_id, :branch_supervisor), strategy: :one_for_one},
+      %{
+        id: :branch_supervisor,
+        start:
+          {DynamicSupervisor, :start_link,
+           [[name: via(session_id, :branch_supervisor), strategy: :one_for_one]]},
+        type: :supervisor,
+        shutdown: :brutal_kill
+      }
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

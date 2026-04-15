@@ -6,7 +6,7 @@ defmodule ShotTx.Data.Parameters do
             initial_prim_limit: 1,
             prim_subst_batch_size: 3,
             unification_depth: 8,
-            max_branches: 10_000,
+            max_branches: :infinity,
             formula_cost: &Rules.rule_cost/1
 
   @type t :: %__MODULE__{

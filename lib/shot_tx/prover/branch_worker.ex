@@ -105,7 +105,8 @@ defmodule ShotTx.Prover.BranchWorker do
     %{
       id: __MODULE__,
       start: {GenServer, :start_link, [__MODULE__, state, []]},
-      restart: :transient
+      restart: :transient,
+      shutdown: :brutal_kill
     }
   end
 
@@ -157,7 +158,6 @@ defmodule ShotTx.Prover.BranchWorker do
   def handle_continue(:process_next, state) do
     cond do
       poisoned?(state.id, state.ets_tables) ->
-        Logger.debug("Branch #{state.id} noticed it is poisoned. Terminating.")
         broadcast_status(state.id, :closed, state.session_id)
         safe_decrement(state.ets_tables)
         {:stop, :normal, state}
@@ -195,7 +195,7 @@ defmodule ShotTx.Prover.BranchWorker do
 
   defp apply_rule(:tautology, state), do: state
 
-  # --- Linear decompositions -------------------------------------------------
+  # --- Linear decompositions --------------------------------------------------
 
   defp apply_rule({:alpha, formulas}, state) do
     %{state | queue: Enum.reduce(formulas, state.queue, &insert_formula(&2, &1, state.params))}
@@ -511,8 +511,7 @@ defmodule ShotTx.Prover.BranchWorker do
   defp safe_decrement(ets_tables) do
     :ets.update_counter(ets_tables.stats, :branch_count, {2, -1})
   rescue
-    ArgumentError ->
-      Logger.debug("Could not decrement branch counter — ETS already gone.")
+    ArgumentError -> :ok
   end
 
   defp broadcast_status(branch_id, status, session_id) do
