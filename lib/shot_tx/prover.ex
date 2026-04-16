@@ -9,6 +9,13 @@ defmodule ShotTx.Prover do
 
   require Logger
 
+  @type proof_result ::
+          {:thm, ShotTx.Proof.t()}
+          | {:csa, String.t()}
+          | :unknown
+          | :timeout
+          | {:error, term()}
+
   def prove(problem) when is_struct(problem, Problem), do: prove(problem, [])
 
   def prove(conclusion) when is_integer(conclusion), do: prove(conclusion, [], [])
@@ -21,7 +28,7 @@ defmodule ShotTx.Prover do
 
   def prove(%Problem{} = problem, opts) when is_struct(problem, Problem) do
     if is_nil(problem.conjecture) do
-      "Error: no conjecture found"
+      {:error, :no_conjecture}
     else
       {_name, conclusion} = problem.conjecture
       assumptions = Enum.map(problem.axioms, fn {_name, axiom} -> axiom end)
@@ -29,6 +36,7 @@ defmodule ShotTx.Prover do
     end
   end
 
+  @spec prove(Term.term_id(), [Term.term_id()], keyword()) :: proof_result()
   def prove(conclusion, assumptions, opts)
       when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
     {defs, params} = Keyword.pop(opts, :defs, %{})
@@ -47,21 +55,43 @@ defmodule ShotTx.Prover do
 
     case sat(formulas, defs, params) do
       {:sat, model} ->
-        "CSA: #{model}"
+        {:csa, model}
 
-      {:unsat, _global_subst, _flex_pairs, _traces} ->
-        "THM"
+      {:unsat, global_subst, flex_pairs, traces} ->
+        proof = ShotTx.Proof.from_refutation(traces, global_subst, flex_pairs)
+        {:thm, proof}
 
       {:unknown, _partial_model} ->
-        "UNK"
+        :unknown
 
       :timeout ->
-        "Timeout"
+        :timeout
 
       {:error, reason} ->
-        "Error: #{inspect(reason)}"
+        {:error, reason}
     end
   end
+
+  @doc """
+  Convenience wrapper that returns a human-readable string result,
+  preserving the original `prove` interface for quick testing.
+  """
+  @spec prove_string(Problem.t() | Term.term_id(), [Term.term_id()], keyword()) :: String.t()
+  def prove_string(target, assumptions \\ [], opts \\ [])
+
+  def prove_string(%Problem{} = problem, _assumptions, opts) do
+    format_result(prove(problem, opts))
+  end
+
+  def prove_string(conclusion, assumptions, opts) do
+    format_result(prove(conclusion, assumptions, opts))
+  end
+
+  defp format_result({:thm, _proof}), do: "THM"
+  defp format_result({:csa, model}), do: "CSA: #{model}"
+  defp format_result(:unknown), do: "UNK"
+  defp format_result(:timeout), do: "Timeout"
+  defp format_result({:error, reason}), do: "Error: #{inspect(reason)}"
 
   @doc """
   Checks the satisfiability of a list of formulas. Delegates the execution to

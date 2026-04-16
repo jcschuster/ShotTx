@@ -86,11 +86,31 @@ import ShotTx.Prover
 ```
 
 ```elixir
-~f"?[X: $o]: X" |> prove
+res = ~f"?[X: $o]: X" |> prove
 ```
 
 ```elixir
-~f"a & b => a" |> prove
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+```elixir
+res = ~f"a & b => a" |> prove
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
 ```elixir
@@ -157,4 +177,14 @@ import ShotTx.Prover
 ```elixir
 {:ok, problem} = Tptp.parse_tptp_file("SET008^5")
 res = prove(problem)
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```

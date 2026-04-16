@@ -61,11 +61,11 @@ defmodule ShotTx.Benchmark.TptpRunner do
         axioms = Enum.map(problem.axioms, fn {_name, term} -> term end)
 
         case Prover.prove(conclusion_term, axioms, problem.definitions) do
-          "THM" -> {:thm, "Theorem"}
-          "CSA: " <> _model -> {:csa, "Counter-Satisfiable"}
-          "UNK" -> {:unk, "Unknown"}
-          "Timeout" -> {:timeout, "Timeout"}
-          "Error: " <> reason -> {:prover_error, reason}
+          {:thm, _} -> {:thm, "Theorem"}
+          {:csa, _} -> {:csa, "Counter-Satisfiable"}
+          :unknown -> {:unk, "Unknown"}
+          :timeout -> {:timeout, "Timeout"}
+          {:error, reason} -> {:prover_error, reason}
           other -> {:unexpected, inspect(other)}
         end
 

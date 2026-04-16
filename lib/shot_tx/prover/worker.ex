@@ -145,9 +145,9 @@ defmodule ShotTx.Prover.Worker do
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
   end
 
-  defp handle_step_result(:closed, state) do
-    branch_id = state.current_branch.id
-    trace = Enum.reverse(state.current_branch.history)
+  defp handle_step_result({:closed, closed_branch}, state) do
+    branch_id = closed_branch.id
+    trace = Enum.reverse(closed_branch.history)
 
     Logger.debug(
       "Worker #{state.id} found local ground closure on #{branch_id}. Initiating tombstone."
