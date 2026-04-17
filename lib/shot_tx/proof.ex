@@ -182,8 +182,9 @@ defmodule ShotTx.Proof do
 
     node_type =
       case rule do
-        # Beta rules split the tableau (all branches must close)
+        # Beta and instantiate rules split the tableau (all branches must close)
         {:beta, _} -> :and
+        {:instantiate, _, _} -> :and
         # Alpha, Gamma, etc. add to the current branch
         _ -> :or
       end
@@ -270,10 +271,7 @@ defmodule ShotTx.Proof do
       |> Enum.with_index()
       |> Enum.reduce({[], [], counter + 1}, fn {child, idx}, {ns, es, c} ->
         {cn, ce, c2} = collect(child, c)
-
-        # We append the node_type to the edge so we know how to render the branch
         edge = {my_id, c, edge_label_for(node, idx), node.node_type}
-
         {ns ++ cn, es ++ [edge | ce], c2}
       end)
 

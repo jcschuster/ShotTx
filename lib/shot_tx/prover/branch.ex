@@ -31,6 +31,7 @@ defmodule ShotTx.Prover.Branch do
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
+  import ShotDs.Util.TermTraversal
 
   @fresh_progress %{base_offset: 0, covered_types: MapSet.new()}
 
@@ -416,21 +417,48 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp unfold_if_possible(term_id, defs) do
-    case TF.get_term!(term_id) do
-      %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
-        unfolded = app(Map.fetch!(defs, head), args)
-        {unfolded, Rules.classify_formula(unfolded)}
+    transform = fn term, new_args, env, acc_cache ->
+      new_term_id =
+        cond do
+          term.args == new_args and not Map.has_key?(defs, term.head) ->
+            term.id
 
-      _ ->
-        case TF.get_term!(lit_neg(term_id)) do
-          %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
-            unfolded = neg(app(Map.fetch!(defs, head), args))
-            {unfolded, Rules.classify_formula(unfolded)}
+          Map.has_key?(defs, term.head) and term.bvars == [] ->
+            app(Map.fetch!(defs, term.head), new_args)
 
-          _ ->
-            nil
+          term.bvars == [] ->
+            app(TF.make_term(term.head), new_args)
+
+          true ->
+            TF.memoize(%{term | args: new_args})
         end
+
+      {new_term_id, Map.put(acc_cache, {term.id, env}, new_term_id)}
     end
+
+    {unfolded, _final_cache} = map_term!(term_id, nil, fn _, _ -> nil end, transform)
+
+    if unfolded == term_id do
+      nil
+    else
+      {unfolded, Rules.classify_formula(unfolded)}
+    end
+
+    # case TF.get_term!(term_id) do
+    #   %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
+    #     unfolded = app(Map.fetch!(defs, head), args)
+    #     {unfolded, Rules.classify_formula(unfolded)}
+
+    #   _ ->
+    #     case TF.get_term!(lit_neg(term_id)) do
+    #       %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
+    #         unfolded = neg(app(Map.fetch!(defs, head), args))
+    #         {unfolded, Rules.classify_formula(unfolded)}
+
+    #       _ ->
+    #         nil
+    #     end
+    # end
   end
 
   defp unfold_literals(literals, queue, defs, cost_fn) do

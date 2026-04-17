@@ -114,23 +114,53 @@ res
 ```
 
 ```elixir
-~f"a => (a | b)" |> prove
+res = ~f"a => (a | b)" |> prove
 ```
 
 ```elixir
-~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> prove
+res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> prove
 ```
 
 ```elixir
-~f"p @ (a & b) => p @ (b & a)" |> prove
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
 ```elixir
-~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
+res = ~f"p @ (a & b) => p @ (b & a)" |> prove
 ```
 
 ```elixir
-~f"""
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+```elixir
+res = ~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+```elixir
+res = ~f"""
 (
   (p @ ^[X : $o]: X) &
   (p @ ^[X : $o]: ~X) &
@@ -141,6 +171,16 @@ res
 ![Y : $o>$o]: p @ Y
 """
 |> prove
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
 ```elixir
@@ -158,11 +198,31 @@ res
 ```
 
 ```elixir
-~f"p @ a & p @ b => p @ (a & b)" |> prove
+res = ~f"p @ a & p @ b => p @ (a & b)" |> prove
 ```
 
 ```elixir
-~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b" |> prove
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+```elixir
+res = ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b" |> prove
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_rich_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
