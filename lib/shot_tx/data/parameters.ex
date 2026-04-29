@@ -2,9 +2,10 @@ defmodule ShotTx.Data.Parameters do
   alias ShotTx.Prover.Rules
 
   defstruct timeout: 30_000,
-            initial_gamma_limit: 1,
+            initial_gamma_limit: 0,
             initial_prim_limit: 1,
-            prim_subst_batch_size: 5,
+            prim_subst_after: 1,
+            prim_subst_batch_size: 8,
             unification_depth: 8,
             formula_cost: &Rules.rule_cost/1
 

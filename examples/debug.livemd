@@ -85,6 +85,8 @@ import ShotDs.Hol.Sigils
 import ShotTx.Prover
 ```
 
+$\exists X. X$
+
 ```elixir
 res = ~f"?[X: $o]: X" |> prove
 ```
@@ -95,9 +97,11 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
+
+$a \land b \supset a$
 
 ```elixir
 res = ~f"a & b => a" |> prove
@@ -109,13 +113,27 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
+
+$a \supset a \lor b$
 
 ```elixir
 res = ~f"a => (a | b)" |> prove
 ```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:thm, proof} -> proof end)
+|> ShotTx.Proof.to_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+**Cantor:** $\nexists F. \forall Y. \exists X. F X = Y$
 
 ```elixir
 res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> prove
@@ -127,9 +145,11 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
+
+**Extensionality:** $p (a \land b) \supset p (b \land a)$
 
 ```elixir
 res = ~f"p @ (a & b) => p @ (b & a)" |> prove
@@ -141,9 +161,11 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
+
+**Extensionality:** $\forall X Y. p~X \land p~Y \supset p (X \land Y)$
 
 ```elixir
 res = ~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
@@ -155,9 +177,11 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
+
+**Finite domain of type $o\to o$**
 
 ```elixir
 res = ~f"""
@@ -179,7 +203,7 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
@@ -207,7 +231,7 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
@@ -221,8 +245,14 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+```
+
+```elixir
+res =
+  ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
+  |> prove
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
@@ -235,7 +265,7 @@ import ShotTx.Prover
 ```
 
 ```elixir
-{:ok, problem} = Tptp.parse_tptp_file("SET008^5")
+{:ok, problem} = Tptp.parse_tptp_file("KRS272^7")
 res = prove(problem)
 ```
 
@@ -245,6 +275,6 @@ Kino.render(frame)
 
 res
 |> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_rich_mermaid()
+|> ShotTx.Proof.to_mermaid()
 |> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```

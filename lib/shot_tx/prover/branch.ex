@@ -8,9 +8,10 @@ defmodule ShotTx.Prover.Branch do
 
   Each history entry is a triple `{source | nil, rule, [produced_id]}`:
 
-  * `source`   — term id of the formula that was processed (`nil` for
-                 reinserted γ / prim_subst rules that don't originate from
-                 a single formula).
+  * `source`   — term id of the formula that was processed. Reinserted γ /
+                 prim_subst rules carry the originating formula's id
+                 through the queue, so every entry is tagged with a real
+                 parent.
   * `rule`     — the classified rule tuple from `Rules`.
   * `produced` — term ids of the formulas that this rule spawned onto the
                  branch. For β / `instantiate`, the produced list mirrors
@@ -102,7 +103,9 @@ defmodule ShotTx.Prover.Branch do
   """
   def wake_up(%__MODULE__{} = branch, cost_fn) do
     new_queue =
-      Enum.reduce(branch.sleeping_gamma_rules, branch.queue, &reinsert_rule(&2, &1, cost_fn))
+      Enum.reduce(branch.sleeping_gamma_rules, branch.queue, fn {source, rule}, acc ->
+        reinsert_rule(acc, source, rule, cost_fn)
+      end)
 
     %{branch | sleeping_gamma_rules: [], queue: new_queue}
   end
@@ -212,7 +215,7 @@ defmodule ShotTx.Prover.Branch do
   defp apply_rule({:gamma, recipe, type, prev} = rule, source, branch, params, gamma_limit, _p) do
     if prev >= gamma_limit do
       updated =
-        %{branch | sleeping_gamma_rules: [rule | branch.sleeping_gamma_rules]}
+        %{branch | sleeping_gamma_rules: [{source, rule} | branch.sleeping_gamma_rules]}
         |> record(source, rule, [])
 
       {:continue, updated, :no_effects}
@@ -223,12 +226,13 @@ defmodule ShotTx.Prover.Branch do
       queue =
         branch.queue
         |> insert_formula(instantiated, params.formula_cost)
-        |> reinsert_rule(updated_gamma, params.formula_cost)
+        |> reinsert_rule(source, updated_gamma, params.formula_cost)
 
       queue =
-        if prev == 0 and type.goal == :o do
+        if prev == params.prim_subst_after and type.goal == :o do
           reinsert_rule(
             queue,
+            source,
             {:prim_subst, recipe, type, 1, @fresh_progress},
             params.formula_cost
           )
@@ -313,7 +317,7 @@ defmodule ShotTx.Prover.Branch do
       new_rule = {:prim_subst, recipe, type, depth, new_progress}
 
       updated =
-        %{branch | queue: reinsert_rule(queue, new_rule, params.formula_cost)}
+        %{branch | queue: reinsert_rule(queue, source, new_rule, params.formula_cost)}
         |> record(source, rule, instances)
 
       {:continue, updated, :no_effects}
@@ -374,9 +378,9 @@ defmodule ShotTx.Prover.Branch do
 
     updated_branch =
       if next <= prim_limit do
-        %{branch | queue: reinsert_rule(branch.queue, new_rule, params.formula_cost)}
+        %{branch | queue: reinsert_rule(branch.queue, source, new_rule, params.formula_cost)}
       else
-        %{branch | sleeping_gamma_rules: [new_rule | branch.sleeping_gamma_rules]}
+        %{branch | sleeping_gamma_rules: [{source, new_rule} | branch.sleeping_gamma_rules]}
       end
 
     {:continue, record(updated_branch, source, source_rule, []), :no_effects}
@@ -398,20 +402,15 @@ defmodule ShotTx.Prover.Branch do
     Enum.reduce(args, universe, &register_new_types(&2, &1))
   end
 
-  # Wraps the classified formula together with its source term ID.
   defp insert_formula(queue, formula, cost_fn) do
     cf = Rules.classify_formula(formula)
     FPQ.insert(queue, {formula, cf}, cost_fn.(cf))
   end
 
-  # Reinserted rules (gamma iterations, prim_subst) don't have a single
-  # originating formula, so the source is nil.
-  defp reinsert_rule(queue, rule, cost_fn) do
-    FPQ.insert(queue, {nil, rule}, cost_fn.(rule))
+  defp reinsert_rule(queue, source, rule, cost_fn) do
+    FPQ.insert(queue, {source, rule}, cost_fn.(rule))
   end
 
-  # Prepends a history entry. Always called from within `apply_rule/6` after
-  # the rule's effects have been computed so that `produced` is exact.
   defp record(branch, source, rule, produced) do
     %{branch | history: [{source, rule, produced} | branch.history]}
   end
@@ -443,22 +442,6 @@ defmodule ShotTx.Prover.Branch do
     else
       {unfolded, Rules.classify_formula(unfolded)}
     end
-
-    # case TF.get_term!(term_id) do
-    #   %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
-    #     unfolded = app(Map.fetch!(defs, head), args)
-    #     {unfolded, Rules.classify_formula(unfolded)}
-
-    #   _ ->
-    #     case TF.get_term!(lit_neg(term_id)) do
-    #       %Term{bvars: [], head: head, args: args} when is_map_key(defs, head) ->
-    #         unfolded = neg(app(Map.fetch!(defs, head), args))
-    #         {unfolded, Rules.classify_formula(unfolded)}
-
-    #       _ ->
-    #         nil
-    #     end
-    # end
   end
 
   defp unfold_literals(literals, queue, defs, cost_fn) do

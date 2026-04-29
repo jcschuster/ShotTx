@@ -174,7 +174,7 @@ defmodule ShotTx.Prover.Manager do
             "All workers idle. Saturated branches found. Asking Agent to investigate CSA..."
           )
 
-          ca_cast(state, {:verify_csa, state.saturated_branches})
+          GenServer.cast(ca_via(state), {:verify_csa, state.saturated_branches})
           {:noreply, state}
 
         idle_queue_empty? ->
@@ -182,37 +182,47 @@ defmodule ShotTx.Prover.Manager do
             "All workers idle and queue exhausted. Asking Agent to verify global unification..."
           )
 
-          ca_cast(state, :verify_all_closed)
+          GenServer.cast(ca_via(state), :verify_all_closed)
           {:noreply, state}
 
         true ->
-          transfer_idle_to_work_queue(state.ets_tables, state.params.formula_cost)
-
-          new_gamma = state.current_gamma_limit + 1
-          new_prim = state.current_prim_depth_limit + 1
-
-          Logger.debug(
-            "Iterative deepening triggered. Gamma: #{new_gamma}, Prim depth: #{new_prim}"
-          )
-
-          Registry.dispatch(
-            ShotTx.Prover.PubSub,
-            "branch_control_#{state.session_id}",
-            fn entries ->
-              for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
-            end
-          )
-
-          {:noreply,
-           %{
-             state
-             | current_gamma_limit: new_gamma,
-               current_prim_depth_limit: new_prim,
-               idle_workers: MapSet.new()
-           }}
+          send_wake_up_if_open(state)
       end
     else
       {:noreply, state}
+    end
+  end
+
+  defp send_wake_up_if_open(state) do
+    case GenServer.call(ca_via(state), :settle, :infinity) do
+      :closed ->
+        {:noreply, state}
+
+      :open ->
+        transfer_idle_to_work_queue(state.ets_tables, state.params.formula_cost)
+
+        new_gamma = state.current_gamma_limit + 1
+        new_prim = state.current_prim_depth_limit + 1
+
+        Logger.debug(
+          "Iterative deepening triggered. Gamma: #{new_gamma}, Prim depth: #{new_prim}"
+        )
+
+        Registry.dispatch(
+          ShotTx.Prover.PubSub,
+          "branch_control_#{state.session_id}",
+          fn entries ->
+            for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
+          end
+        )
+
+        {:noreply,
+         %{
+           state
+           | current_gamma_limit: new_gamma,
+             current_prim_depth_limit: new_prim,
+             idle_workers: MapSet.new()
+         }}
     end
   end
 
@@ -228,8 +238,6 @@ defmodule ShotTx.Prover.Manager do
     :ets.delete_all_objects(ets_tables.idle_queue)
   end
 
-  defp ca_cast(state, msg) do
-    ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-    GenServer.cast(ca_via, msg)
-  end
+  defp ca_via(state),
+    do: {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
 end

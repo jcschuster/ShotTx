@@ -15,7 +15,9 @@ defmodule ShotTx.Prover.ContradictionAgent do
             clashing_local_pairs: %{},
             branch_closures: %{},
             branch_traces: %{},
-            params: %Parameters{}
+            params: %Parameters{},
+            pending_search: nil,
+            settle_waiter: nil
 
   @empty_solution %UnifSolution{substitutions: [], flex_pairs: []}
 
@@ -62,6 +64,22 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
+  @impl true
+  def handle_call(:settle, _from, %{pending_search: nil} = state) do
+    case check_global_closure_sync(state) do
+      {:ok, solution} ->
+        broadcast_unsat(solution, state)
+        {:reply, :closed, state}
+
+      :error ->
+        {:reply, :open, state}
+    end
+  end
+
+  def handle_call(:settle, from, state) do
+    {:noreply, %{state | settle_waiter: from}}
+  end
+
   # ---- INFO CALLBACKS ---- #
 
   defp do_handle_info({:branch_status, branch_id, :active}, state) do
@@ -95,6 +113,30 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   defp do_handle_info({:branch_status, _branch_id, _other}, state) do
     {:noreply, state}
+  end
+
+  defp do_handle_info(
+         {ref, {:closure, solution}},
+         %{pending_search: ref, settle_waiter: waiter} = state
+       ) do
+    Process.demonitor(ref, [:flush])
+    broadcast_unsat(solution, state)
+
+    if waiter != nil do
+      GenServer.reply(waiter, :closed)
+    end
+
+    {:noreply, %{state | pending_search: nil}}
+  end
+
+  defp do_handle_info({ref, :no_closure}, %{pending_search: ref, settle_waiter: waiter} = state) do
+    Process.demonitor(ref, [:flush])
+
+    if waiter != nil do
+      GenServer.reply(waiter, :open)
+    end
+
+    {:noreply, %{state | pending_search: nil}}
   end
 
   defp do_handle_info(_event, state) do
@@ -186,21 +228,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
-  defp do_handle_cast({:global_closure_found, solution}, state) do
-    %UnifSolution{substitutions: final_substs, flex_pairs: flex} = solution
-
-    final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
-
-    Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
-
-    Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
-      for {pid, _} <- entries,
-          do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
-    end)
-
-    {:noreply, state}
-  end
-
   defp do_handle_cast({:local_clashes, branch_id, new_candidates, trace}, %__MODULE__{} = state) do
     Logger.debug(
       "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
@@ -236,7 +263,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   # inherited clashes such that the union of all chosen pairs is simultaneously
   # unifiable.
   #
-  # Optimizations over the naive Cartesian-product approach:
+  # Optimizations over a naive Cartesian-product approach:
   #   1. MRV ordering — branches with fewer candidates are tried first
   #   2. Constraint decomposition — independent groups (no shared fvars) are
   #      solved separately, turning one large exponential into several small ones
@@ -247,46 +274,60 @@ defmodule ShotTx.Prover.ContradictionAgent do
   #      whose domains are fully wiped out trigger an immediate backtrack
   ##############################################################################
 
-  defp check_global_closure(state) do
+  defp check_global_closure(%__MODULE__{} = state) do
+    if state.pending_search != nil do
+      {:noreply, state}
+    else
+      branch_clash_lists =
+        Enum.map(state.active_branches, fn b_id ->
+          get_inherited_clashes(b_id, state) |> Enum.to_list()
+        end)
+
+      if some_branch_cannot_close?(state, branch_clash_lists) do
+        {:noreply, state}
+      else
+        dispatch_csp(state, branch_clash_lists)
+      end
+    end
+  end
+
+  defp check_global_closure_sync(state) do
     branch_clash_lists =
       Enum.map(state.active_branches, fn b_id ->
         get_inherited_clashes(b_id, state) |> Enum.to_list()
       end)
 
-    some_branch_cannot_close? =
-      Enum.empty?(state.active_branches) ||
-        Enum.any?(branch_clash_lists, &Enum.empty?/1)
-
-    if some_branch_cannot_close? do
-      {:noreply, state}
+    if some_branch_cannot_close?(state, branch_clash_lists) do
+      :error
     else
-      depth = state.params.unification_depth
+      sorted = Enum.sort_by(branch_clash_lists, &length/1)
+      groups = partition_independent(sorted)
+      solve_groups(groups, state.params.unification_depth)
+    end
+  end
 
-      task_sup_via =
-        {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
+  defp some_branch_cannot_close?(state, branch_clash_lists) do
+    Enum.empty?(state.active_branches) || Enum.any?(branch_clash_lists, &Enum.empty?/1)
+  end
 
-      Task.Supervisor.start_child(task_sup_via, fn ->
+  defp dispatch_csp(state, branch_clash_lists) do
+    task_sup_via =
+      {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
+
+    task =
+      Task.Supervisor.async_nolink(task_sup_via, fn ->
         # 1. MRV: process the most constrained branches first
         sorted = Enum.sort_by(branch_clash_lists, &length/1)
-
         # 2. Decompose into independent sub-problems
         groups = partition_independent(sorted)
-
         # 3. Solve each group, combine results
-        case solve_groups(groups, depth) do
-          {:ok, solution} ->
-            ca_via =
-              {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-
-            GenServer.cast(ca_via, {:global_closure_found, solution})
-
-          :error ->
-            :ok
+        case solve_groups(groups, state.params.unification_depth) do
+          {:ok, solution} -> {:closure, solution}
+          :error -> :no_closure
         end
       end)
 
-      {:noreply, state}
-    end
+    {:noreply, %{state | pending_search: task.ref}}
   end
 
   # Solve each independent group separately, then merge the group solutions.
@@ -375,11 +416,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end)
   end
 
-  # Apply the current substitutions and check whether the resulting head
-  # symbols are obviously incompatible (two different rigid heads).  This is
-  # sound for pruning: if two rigid heads disagree, unification will certainly
-  # fail.  The check is intentionally conservative — it returns `true`
-  # (compatible) whenever in doubt, including when either side is flex.
   @spec quick_compatible?(integer(), integer(), [ShotDs.Data.Substitution.t()]) :: boolean()
   defp quick_compatible?(l_id, r_id, subst_list) do
     l_applied = ShotDs.Stt.Semantics.subst!(subst_list, l_id)
@@ -389,11 +425,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
     r_term = TF.get_term!(r_applied)
 
     case {l_term.head.kind, r_term.head.kind} do
-      # Two rigid constants: must be the same symbol or unification will fail
       {:co, :co} -> l_term.head == r_term.head
-      # Two rigid bound vars: must land on the same slot
       {:bv, :bv} -> l_term.head == r_term.head
-      # At least one side is flex — can't rule it out cheaply
       _ -> true
     end
   end
@@ -554,5 +587,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
       [] -> :error
       [merged_solution] -> {:ok, merged_solution}
     end
+  end
+
+  defp broadcast_unsat(solution, state) do
+    %UnifSolution{substitutions: final_substs, flex_pairs: flex} = solution
+
+    final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
+
+    Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
+
+    Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
+      for {pid, _} <- entries,
+          do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
+    end)
+
+    {:noreply, state}
   end
 end

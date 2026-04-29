@@ -43,7 +43,7 @@ defmodule ShotTx.Prover do
 
     Logger.info(
       "Attempting to prove:\n" <>
-        Enum.map_join(assumptions, ", ", &format!(&1, false)) <>
+        Enum.map_join(assumptions, ", ", &format!(&1, _hide_types = true)) <>
         " ⊢ " <>
         format!(conclusion, false)
     )
@@ -58,7 +58,7 @@ defmodule ShotTx.Prover do
         {:csa, model}
 
       {:unsat, global_subst, flex_pairs, traces} ->
-        proof = ShotTx.Proof.from_refutation(traces, global_subst, flex_pairs)
+        proof = ShotTx.Proof.from_refutation(traces, formulas, global_subst, flex_pairs)
         {:thm, proof}
 
       {:unknown, _partial_model} ->
@@ -112,7 +112,9 @@ defmodule ShotTx.Prover do
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     result = GenServer.call(manager_via, :start_proof, :infinity)
 
-    DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
+    Process.exit(session_pid, :normal)
+
+    # DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
 
     case result do
       {:sat, {model_atoms, model_defs}} ->
