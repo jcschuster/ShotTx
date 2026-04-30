@@ -1,6 +1,7 @@
 defmodule ShotTx.Prover.Rules do
   alias ShotDs.Data.{Type, Declaration, Term}
   alias ShotDs.Stt.TermFactory, as: TF
+  alias ShotDs.Util.TermTraversal
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
   import ShotTx.Generation
@@ -231,46 +232,156 @@ defmodule ShotTx.Prover.Rules do
   @spec classify_atom(Term.t()) :: rename_t() | instantiate_t() | atomic_t()
   defp classify_atom(term)
 
+  # defp classify_atom(%Term{head: %Declaration{kind: :co}, args: [_ | _] = args} = term) do
+  #   non_val_o_args =
+  #     args
+  #     |> Enum.with_index()
+  #     |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
+
+  #   rename_candidate =
+  #     Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
+  #       case TF.primitive_term?(a_id) do
+  #         {:ok, primitive?} -> !primitive?
+  #         _error -> false
+  #       end
+  #     end)
+
+  #   cond do
+  #     Enum.empty?(non_val_o_args) ->
+  #       {:atomic, TF.memoize(term)}
+
+  #     is_nil(rename_candidate) ->
+  #       [{to_instantiate, idx} | _] = non_val_o_args
+  #       %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
+
+  #       branches =
+  #         Stream.map(gen_o(type), fn instance ->
+  #           inst_term = %Term{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
+  #           {inst_term, {decl, instance}}
+  #         end)
+
+  #       {:instantiate, branches, o_type_size(type)}
+
+  #     true ->
+  #       {rename_id, idx} = rename_candidate
+  #       rename_term = TF.get_term!(rename_id)
+  #       c = sk_term(rename_term.fvars, rename_term.type)
+  #       replaced_term = %Term{term | args: List.replace_at(args, idx, c)} |> TF.memoize()
+  #       {:rename, {replaced_term, eq(c, rename_id)}}
+  #   end
+  # end
+
   defp classify_atom(%Term{head: %Declaration{kind: :co}, args: [_ | _] = args} = term) do
-    non_val_o_args =
-      args
-      |> Enum.with_index()
-      |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
+    case find_deep_candidates(args) do
+      nil ->
+        # 1. Fallback: Top-level logic safely handles normal variables like 'a' and 'b'
+        non_val_o_args =
+          args
+          |> Enum.with_index()
+          |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
 
-    rename_candidate =
-      Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
-        case TF.primitive_term?(a_id) do
-          {:ok, primitive?} -> !primitive?
-          _error -> false
+        if Enum.empty?(non_val_o_args) do
+          {:atomic, TF.memoize(term)}
+        else
+          [{to_instantiate, idx} | _] = non_val_o_args
+          %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
+
+          branches =
+            Stream.map(gen_o(type), fn instance ->
+              inst_term = %{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
+              {inst_term, {decl, instance}}
+            end)
+
+          {:instantiate, branches, o_type_size(type)}
         end
-      end)
 
-    cond do
-      Enum.empty?(non_val_o_args) ->
-        {:atomic, TF.memoize(term)}
+      {:rename, candidate_id} ->
+        # 2. Deep Extensionality: Extract complex boolean expressions safely
+        candidate_term = TF.get_term!(candidate_id)
+        c_id = sk_term(candidate_term.fvars, candidate_term.type)
 
-      is_nil(rename_candidate) ->
-        [{to_instantiate, idx} | _] = non_val_o_args
-        %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
+        transform = fn current_term, new_args, _env, acc_cache ->
+          if current_term.id == candidate_id do
+            {c_id, acc_cache}
+          else
+            new_term = %{current_term | args: new_args}
+            {TF.memoize(new_term), acc_cache}
+          end
+        end
+
+        {replaced_term_id, _cache} =
+          TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+
+        {:rename, {replaced_term_id, eq(c_id, candidate_id)}}
+
+      {:instantiate, candidate_id} ->
+        # 3. Deep Branching: Only safely fires on generated reference constants
+        %Term{head: decl, type: type} = TF.get_term!(candidate_id)
 
         branches =
           Stream.map(gen_o(type), fn instance ->
-            inst_term = %Term{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
-            {inst_term, {decl, instance}}
+            transform = fn current_term, new_args, _env, acc_cache ->
+              if current_term.id == candidate_id do
+                {instance, acc_cache}
+              else
+                new_term = %{current_term | args: new_args}
+                {TF.memoize(new_term), acc_cache}
+              end
+            end
+
+            {inst_term_id, _cache} =
+              TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+
+            {inst_term_id, {decl, instance}}
           end)
 
         {:instantiate, branches, o_type_size(type)}
-
-      true ->
-        {rename_id, idx} = rename_candidate
-        rename_term = TF.get_term!(rename_id)
-        c = sk_term(rename_term.fvars, rename_term.type)
-        replaced_term = %Term{term | args: List.replace_at(args, idx, c)} |> TF.memoize()
-        {:rename, {replaced_term, eq(c, rename_id)}}
     end
   end
 
   defp classify_atom(term), do: {:atomic, TF.memoize(term)}
+
+  defp find_deep_candidates(args) do
+    fold_fn = fn term, arg_results ->
+      existing = Enum.find(arg_results, & &1)
+
+      cond do
+        existing ->
+          existing
+
+        non_signature_o_constant?(term.id) ->
+          case TF.primitive_term?(term.id) do
+            # Complex expressions: Rename them, unless they are already generated constants
+            {:ok, false} ->
+              if is_reference(term.head.name) do
+                nil
+              else
+                {:rename, term.id}
+              end
+
+            # Primitive variables: ONLY deeply instantiate if they are fresh generated constants
+            {:ok, true} ->
+              if is_reference(term.head.name) do
+                {:instantiate, term.id}
+              else
+                nil
+              end
+
+            _ ->
+              nil
+          end
+
+        true ->
+          nil
+      end
+    end
+
+    # We strictly fold over the arguments to prevent the root node from looping
+    Enum.find_value(args, fn arg_id ->
+      {result, _cache} = TermTraversal.fold_term!(arg_id, fold_fn)
+      result
+    end)
+  end
 
   ##############################################################################
   # HELPERS
