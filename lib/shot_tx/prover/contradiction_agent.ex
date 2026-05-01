@@ -126,7 +126,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       GenServer.reply(waiter, :closed)
     end
 
-    {:noreply, %{state | pending_search: nil}}
+    {:noreply, %{state | pending_search: nil, settle_waiter: nil}}
   end
 
   defp do_handle_info({ref, :no_closure}, %{pending_search: ref, settle_waiter: waiter} = state) do
@@ -136,7 +136,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       GenServer.reply(waiter, :open)
     end
 
-    {:noreply, %{state | pending_search: nil}}
+    {:noreply, %{state | pending_search: nil, settle_waiter: nil}}
   end
 
   defp do_handle_info(_event, state) do

@@ -16,10 +16,10 @@ defmodule ShotTx.Generation.GeneralBindings do
       $\land$, $\lor$, $\supset$, $\equiv$) and, at depth $\geq 2$,
       propositional compositions. Stable across the proof.
 
-    * **Polymorphic heads** — $=_\tau$, $\Pi_\beta$, $\Sigma_\beta$ for each
+    * **Polymorphic heads** — $=_\tau$, $\forall_\beta$, $\exists_\beta$ for each
       type in the universe. At depth $\geq 2$, additionally includes
       compositions of polymorphic heads with propositional connectives
-      ($\lnot(=_\tau)$, $(\Pi_\beta)\land H$, etc.). Depth-dependent,
+      ($\lnot(=_\tau)$, $(\forall_\beta)\land H$, etc.). Depth-dependent,
       requiring per-depth coverage tracking.
 
   Head specifications are lightweight `{matrix_fn, hole_types}` tuples;
@@ -145,8 +145,8 @@ defmodule ShotTx.Generation.GeneralBindings do
       h_type = Type.new(:o, arg_types ++ [beta])
 
       [
-        {fn [h] -> app(pi_term(beta), h) end, [h_type]},
-        {fn [h] -> app(sigma_term(beta), h) end, [h_type]}
+        {fn [h] -> app(forall_term(beta), h) end, [h_type]},
+        {fn [h] -> app(exists_term(beta), h) end, [h_type]}
       ]
     end)
   end
@@ -179,7 +179,7 @@ defmodule ShotTx.Generation.GeneralBindings do
     Enum.flat_map(types, fn beta ->
       h_type = Type.new(:o, arg_types ++ [beta])
 
-      for qt <- [pi_term(beta), sigma_term(beta)],
+      for qt <- [forall_term(beta), exists_term(beta)],
           spec <- compose_with_connectives(&app(qt, &1), h_type, hole) do
         spec
       end

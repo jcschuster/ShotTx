@@ -147,7 +147,7 @@ defmodule ShotTx.Prover do
       %Term{fvars: fvars} ->
         Enum.reduce(fvars, term_id, fn %Declaration{type: t} = fv, acc_term ->
           TF.make_abstr_term!(acc_term, fv)
-          |> then(&app(pi_term(t), &1))
+          |> then(&app(forall_term(t), &1))
         end)
     end
   end

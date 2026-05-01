@@ -23,7 +23,7 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, "~> 1.0"},
+      {:shot_ds, "~> 1.1"},
       # Unification algorithm
       {:shot_un, "~> 0.1"},
       # Code analyzer, duplication checker and security analyzer

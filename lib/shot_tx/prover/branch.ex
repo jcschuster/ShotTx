@@ -32,7 +32,7 @@ defmodule ShotTx.Prover.Branch do
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
-  import ShotDs.Util.TermTraversal
+  # import ShotDs.Util.TermTraversal
 
   @fresh_progress %{base_offset: 0, covered_types: MapSet.new()}
 
@@ -416,26 +416,7 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp unfold_if_possible(term_id, defs) do
-    transform = fn term, new_args, env, acc_cache ->
-      new_term_id =
-        cond do
-          term.args == new_args and not Map.has_key?(defs, term.head) ->
-            term.id
-
-          Map.has_key?(defs, term.head) and term.bvars == [] ->
-            app(Map.fetch!(defs, term.head), new_args)
-
-          term.bvars == [] ->
-            app(TF.make_term(term.head), new_args)
-
-          true ->
-            TF.memoize(%{term | args: new_args})
-        end
-
-      {new_term_id, Map.put(acc_cache, {term.id, env}, new_term_id)}
-    end
-
-    {unfolded, _final_cache} = map_term!(term_id, nil, fn _, _ -> nil end, transform)
+    unfolded = ShotDs.Stt.Semantics.unfold_defs!(term_id, defs)
 
     if unfolded == term_id do
       nil
