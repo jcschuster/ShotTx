@@ -232,49 +232,9 @@ defmodule ShotTx.Prover.Rules do
   @spec classify_atom(Term.t()) :: rename_t() | instantiate_t() | atomic_t()
   defp classify_atom(term)
 
-  # defp classify_atom(%Term{head: %Declaration{kind: :co}, args: [_ | _] = args} = term) do
-  #   non_val_o_args =
-  #     args
-  #     |> Enum.with_index()
-  #     |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
-
-  #   rename_candidate =
-  #     Enum.find(non_val_o_args, nil, fn {a_id, _idx} ->
-  #       case TF.primitive_term?(a_id) do
-  #         {:ok, primitive?} -> !primitive?
-  #         _error -> false
-  #       end
-  #     end)
-
-  #   cond do
-  #     Enum.empty?(non_val_o_args) ->
-  #       {:atomic, TF.memoize(term)}
-
-  #     is_nil(rename_candidate) ->
-  #       [{to_instantiate, idx} | _] = non_val_o_args
-  #       %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
-
-  #       branches =
-  #         Stream.map(gen_o(type), fn instance ->
-  #           inst_term = %Term{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
-  #           {inst_term, {decl, instance}}
-  #         end)
-
-  #       {:instantiate, branches, o_type_size(type)}
-
-  #     true ->
-  #       {rename_id, idx} = rename_candidate
-  #       rename_term = TF.get_term!(rename_id)
-  #       c = sk_term(rename_term.fvars, rename_term.type)
-  #       replaced_term = %Term{term | args: List.replace_at(args, idx, c)} |> TF.memoize()
-  #       {:rename, {replaced_term, eq(c, rename_id)}}
-  #   end
-  # end
-
   defp classify_atom(%Term{head: %Declaration{kind: :co}, args: [_ | _] = args} = term) do
     case find_deep_candidates(args) do
       nil ->
-        # 1. Fallback: Top-level logic safely handles normal variables like 'a' and 'b'
         non_val_o_args =
           args
           |> Enum.with_index()
@@ -296,7 +256,6 @@ defmodule ShotTx.Prover.Rules do
         end
 
       {:rename, candidate_id} ->
-        # 2. Deep Extensionality: Extract complex boolean expressions safely
         candidate_term = TF.get_term!(candidate_id)
         c_id = sk_term(candidate_term.fvars, candidate_term.type)
 
@@ -315,7 +274,6 @@ defmodule ShotTx.Prover.Rules do
         {:rename, {replaced_term_id, eq(c_id, candidate_id)}}
 
       {:instantiate, candidate_id} ->
-        # 3. Deep Branching: Only safely fires on generated reference constants
         %Term{head: decl, type: type} = TF.get_term!(candidate_id)
 
         branches =
@@ -351,7 +309,6 @@ defmodule ShotTx.Prover.Rules do
 
         non_signature_o_constant?(term.id) ->
           case TF.primitive_term?(term.id) do
-            # Complex expressions: Rename them, unless they are already generated constants
             {:ok, false} ->
               if is_reference(term.head.name) do
                 nil
@@ -359,7 +316,6 @@ defmodule ShotTx.Prover.Rules do
                 {:rename, term.id}
               end
 
-            # Primitive variables: ONLY deeply instantiate if they are fresh generated constants
             {:ok, true} ->
               if is_reference(term.head.name) do
                 {:instantiate, term.id}
@@ -376,7 +332,6 @@ defmodule ShotTx.Prover.Rules do
       end
     end
 
-    # We strictly fold over the arguments to prevent the root node from looping
     Enum.find_value(args, fn arg_id ->
       {result, _cache} = TermTraversal.fold_term!(arg_id, fold_fn)
       result

@@ -32,7 +32,6 @@ defmodule ShotTx.Prover.Branch do
   import ShotDs.Hol.Definitions
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
-  # import ShotDs.Util.TermTraversal
 
   @fresh_progress %{base_offset: 0, covered_types: MapSet.new()}
 
