@@ -14,11 +14,12 @@ defmodule ShotTx.Prover.Manager do
             timer_ref: nil,
             current_gamma_limit: 1,
             current_prim_depth_limit: 1,
-
-            # Worker Pool Tracking
             worker_count: 0,
             idle_workers: MapSet.new(),
-            saturated_branches: %{}
+            saturated_branches: %{},
+            parked_count: 0
+
+  @root_name "root"
 
   ##############################################################################
   # PUBLIC API
@@ -67,12 +68,13 @@ defmodule ShotTx.Prover.Manager do
 
       :ets.insert(state.ets_tables.stats, {:aborted, false})
 
-      ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-      GenServer.cast(ca_via, {:set_ets_tables, state.ets_tables})
-
-      root_branch = Branch.new("root", state.formulas, state.defs, state.params)
+      root_branch = Branch.new(@root_name, state.formulas, state.params, defs: state.defs)
       priority_key = {byte_size(root_branch.id), root_branch.id}
       :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
+
+      ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
+      GenServer.cast(ca_via, {:set_ets_tables, state.ets_tables})
+      GenServer.call(ca_via, {:branch_active, @root_name}, :infinity)
 
       spawn_workers(state)
 
@@ -117,6 +119,11 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
+  @impl true
+  def handle_info(_, state) do
+    {:noreply, state}
+  end
+
   # --- Worker Tracking & Deepening --------------------------------------------
 
   @impl true
@@ -127,14 +134,42 @@ defmodule ShotTx.Prover.Manager do
 
   @impl true
   def handle_cast({:worker_idle, worker_id}, state) do
-    new_idle = MapSet.put(state.idle_workers, worker_id)
-    check_and_trigger_deepening(%{state | idle_workers: new_idle})
+    case :ets.lookup(state.ets_tables.stats, :aborted) do
+      [{:aborted, true}] ->
+        {:noreply, state}
+
+      _ ->
+        Logger.debug(
+          "worker_idle from #{worker_id}; idle_workers size now #{MapSet.size(MapSet.put(state.idle_workers, worker_id))}"
+        )
+
+        new_idle = MapSet.put(state.idle_workers, worker_id)
+        check_and_trigger_deepening(%{state | idle_workers: new_idle})
+    end
   end
 
   @impl true
   def handle_cast({:branch_saturated, branch_id, data}, state) do
     new_sat = Map.put(state.saturated_branches, branch_id, data)
     {:noreply, %{state | saturated_branches: new_sat}}
+  end
+
+  @impl true
+  def handle_cast({:proof_result, result}, state) do
+    if state.active_caller do
+      Logger.info("Manager received final result: #{inspect(result)}")
+      if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+      :ets.insert(state.ets_tables.stats, {:aborted, true})
+      GenServer.reply(state.active_caller, result)
+      {:noreply, %{state | active_caller: nil}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:branch_parked, _branch_id}, state) do
+    {:noreply, %{state | parked_count: state.parked_count + 1}}
   end
 
   ##############################################################################
@@ -166,7 +201,7 @@ defmodule ShotTx.Prover.Manager do
 
     if all_idle? and not is_nil(state.active_caller) do
       has_saturated? = map_size(state.saturated_branches) > 0
-      idle_queue_empty? = :ets.info(state.ets_tables.idle_queue, :size) == 0
+      idle_queue_empty? = state.parked_count == 0
 
       cond do
         has_saturated? ->
@@ -199,7 +234,8 @@ defmodule ShotTx.Prover.Manager do
         {:noreply, state}
 
       :open ->
-        transfer_idle_to_work_queue(state.ets_tables, state.params.formula_cost)
+        new_state =
+          transfer_idle_to_work_queue(state, state.ets_tables, state.params.formula_cost)
 
         new_gamma = state.current_gamma_limit + 1
         new_prim = state.current_prim_depth_limit + 1
@@ -218,7 +254,7 @@ defmodule ShotTx.Prover.Manager do
 
         {:noreply,
          %{
-           state
+           new_state
            | current_gamma_limit: new_gamma,
              current_prim_depth_limit: new_prim,
              idle_workers: MapSet.new()
@@ -226,7 +262,7 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  defp transfer_idle_to_work_queue(ets_tables, cost_fn) do
+  defp transfer_idle_to_work_queue(state, ets_tables, cost_fn) do
     parked_branches = :ets.tab2list(ets_tables.idle_queue)
 
     Enum.each(parked_branches, fn {id, branch} ->
@@ -236,6 +272,7 @@ defmodule ShotTx.Prover.Manager do
     end)
 
     :ets.delete_all_objects(ets_tables.idle_queue)
+    %{state | parked_count: 0}
   end
 
   defp ca_via(state),

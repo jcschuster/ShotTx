@@ -136,7 +136,8 @@ res
 **Cantor:** $\nexists F. \forall Y. \exists X. F X = Y$
 
 ```elixir
-res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y" |> prove
+res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y"
+|> prove()
 ```
 
 ```elixir

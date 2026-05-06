@@ -1,0 +1,309 @@
+# Evaluation: A Structured Set of Higher-order Problems (Set-theoretic Part)
+
+```elixir
+Mix.install([
+  {:shot_tx, path: Path.join(__DIR__, "..")},
+  {:kino, "~> 0.19.0"},
+  {:kino_atp_client, "~> 0.1.3"},
+  {:kino_shot_ds, "~> 0.1.1"}
+])
+```
+
+## Setup
+
+```elixir
+import ShotTx.Prover
+import ShotDs.Hol.Sigils
+```
+
+```elixir
+defmodule Util do
+  def render res do
+    case res do
+      {:thm, proof} ->
+        frame = Kino.Frame.new()
+        Kino.render(frame)
+        diagram = proof |> ShotTx.Proof.to_mermaid |> Kino.Mermaid.new
+        Kino.Frame.render frame, diagram
+      other -> other
+    end
+  end
+end
+```
+
+```elixir
+import Util
+```
+
+```elixir
+leibniz1 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X => P @ Y
+).
+"""
+```
+
+```elixir
+leibniz2 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X <= P @ Y
+).
+"""
+```
+
+```elixir
+leibniz3 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X <=> P @ Y
+).
+"""
+```
+
+```elixir
+andrews = """
+thf(andrews_t, type, a: A > A > $o).
+thf(andrews_def, definition,
+  a = ^[X, Y]: ![Q]: ((![Z]: Q @ Z @ Z) => Q @ X @ Y)
+).
+"""
+```
+
+```elixir
+extensional = """
+thf(extensional_t, type, e: (A>B) > (A>B) > $o).
+thf(extensional_def, definition,
+  e = ^[X, Y]: ![Z]: X @ Z = Y @ Z
+).
+"""
+```
+
+```elixir
+set_theory_types = """
+thf(elem_t, type, elem: $i>($i>$o)>$o).
+thf(set_t, type, set: $i>$i>$o).
+thf(set_l1_t, type, set_l1: $i>$i>$o).
+thf(set_l2_t, type, set_l2: $i>$i>$o).
+thf(set_l3_t, type, set_l3: $i>$i>$o).
+thf(set_a_t, type, set_a: $i>$i>$o).
+thf(set_set_t, type, set_set: ($i>$o)>($i>$o)>$o).
+thf(set_set_l1_t, type, set_set_l1: ($i>$o)>($i>$o)>$o).
+thf(set_set_l2_t, type, set_set_l2: ($i>$o)>($i>$o)>$o).
+thf(set_set_l3_t, type, set_set_l3: ($i>$o)>($i>$o)>$o).
+thf(set_set_a_t, type, set_set_a: ($i>$o)>($i>$o)>$o).
+thf(set_set_e_t, type, set_set_e: ($i>$o)>($i>$o)>$o).
+thf(null_t, type, null: $i>$o).
+thf(inter_t, type, inter: ($i>$o)>($i>$o)>$i>$o).
+thf(union_t, type, union: ($i>$o)>($i>$o)>$i>$o).
+thf(subset_t, type, subset: ($i>$o)>($i>$o)>$o).
+thf(powerset_t, type, powerset: ($i>$o)>($i>$o)>$o).
+"""
+
+set_theory_defs = """
+thf(elem_def, definition,
+  elem = ^[X:$i, S:$i>$o]: S @ X
+).
+thf(set_def, definition,
+  set = ^[X:$i, Y:$i]: X = Y
+).
+thf(set_l1_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X => P @ Y
+).
+thf(set_l2_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <= P @ Y
+).
+thf(set_l3_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <=> P @ Y
+).
+thf(set_a_def, definition,
+  set_a = ^[X:$i, Y:$i]: ![Q:$i>$i>$o]: ((![Z:$i]: Q @ Z @ Z) => Q @ X @ Y)
+).
+thf(set_set_def, definition,
+  set_set = ^[X:$i>$o, Y:$i>$o]: X = Y
+).
+thf(set_set_l1_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X => P @ Y
+).
+thf(set_set_l2_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <= P @ Y
+).
+thf(set_set_l3_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <=> P @ Y
+).
+thf(set_set_a_def, definition,
+  set_set_a = ^[X:$i>$o, Y:$i>$o]: ![Q:($i>$o)>($i>$o)>$o]: ((![Z:$i>$o]: Q @ Z @ Z) => Q @ X @ Y)
+).
+thf(set_set_e_def, definition,
+  set_set_e = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: X @ Z = Y @ Z
+).
+thf(null_def, definition,
+  null = ^[Z:$i]: $false
+).
+thf(inter_def, definition,
+  inter = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X & elem @ Z @ Y
+).
+thf(union_def, definition,
+  union = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X | elem @ Z @ Y
+).
+thf(subset_def, definition,
+  subset = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: elem @ Z @ X => elem @ Z @ Y
+).
+thf(powerset_def, definition,
+  powerset = ^[X:$i>$o, Y:$i>$o]: subset @ Y @ X
+).
+"""
+
+set_theory = set_theory_types <> set_theory_defs
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 22a/b) (union distributes over intersection)
+
+```elixir
+res = ~p"""
+#{set_theory}
+thf(conj, conjecture,
+  (union @ a @ (inter @ b @ c)) = (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{set_theory}
+#{leibniz1}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{set_theory}
+#{leibniz2}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{set_theory}
+#{leibniz3}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{set_theory}
+#{andrews}
+thf(conj, conjecture,
+  a @ (union @ sa @ (inter @ b @ c)) @ (inter @ (union @ sa @ b) @ (union @ sa @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{set_theory}
+#{extensional}
+thf(conj, conjecture,
+  e @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 23c/d) (powerset of the empty set)
+
+```elixir
+res = ~p"""
+#{set_theory}
+thf(conj, conjecture,
+  powerset @ null = set_set @ null
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{leibniz1}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l1 @ null)
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{leibniz2}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l2 @ null)
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{leibniz3}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l3 @ null)
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{andrews}
+#{set_theory}
+thf(conj, conjecture,
+  a @ (powerset @ null) @ (set_set_a @ null)
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```
+
+```elixir
+res = ~p"""
+#{extensional}
+#{set_theory}
+thf(conj, conjecture,
+  e @ (powerset @ null) @ (set_set_e @ null)
+).
+""" |> prove
+
+res |> format_result |> IO.puts
+```

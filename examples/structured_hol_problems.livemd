@@ -1,0 +1,1828 @@
+# Evaluation: A Structured Set of Higher-order Problems
+
+```elixir
+Mix.install([
+  {:shot_tx, path: Path.join(__DIR__, "..")},
+  {:kino, "~> 0.19.0"},
+  {:kino_atp_client, "~> 0.1.3"},
+  {:kino_shot_ds, "~> 0.1.1"}
+])
+```
+
+## Setup
+
+```elixir
+import ShotTx.Prover
+import ShotDs.Hol.Sigils
+```
+
+```elixir
+defmodule Util do
+  def render res do
+    case res do
+      {:thm, proof} ->
+        frame = Kino.Frame.new()
+        Kino.render(frame)
+        diagram = proof |> ShotTx.Proof.to_mermaid |> Kino.Mermaid.new
+        Kino.Frame.render frame, diagram
+      other -> other
+    end
+  end
+end
+```
+
+```elixir
+import Util
+```
+
+```elixir
+leibniz1 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X => P @ Y
+).
+"""
+```
+
+```elixir
+leibniz2 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X <= P @ Y
+).
+"""
+```
+
+```elixir
+leibniz3 = """
+thf(leibniz_t, type, l: A > A > $o).
+thf(leibniz_def, definition,
+  l = ^[X, Y]: ![P]: P @ X <=> P @ Y
+).
+"""
+```
+
+```elixir
+andrews = """
+thf(andrews_t, type, a: A > A > $o).
+thf(andrews_def, definition,
+  a = ^[X, Y]: ![Q]: ((![Z]: Q @ Z @ Z) => Q @ X @ Y)
+).
+"""
+```
+
+```elixir
+extensional = """
+thf(extensional_t, type, e: (A>B) > (A>B) > $o).
+thf(extensional_def, definition,
+  e = ^[X, Y]: ![Z]: X @ Z = Y @ Z
+).
+"""
+```
+
+```elixir
+set_theory_types = """
+thf(elem_t, type, elem: $i>($i>$o)>$o).
+thf(set_t, type, set: $i>$i>$o).
+thf(set_l1_t, type, set_l1: $i>$i>$o).
+thf(set_l2_t, type, set_l2: $i>$i>$o).
+thf(set_l3_t, type, set_l3: $i>$i>$o).
+thf(set_a_t, type, set_a: $i>$i>$o).
+thf(set_set_t, type, set_set: ($i>$o)>($i>$o)>$o).
+thf(set_set_l1_t, type, set_set_l1: ($i>$o)>($i>$o)>$o).
+thf(set_set_l2_t, type, set_set_l2: ($i>$o)>($i>$o)>$o).
+thf(set_set_l3_t, type, set_set_l3: ($i>$o)>($i>$o)>$o).
+thf(set_set_a_t, type, set_set_a: ($i>$o)>($i>$o)>$o).
+thf(set_set_e_t, type, set_set_e: ($i>$o)>($i>$o)>$o).
+thf(null_t, type, null: $i>$o).
+thf(inter_t, type, inter: ($i>$o)>($i>$o)>$i>$o).
+thf(union_t, type, union: ($i>$o)>($i>$o)>$i>$o).
+thf(subset_t, type, subset: ($i>$o)>($i>$o)>$o).
+thf(powerset_t, type, powerset: ($i>$o)>($i>$o)>$o).
+"""
+
+set_theory_defs = """
+thf(elem_def, definition,
+  elem = ^[X:$i, S:$i>$o]: S @ X
+).
+thf(set_def, definition,
+  set = ^[X:$i, Y:$i]: X = Y
+).
+thf(set_l1_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X => P @ Y
+).
+thf(set_l2_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <= P @ Y
+).
+thf(set_l3_def, definition,
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <=> P @ Y
+).
+thf(set_a_def, definition,
+  set_a = ^[X:$i, Y:$i]: ![Q:$i>$i>$o]: ((![Z:$i]: Q @ Z @ Z) => Q @ X @ Y)
+).
+thf(set_set_def, definition,
+  set_set = ^[X:$i>$o, Y:$i>$o]: X = Y
+).
+thf(set_set_l1_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X => P @ Y
+).
+thf(set_set_l2_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <= P @ Y
+).
+thf(set_set_l3_def, definition,
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <=> P @ Y
+).
+thf(set_set_a_def, definition,
+  set_set_a = ^[X:$i>$o, Y:$i>$o]: ![Q:($i>$o)>($i>$o)>$o]: ((![Z:$i>$o]: Q @ Z @ Z) => Q @ X @ Y)
+).
+thf(set_set_e_def, definition,
+  set_set_e = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: X @ Z = Y @ Z
+).
+thf(null_def, definition,
+  null = ^[Z:$i]: $false
+).
+thf(inter_def, definition,
+  inter = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X & elem @ Z @ Y
+).
+thf(union_def, definition,
+  union = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X | elem @ Z @ Y
+).
+thf(subset_def, definition,
+  subset = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: elem @ Z @ X => elem @ Z @ Y
+).
+thf(powerset_def, definition,
+  powerset = ^[X:$i>$o, Y:$i>$o]: subset @ Y @ X
+).
+"""
+
+set_theory = set_theory_types <> set_theory_defs
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Non-Theorems
+
+```elixir
+res = prove ~p"""
+thf(q_type, type, q : $i>$i>$o).
+thf(conj,conjecture,
+  (?[X:$i]: ![Y: $i]: q @ X @ Y) | (?[U:$i]: ![V:$i]: ~ (q @ V @ U))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+thf(q_type, type, q: $i>$i>$o).
+thf(conj,conjecture,
+  ?[Y:$i]: ![X:$i]: ( (![Z:$i]: q @ X @ Z) | ~(q @ X @ Y) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![F:$i>$i]: ?[X:$i]: F @ X = X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![F:$i>$i]: ?[X:$i]: a @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![F:($i>$i)>$i>$i]: ?[X:$i>$i]: e @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Examples 4 & 5 (Choice)
+
+```elixir
+res = prove ~f"""
+(![X:$i]: ?[Y:$i]: r @ X @ Y) => (?[F:$i>$i]: ![X:$i]: r @ X @ (F @ X))
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~f"""
+?[E:($i>$o)>$i]: ![P:$i>$o]: ( (![Y:$i]: P @ Y) => P @ (E @ P) )
+"""
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 6 (Reflexivity, Commutativity, Transitivity)
+
+a) Reflexivity
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![X:$i]: X = X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$i]: l @ X @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$i]: l @ X @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$i]: l @ X @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$i]: a @ X @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![X:$i>$i]: e @ X @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+b) Commutativity
+
+```elixir
+res = ~p"""
+thf(conj, conjecture,
+  ![X:$i, Y:$i]: ( (X = Y) => (Y = X) )
+).
+""" |> prove
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$i, Y:$i]: ( (l @ X @ Y) => (l @ Y @ X) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$i, Y:$i]: ( (l @ X @ Y) => (l @ Y @ X) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$i, Y:$i]: ( (l @ X @ Y) => (l @ Y @ X) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$i, Y:$i]: ( (a @ X @ Y) => (a @ Y @ X) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![X:$i>$i, Y:$i>$i]: ( (e @ X @ Y) => (e @ Y @ X) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+c) Transitivity
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![X:$i, Y:$i, Z:$i]: ( ((X = Y) & (Y = Z)) => (X = Z) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, Z:$i]: ( ((l @ X @ Y) & (l @ Y @ Z)) => (l @ X @ Z) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, Z:$i]: ( ((l @ X @ Y) & (l @ Y @ Z)) => (l @ X @ Z) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, Z:$i]: ( ((l @ X @ Y) & (l @ Y @ Z)) => (l @ X @ Z) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, Z:$i]: ( ((a @ X @ Y) & (a @ Y @ Z)) => (a @ X @ Z) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![X:$i>$i, Y:$i>$i, Z:$i>$i]: ( ((e @ X @ Y) & (e @ Y @ Z)) => (e @ X @ Z) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 7 (Congruence)
+
+a) Congruence under endomorphisms
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![X:$i, Y:$i, F:$i>$i]: (
+    (X = Y) => (F @ X = F @ Y)
+  )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, F:$i>$i]: (
+    (l @ X @ Y) => (l @ (F @ X) @ (F @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, F:$i>$i]: (
+    (l @ X @ Y) => (l @ (F @ X) @ (F @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, F:$i>$i]: (
+    (l @ X @ Y) => (l @ (F @ X) @ (F @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, F:$i>$i]: (
+    (a @ X @ Y) => (a @ (F @ X) @ (F @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![X:$i>$i, Y:$i>$i, F:($i>$i)>$i>$i]: (
+    (e @ X @ Y) => (e @ (F @ X) @ (F @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+b) Congruence under predicates
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![X:$i, Y:$i, P:$i>$o]: (
+    (X = Y) => (P @ X => P @ Y)
+  )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, P:$i>$o]: (
+    (l @ X @ Y) => ((P @ X) => (P @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, P:$i>$o]: (
+    (l @ X @ Y) => ((P @ X) => (P @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, P:$i>$o]: (
+    (l @ X @ Y) => ((P @ X) => (P @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$i, Y:$i, P:$i>$o]: (
+    (a @ X @ Y) => ((P @ X) => (P @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![X:$i>$i, Y:$i>$i, P:($i>$i)>$o]: (
+    (e @ X @ Y) => ((P @ X) => (P @ Y))
+  )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 8 (Leibniz and Primitive Equality)
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(a_type, type, a: $i).
+thf(b_type, type, b: $i).
+thf(conj, conjecture,
+  (l @ a @ b) => (a = b)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(a_type, type, a: $i).
+thf(b_type, type, b: $i).
+thf(conj, conjecture,
+  (l @ a @ b) => (a = b)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(a_type, type, a: $i).
+thf(b_type, type, b: $i).
+thf(conj, conjecture,
+  (l @ a @ b) => (a = b)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 9 (Trivial Directions of Extensionality)
+
+a) Functional Extensionality
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![F:$i>$i, G:$i>$i]: ( (F = G) => (![X:$i]: F @ X = G @ X) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: (l @ (F @ X) @ (G @ X))) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: l @ (F @ X) @ (G @ X)) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: l @ (F @ X) @ (G @ X)) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![F:$i>$i, G:$i>$i]: ( (a @ F @ G) => (![X:$i]: a @ (F @ X) @ (G @ X)) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![F:$i>($i>$i), G:$i>($i>$i)]: ( (e @ F @ G) => (![X:$i]: e @ (F @ X) @ (G @ X)) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+b) Boolean Extensionality
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A = B) => (A <=> B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (l @ A @ B) => (A <=> B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (l @ A @ B) => (A <=> B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (l @ A @ B) => (A <=> B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (a @ A @ B) => (A <=> B) )
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![A:$o>$o, B:$o>$o]: (
+    (e @ A @ B) =>
+    ((A @ $true <=> B @ $true) & (A @ $false <=> B @ $false))
+  )
+).
+"""
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 10 (Non-trivial Direction of Boolean Extensionality)
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A <=> B) => (A = B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A <=> B) => (l @ A @ B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A <=> B) => (l @ A @ B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A <=> B) => (l @ A @ B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![A:$o, B:$o]: ( (A <=> B) => (a @ A @ B) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  ![A:$o>$o, B:$o>$o]: (
+    ((A @ $true <=> B @ $true) & (A @ $false <=> B @ $false)) =>
+    (e @ A @ B)
+  )
+).
+"""
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 12 (Eta-expanded Extension)
+
+```elixir
+res = prove with_context ~e[p:($i>$i)>$o, f:$i>$i], fn ->
+  ~f"""
+  p @ (^[X:$i]: f @ X) => p @ f
+  """
+end
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 13 (Extension with Identity)
+
+```elixir
+res = prove ~p"""
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: f @ X = X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: a @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(f_type, type, f: ($i>$i)>$i>$i).
+thf(p_type, type, p: (($i>$i)>$i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i>$i]: e @ (f @ X) @ X) & p @ (^[X:$i>$i]: X) => p @ (^[X:$i>$i]: f @ X)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 14 (Extension of Identity)
+
+```elixir
+res = prove ~p"""
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: f @ X = X) & (p @ (^[X:$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(f_type, type, f: $i>$i).
+thf(p_type, type, p: ($i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i]: a @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(f_type, type, f: ($i>$i)>$i>$i).
+thf(p_type, type, p: (($i>$i)>$i>$i)>$o).
+thf(conj, conjecture,
+  (![X:$i>$i]: e @ (f @ X) @ X) & (p @ (^[X:$i>$i]: X)) => p @ f
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 15 (Extensionality under Commutativity)
+
+```elixir
+res = prove ~f"p @ (a & b) => p @ (b & a)"
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~f"a & b & (p @ a) => (p @ b)"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 16 (Extensionality for Conjunctions)
+
+```elixir
+res = prove ~f"(p @ a) & (p @ b) => (p @ (a & b))"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 17 (Unequality of Self-negation)
+
+```elixir
+res = prove ~f"~ (a = (~a))"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 18
+
+```elixir
+res = prove ~p"""
+thf(h_type, type, h:$o>$i).
+thf(conj, conjecture,
+  (h @ (h @ $true = h @ $false)) = h @ $false
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(h_type, type, h:$o>$i).
+thf(conj, conjecture,
+  l @ (h @ (l @ (h @ $true) @ (h @ $false))) @ (h @ $false)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(h_type, type, h:$o>$i).
+thf(conj, conjecture,
+  l @ (h @ (l @ (h @ $true) @ (h @ $false))) @ (h @ $false)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(h_type, type, h:$o>$i).
+thf(conj, conjecture,
+  l @ (h @ (l @ (h @ $true) @ (h @ $false))) @ (h @ $false)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(h_type, type, h:$o>$i).
+thf(conj, conjecture,
+  a @ (h @ (a @ (h @ $true) @ (h @ $false))) @ (h @ $false)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(h_type, type, h:$o>($i>$i)).
+thf(conj, conjecture,
+  e @ (h @ (e @ (h @ $true) @ (h @ $false))) @ (h @ $false)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 19
+
+```elixir
+res = prove with_context ~e[p:($i>$i)>$o, f:$o>$i>$i, a:($i>$i)>$o, b:$o], fn ->
+  ~f"p @ (^[X:$i]: f @ (a @ (^[X:$i]: f @ b @ X) & b) @ X) => p @ (f @ (b & a @ (f @ b)))"
+end
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 20a) (DeMorgan)
+
+```elixir
+res = prove ~f"X & Y <=> ~(~X | ~Y)"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 20b) (DeMorgan)
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ![X:$o, Y:$o]: ( (X & Y) = (~(~X | ~Y)) )
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ![X:$o, Y:$o]: (l @ (X & Y) @ (~(~X | ~Y)))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ![X:$o, Y:$o]: (l @ (X & Y) @ (~(~X | ~Y)))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ![X:$o, Y:$o]: (l @ (X & Y) @ (~(~X | ~Y)))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ![X:$o, Y:$o]: (a @ (X & Y) @ (~(~X | ~Y)))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 20c) (DeMorgan)
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  (^[U, V]: U & V) = (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  a @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  e @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 20d) (DeMorgan)
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  (&) = (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  a @ (&) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+thf(conj, conjecture,
+  e @ (&) @ (^[X, Y]: ~(~X | ~Y))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 21 (Finite Domain of o→o)
+
+```elixir
+res = prove ~f"""
+(
+  (p @ (^[X:$o]: X)) &
+  (p @ (^[X:$o]: ~X)) &
+  (p @ (^[X:$o]: $false)) &
+  (p @ (^[X:$o]: $true))
+) => ![Y:$o>$o]: p @ Y
+"""
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 22 (Set Theory)
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+thf(conj, conjecture,
+  (union @ a @ (inter @ b @ c)) = (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+#{leibniz1}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+#{leibniz2}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+#{leibniz3}
+thf(conj, conjecture,
+  l @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+#{andrews}
+thf(conj, conjecture,
+  a @ (union @ sa @ (inter @ b @ c)) @ (inter @ (union @ sa @ b) @ (union @ sa @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+#{extensional}
+thf(conj, conjecture,
+  e @ (union @ a @ (inter @ b @ c)) @ (inter @ (union @ a @ b) @ (union @ a @ c))
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{set_theory}
+thf(conj, conjecture,
+  powerset @ null = set_set @ null
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l1 @ null)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l2 @ null)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+#{set_theory}
+thf(conj, conjecture,
+  l @ (powerset @ null) @ (set_set_l3 @ null)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+#{set_theory}
+thf(conj, conjecture,
+  a @ (powerset @ null) @ (set_set_a @ null)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+```elixir
+res = prove ~p"""
+#{extensional}
+#{set_theory}
+thf(conj, conjecture,
+  e @ (powerset @ null) @ (set_set_e @ null)
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 23
+
+```elixir
+res = prove ~f"?[P:$o]: P"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 24
+
+```elixir
+res = prove ~f"~![P:$o]: P"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 25
+
+```elixir
+res = prove ~f"?[N:$o>$o]: ![P:$o]: N @ P <=> ~P"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 26
+
+```elixir
+res = prove ~p"""
+thf(conj, conjecture,
+  ~![F:$o>$o]: ?[X:$o]: F @ X = X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz1}
+thf(conj, conjecture,
+  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz2}
+thf(conj, conjecture,
+  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{leibniz3}
+thf(conj, conjecture,
+  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+).
+"""
+
+format_result res
+# THM
+```
+
+```elixir
+res = prove ~p"""
+#{andrews}
+thf(conj, conjecture,
+  ~![F:$o>$o]: ?[X]: a @ (F @ X) @ X
+).
+"""
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 27
+
+```elixir
+res = prove ~f"?[D:$o>$o>$o]: ![P:$o, Q:$o]: D @ P @ Q <=> (P | Q)"
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 28
+
+```elixir
+res = prove ~f"?[Q:($i>$o)>$o]: ![P:$i>$o]: Q @ P <=> ![X:$i]: P @ X"
+
+format_result res
+# Timeout
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 29
+
+```elixir
+res = prove ~f"?[N:$o>$o]: ![P:$o]: N @ P <=> P"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 20: Surjective Cantor Theorem
+
+```elixir
+res = prove ~f"~?[G:$i>$i>$o]: ![F:$i>$o]: ?[J:$i]: G @ J = F"
+
+format_result res
+# THM
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Example 21: Injective Cantor Theorem
+
+```elixir
+res = prove ~f"~?[H:($i>$o)>$i]: ![P:$i>$o, Q:$i>$o]: H @ P = H @ Q => P = Q"
+
+format_result res
+# Timeout
+```

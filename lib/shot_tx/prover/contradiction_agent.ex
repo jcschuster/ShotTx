@@ -44,9 +44,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   @impl true
   def handle_info(event, state) do
-    stats_table = Map.get(state.ets_tables, :stats)
-
-    if stats_table && :ets.lookup(stats_table, :aborted) == [{:aborted, true}] do
+    if aborted?(state) do
       {:noreply, state}
     else
       do_handle_info(event, state)
@@ -55,9 +53,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   @impl true
   def handle_cast(event, state) do
-    stats_table = Map.get(state.ets_tables, :stats)
-
-    if stats_table && :ets.lookup(stats_table, :aborted) == [{:aborted, true}] do
+    if aborted?(state) do
       {:noreply, state}
     else
       do_handle_cast(event, state)
@@ -65,7 +61,38 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   @impl true
-  def handle_call(:settle, _from, %{pending_search: nil} = state) do
+  def handle_call(:settle, from, state) do
+    case Map.get(state.ets_tables, :stats) do
+      stats when not is_nil(stats) ->
+        case :ets.lookup(stats, :aborted) do
+          [{:aborted, true}] -> {:reply, :closed, state}
+          _ -> do_settle(from, state)
+        end
+
+      _ ->
+        do_settle(from, state)
+    end
+  end
+
+  @impl true
+  def handle_call(event, from, state) do
+    if aborted?(state) do
+      {:reply, :aborted, state}
+    else
+      do_handle_call(event, from, state)
+    end
+  end
+
+  defp aborted?(state) do
+    case Map.get(state.ets_tables, :stats) do
+      nil -> false
+      t -> :ets.lookup(t, :aborted) == [{:aborted, true}]
+    end
+  end
+
+  # --- CALL CALLBACKS ---------------------------------------------------------
+
+  defp do_settle(_from, %{pending_search: nil} = state) do
     case check_global_closure_sync(state) do
       {:ok, solution} ->
         broadcast_unsat(solution, state)
@@ -76,18 +103,18 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  def handle_call(:settle, from, state) do
+  defp do_settle(from, state) do
     {:noreply, %{state | settle_waiter: from}}
   end
 
-  # ---- INFO CALLBACKS ---- #
+  defp do_handle_call({:local_clashes, branch_id, new_candidates, trace}, _from, state) do
+    {:noreply, new_state} =
+      do_handle_cast({:local_clashes, branch_id, new_candidates, trace}, state)
 
-  defp do_handle_info({:branch_status, branch_id, :active}, state) do
-    new_active = MapSet.put(state.active_branches, branch_id)
-    {:noreply, %{state | active_branches: new_active}}
+    {:reply, :ok, new_state}
   end
 
-  defp do_handle_info({:branch_status, branch_id, {:closed, trace}}, state) do
+  defp do_handle_call({:closed, branch_id, trace}, _from, state) do
     new_traces = Map.put(state.branch_traces, branch_id, trace)
 
     new_closures =
@@ -96,24 +123,86 @@ defmodule ShotTx.Prover.ContradictionAgent do
       end)
 
     new_state = %{state | branch_closures: new_closures, branch_traces: new_traces}
-    check_global_closure(new_state)
+
+    {:noreply, new_check_state} = check_global_closure(new_state)
+    {:reply, :ok, new_check_state}
   end
 
-  defp do_handle_info({:branch_status, branch_id, :split}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    new_state = %{state | active_branches: new_active}
-
-    check_global_closure(new_state)
+  defp do_handle_call(req, _from, state)
+       when elem(req, 0) in [
+              :branch_active,
+              :branch_saturated,
+              :branch_closed,
+              :branch_split,
+              :local_clashes_sync
+            ] do
+    do_handle_sync(req, state)
   end
 
-  defp do_handle_info({:branch_status, branch_id, {:saturated, _}}, state) do
+  # --- Synchronous Callbacks --------------------------------------------------
+
+  defp do_handle_sync({:branch_active, branch_id}, state) do
+    {:reply, :ok, %{state | active_branches: MapSet.put(state.active_branches, branch_id)}}
+  end
+
+  defp do_handle_sync({:branch_split, branch_id}, state) do
+    new_state = %{state | active_branches: MapSet.delete(state.active_branches, branch_id)}
+    {:noreply, after_check} = check_global_closure(new_state)
+    {:reply, :ok, after_check}
+  end
+
+  defp do_handle_sync({:branch_closed, branch_id, trace}, state) do
+    new_traces = Map.put(state.branch_traces, branch_id, trace)
+
+    new_closures =
+      Map.update(state.branch_closures, branch_id, [%UnifSolution{}], fn existing ->
+        [%UnifSolution{} | existing]
+      end)
+
+    new_state = %{state | branch_closures: new_closures, branch_traces: new_traces}
+    {:noreply, after_check} = check_global_closure(new_state)
+    {:reply, :ok, after_check}
+  end
+
+  defp do_handle_sync(
+         {:branch_saturated, branch_id, {model_defs, model_atoms, model_trace}},
+         state
+       ) do
     new_active = MapSet.delete(state.active_branches, branch_id)
+
+    results = %{
+      model_branch_id: branch_id,
+      model_atoms: model_atoms,
+      model_defs: model_defs,
+      model_trace: model_trace,
+      closed_traces: state.branch_traces
+    }
+
+    send_proof_result({:sat, results}, state)
     {:noreply, %{state | active_branches: new_active}}
   end
 
-  defp do_handle_info({:branch_status, _branch_id, _other}, state) do
-    {:noreply, state}
+  defp do_handle_sync({:local_clashes_sync, branch_id, candidates, trace}, state) do
+    Logger.debug(
+      "Agent received #{MapSet.size(candidates)} new candidates for local closure from #{branch_id}"
+    )
+
+    updated_local_clashes =
+      Map.update(state.clashing_local_pairs, branch_id, candidates, &MapSet.union(&1, candidates))
+
+    updated_traces = Map.put(state.branch_traces, branch_id, trace)
+
+    new_state = %{
+      state
+      | clashing_local_pairs: updated_local_clashes,
+        branch_traces: updated_traces
+    }
+
+    {:noreply, after_check} = check_global_closure(new_state)
+    {:reply, :ok, after_check}
   end
+
+  # --- INFO CALLBACKS ---------------------------------------------------------
 
   defp do_handle_info(
          {ref, {:closure, solution}},
@@ -151,42 +240,34 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp do_handle_cast({:verify_csa, saturated_branch_map}, state) do
-    open_branches =
-      saturated_branch_map
-      |> Map.keys()
-      |> Enum.filter(fn b_id ->
-        closures = get_inherited_closures(b_id, state)
-        Enum.empty?(closures)
-      end)
+    saturated = Map.keys(saturated_branch_map)
 
-    case open_branches do
-      [model_branch_id | _] ->
-        {model_defs, model_atoms} = Map.fetch!(saturated_branch_map, model_branch_id)
+    branch_clash_lists =
+      (MapSet.to_list(state.active_branches) ++ saturated)
+      |> Enum.uniq()
+      |> Enum.map(fn b_id -> get_inherited_clashes(b_id, state) |> Enum.to_list() end)
 
-        Logger.info("Agent confirmed CSA on genuinely open branch #{model_branch_id}")
+    all_saturated? = Enum.all?(for b <- state.active_branches, do: b in saturated)
 
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "proof_results_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries,
-                do: send(pid, {:proof_result, {:sat, {model_atoms, model_defs}}})
+    if Enum.any?(branch_clash_lists, &Enum.empty?/1) do
+      case csa_or_unknown(saturated_branch_map, state) do
+        {:sat, results} -> send_proof_result({:sat, results}, state)
+        unknown -> if all_saturated?, do: send_proof_result(unknown, state)
+      end
+    else
+      sorted = Enum.sort_by(branch_clash_lists, &length/1)
+      groups = partition_independent(sorted)
+
+      case solve_groups(groups, state.params.unification_depth) do
+        {:ok, solution} ->
+          broadcast_unsat(solution, state)
+
+        :error ->
+          case csa_or_unknown(saturated_branch_map, state) do
+            {:sat, results} -> send_proof_result({:sat, results}, state)
+            unknown -> if all_saturated?, do: send_proof_result(unknown, state)
           end
-        )
-
-      [] ->
-        Logger.warning(
-          "All branches have local closures, but global unification failed. Returning UNK."
-        )
-
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "proof_results_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries,
-                do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
-          end
-        )
+      end
     end
 
     {:noreply, state}
@@ -201,28 +282,16 @@ defmodule ShotTx.Prover.ContradictionAgent do
       {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
         final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "proof_results_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries,
-                do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
-          end
-        )
+        send_proof_result({:unsat, final_map, flex, state.branch_traces}, state)
 
       :error ->
-        Logger.warning(
-          "All branches closed locally, but global unification failed. Returning UNK."
-        )
+        if Enum.empty?(state.active_branches) do
+          Logger.warning(
+            "All branches closed locally, but global unification failed. Returning UNK."
+          )
 
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "proof_results_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries,
-                do: send(pid, {:proof_result, {:unknown, :conflicting_substitutions}})
-          end
-        )
+          send_proof_result({:unknown, :conflicting_substitutions}, state)
+        end
     end
 
     {:noreply, state}
@@ -256,6 +325,34 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
+  defp csa_or_unknown(saturated_branch_map, state) do
+    open_branches =
+      saturated_branch_map
+      |> Map.keys()
+      |> Enum.filter(fn b_id ->
+        Enum.empty?(get_inherited_closures(b_id, state)) and
+          Enum.empty?(get_inherited_clashes(b_id, state))
+      end)
+
+    case open_branches do
+      [model_branch_id | _] ->
+        {model_defs, model_atoms, model_trace} = Map.fetch!(saturated_branch_map, model_branch_id)
+
+        results = %{
+          model_branch_id: model_branch_id,
+          model_atoms: model_atoms,
+          model_defs: model_defs,
+          model_trace: model_trace,
+          closed_traces: state.branch_traces
+        }
+
+        {:sat, results}
+
+      [] ->
+        {:unknown, :conflicting_substitutions}
+    end
+  end
+
   ##############################################################################
   # GLOBAL CLOSURE CHECK — DISAGREEMENT PAIRS
   #
@@ -286,6 +383,11 @@ defmodule ShotTx.Prover.ContradictionAgent do
       if some_branch_cannot_close?(state, branch_clash_lists) do
         {:noreply, state}
       else
+        Logger.warning(
+          "Dispatching CSP. Branches: #{inspect(Enum.map(state.active_branches, & &1))}. " <>
+            "Candidates: #{inspect(Enum.map(branch_clash_lists, &length/1))}"
+        )
+
         dispatch_csp(state, branch_clash_lists)
       end
     end
@@ -350,10 +452,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end)
   end
 
-  # Core incremental backtracking search for a single independent group.
-  # Threads an accumulated `UnifSolution` through the recursion; at each level
-  # a candidate pair is tested against the running solution and pruned
-  # immediately if incompatible.
   @spec incremental_search([[{term(), term()}]], non_neg_integer(), UnifSolution.t()) ::
           {:ok, UnifSolution.t()} | :error
   defp incremental_search([], _depth, acc_solution), do: {:ok, acc_solution}
@@ -378,9 +476,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end)
   end
 
-  # Try adding a single disagreement pair to the accumulated solution.
-  # Converts the existing substitutions back to equality pairs and unifies
-  # everything together so the unifier checks mutual compatibility.
   @spec try_extend_with_pair(UnifSolution.t(), {integer(), integer()}, non_neg_integer()) ::
           {:ok, UnifSolution.t()} | :error
   defp try_extend_with_pair(%UnifSolution{} = sol, {l_id, r_id}, depth) do
@@ -395,15 +490,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  # Lightweight forward check: for each remaining branch, verify that at least
-  # one candidate pair is not *trivially* incompatible with the current
-  # solution. This catches wipe-outs early without running full unification on
-  # every remaining candidate.
-  #
-  # The quick compatibility test applies the current substitution to both sides
-  # of a candidate pair and checks for a rigid-rigid head mismatch — the
-  # cheapest possible refutation. Pairs that survive this filter may still fail
-  # full unification, but pairs that fail it are guaranteed dead.
   @spec forward_check_ok?([[{integer(), integer()}]], UnifSolution.t(), non_neg_integer()) ::
           boolean()
   defp forward_check_ok?(remaining_branches, solution, _depth) do
@@ -596,11 +682,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
     Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
 
-    Registry.dispatch(ShotTx.Prover.PubSub, "proof_results_#{state.session_id}", fn entries ->
-      for {pid, _} <- entries,
-          do: send(pid, {:proof_result, {:unsat, final_map, flex, state.branch_traces}})
-    end)
+    send_proof_result({:unsat, final_map, flex, state.branch_traces}, state)
 
     {:noreply, state}
+  end
+
+  defp send_proof_result(result, state) do
+    case Map.get(state.ets_tables, :stats) do
+      nil -> :ok
+      stats -> :ets.insert(stats, {:aborted, true})
+    end
+
+    manager_via =
+      {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :manager}}}
+
+    GenServer.cast(manager_via, {:proof_result, result})
   end
 end

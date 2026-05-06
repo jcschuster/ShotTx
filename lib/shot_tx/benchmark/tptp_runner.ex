@@ -62,7 +62,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
         case Prover.prove(conclusion_term, axioms, problem.definitions) do
           {:thm, _} -> {:thm, "Theorem"}
-          {:csa, _} -> {:csa, "Counter-Satisfiable"}
+          {:csa, _, _} -> {:csa, "Counter-Satisfiable"}
           :unknown -> {:unk, "Unknown"}
           :timeout -> {:timeout, "Timeout"}
           {:error, reason} -> {:prover_error, reason}

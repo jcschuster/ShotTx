@@ -43,6 +43,7 @@ defmodule ShotTx.Proof do
   alias ShotDs.Data.Term
   alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.Dsl, only: [neg: 1]
+  import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0]
   import ShotDs.Util.Formatter
   use ShotDs.Hol.Patterns
 
@@ -53,7 +54,8 @@ defmodule ShotTx.Proof do
               rule: nil,
               sources: [],
               kind: :rule,
-              children: []
+              children: [],
+              model: nil
 
     @type kind :: :given | :rule | :closure
 
@@ -103,6 +105,146 @@ defmodule ShotTx.Proof do
     root = chain_steps(given_steps, derivation_children)
 
     %__MODULE__{root: root, substitution: substitution, flex_pairs: flex_pairs}
+  end
+
+  @spec from_countermodel(map(), [Term.term_id()], String.t(), list(), {[Term.term_id()], map()}) ::
+          t()
+  def from_countermodel(
+        closed_traces,
+        initial_formulas,
+        model_branch_id,
+        model_trace,
+        {model_atoms, model_defs}
+      ) do
+    {given_steps, t2l, next_label} = build_givens(initial_formulas)
+
+    closed_events =
+      closed_traces
+      |> Enum.reject(fn {bid, _} -> bid == model_branch_id end)
+      |> Enum.map(fn {bid, trace} -> linearize(trace, bid) end)
+
+    model_events = linearize_model(model_trace, model_branch_id, {model_atoms, model_defs})
+
+    branches_events =
+      [model_events | closed_events] |> Enum.reject(&Enum.empty?/1)
+
+    {derivation_children, _} = build_subtree(branches_events, t2l, next_label)
+    root = chain_steps(given_steps, derivation_children)
+
+    %__MODULE__{root: root, substitution: %{}, flex_pairs: []}
+  end
+
+  defp linearize_model(trace, branch_id, model_data) do
+    segments = branch_id |> String.split("_") |> Enum.drop(1)
+    {events_rev, _} = Enum.reduce(trace, {[], segments}, &interior_event/2)
+    Enum.reverse([{:model, model_data} | events_rev])
+  end
+
+  ##############################################################################
+  # ALIASES
+  ##############################################################################
+
+  @doc """
+  Walks the proof and produces an alias map giving each fresh reference a
+  short readable name:
+
+    * type-variable refs        → α, β, γ, ... (then α4, α5, ...)
+    * free-variable refs (γ/π)  → X, Y, Z, ... (then X4, X5, ...)
+    * constant refs (skolems)   → c, d, e, ... (then c4, c5, ...)
+  """
+  @spec auto_aliases(t()) :: %{reference() => String.t()}
+  def auto_aliases(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
+    empty = %{tv: [], fv: [], co: []}
+
+    acc = collect_step_refs(empty, root)
+
+    acc =
+      Enum.reduce(sub, acc, fn {k, v}, a ->
+        a |> collect_key_refs(k) |> collect_term_refs(v)
+      end)
+
+    acc =
+      Enum.reduce(flex, acc, fn {l, r}, a ->
+        a |> collect_term_refs(l) |> collect_term_refs(r)
+      end)
+
+    %{}
+    |> assign(uniq(acc.tv), ~w(α β γ δ ε ζ η θ), "α")
+    |> assign(uniq(acc.fv), ~w(X Y Z U V W), "X")
+    |> assign(uniq(acc.co), ~w(c d e f g h), "c")
+  end
+
+  defp collect_step_refs(acc, nil), do: acc
+
+  defp collect_step_refs(acc, %Step{kind: :model, model: {atoms, defs}, children: cs}) do
+    acc = Enum.reduce(atoms, acc, &collect_term_refs(&2, &1))
+
+    acc =
+      Enum.reduce(defs, acc, fn {h, t}, a ->
+        a |> collect_key_refs(h) |> collect_term_refs(t)
+      end)
+
+    Enum.reduce(cs, acc, &collect_step_refs(&2, &1))
+  end
+
+  defp collect_step_refs(acc, %Step{formula: f, children: cs}) do
+    acc = if is_integer(f), do: collect_term_refs(acc, f), else: acc
+    Enum.reduce(cs, acc, &collect_step_refs(&2, &1))
+  end
+
+  # (acc, term_id) — pipe- and reduce-friendly
+  defp collect_term_refs(acc, term_id) when is_integer(term_id) do
+    {result, _} =
+      ShotDs.Util.TermTraversal.fold_term!(term_id, fn term, child_accs ->
+        base = Enum.reduce(child_accs, %{tv: [], fv: [], co: []}, &merge_acc/2)
+        base |> add_decl(term.head) |> add_type(term.type)
+      end)
+
+    merge_acc(acc, result)
+  end
+
+  defp collect_term_refs(acc, _), do: acc
+
+  # substitution keys appear as either Declarations or bare term_ids
+  defp collect_key_refs(acc, %ShotDs.Data.Declaration{} = d),
+    do: acc |> add_decl(d) |> add_type(d.type)
+
+  defp collect_key_refs(acc, term_id) when is_integer(term_id),
+    do: collect_term_refs(acc, term_id)
+
+  defp collect_key_refs(acc, _), do: acc
+
+  # ---- atomic adders ---------------------------------------------------------
+
+  defp add_decl(acc, %ShotDs.Data.Declaration{kind: :fv, name: ref}) when is_reference(ref),
+    do: %{acc | fv: [ref | acc.fv]}
+
+  defp add_decl(acc, %ShotDs.Data.Declaration{kind: :co, name: ref}) when is_reference(ref),
+    do: %{acc | co: [ref | acc.co]}
+
+  defp add_decl(acc, _), do: acc
+
+  defp add_type(acc, %ShotDs.Data.Type{goal: g, args: args}) do
+    acc = if is_reference(g), do: %{acc | tv: [g | acc.tv]}, else: acc
+    Enum.reduce(args, acc, fn arg, a -> add_type(a, arg) end)
+  end
+
+  defp add_type(acc, _), do: acc
+
+  defp merge_acc(%{tv: a, fv: b, co: c}, %{tv: x, fv: y, co: z}),
+    do: %{tv: a ++ x, fv: b ++ y, co: c ++ z}
+
+  defp uniq(refs), do: refs |> Enum.reverse() |> Enum.uniq()
+
+  defp assign(map, refs, letters, fallback) do
+    n = length(letters)
+
+    refs
+    |> Enum.with_index(1)
+    |> Enum.reduce(map, fn {ref, i}, m ->
+      name = if i <= n, do: Enum.at(letters, i - 1), else: "#{fallback}#{i}"
+      Map.put(m, ref, name)
+    end)
   end
 
   ##############################################################################
@@ -268,6 +410,17 @@ defmodule ShotTx.Proof do
     {step, counter + 1}
   end
 
+  defp make_step({:model, {atoms, defs}}, _tails, _t2l, counter) do
+    step = %Step{
+      label: counter,
+      kind: :model,
+      model: {atoms, defs},
+      children: []
+    }
+
+    {step, counter + 1}
+  end
+
   defp build_formula_step(src, rule_atom, formula, tails, t2l, counter) do
     label = counter
     src_label = lookup_label(t2l, src)
@@ -308,6 +461,14 @@ defmodule ShotTx.Proof do
     end
   end
 
+  defp resolve_aliases(p, opts) do
+    case Keyword.get(opts, :aliases, :auto) do
+      :auto -> auto_aliases(p)
+      :none -> %{}
+      %{} = m -> m
+    end
+  end
+
   ##############################################################################
   # MERMAID RENDERING
   ##############################################################################
@@ -319,10 +480,17 @@ defmodule ShotTx.Proof do
   emit dotted arrows. Each rule node carries its label, the derived formula
   and a justification footer naming the rule symbol and the cited line(s).
   """
-  @spec to_mermaid(t()) :: String.t()
-  def to_mermaid(%__MODULE__{root: nil}), do: ""
+  @spec to_mermaid(t(), keyword()) :: String.t()
+  def to_mermaid(proof, opts \\ [])
 
-  def to_mermaid(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
+  def to_mermaid(%__MODULE__{root: nil}, _), do: ""
+
+  def to_mermaid(%__MODULE__{} = p, opts) do
+    aliases = resolve_aliases(p, opts)
+    ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_mermaid(p) end)
+  end
+
+  def do_to_mermaid(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
     {nodes, edges, _} = collect(root, 0)
 
     header = """
@@ -331,6 +499,7 @@ defmodule ShotTx.Proof do
       classDef given fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1,rx:8px,ry:8px;
       classDef rule fill:#eeeeee,stroke:#999999,stroke-width:2px,color:#333333,rx:8px,ry:8px;
       classDef closure fill:#fff3e0,stroke:#cc5500,stroke-width:2px,color:#000000,rx:8px,ry:8px;
+      classDef model fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
       classDef subst fill:#f9fbe7,stroke:#827717,stroke-width:2px,color:#000000,rx:8px,ry:8px,stroke-dasharray: 5 5;
     """
 
@@ -395,9 +564,23 @@ defmodule ShotTx.Proof do
     "⊥<br/><small>(#{Enum.join(srcs, ", ")})</small>"
   end
 
+  defp mermaid_label(%Step{kind: :model, label: l, model: {atoms, defs}}) do
+    meaningful = Enum.reject(atoms, &(&1 in [true_term(), neg(false_term())]))
+    atom_str = Enum.map_join(meaningful, "<br/>", &("● " <> format!(&1)))
+
+    defs_str =
+      Enum.map_join(defs, "<br/>", fn {h, t} ->
+        "● #{format!(h)} ← #{format!(t)}"
+      end)
+
+    body = [atom_str, defs_str] |> Enum.reject(&(&1 == "")) |> Enum.join("<br/>")
+    "(#{l}) ★ open<br/><small>#{body}</small>"
+  end
+
   defp node_class(%Step{kind: :given}), do: "given"
   defp node_class(%Step{kind: :rule}), do: "rule"
   defp node_class(%Step{kind: :closure}), do: "closure"
+  defp node_class(%Step{kind: :model}), do: "model"
 
   ##############################################################################
   # PLAIN-TEXT RENDERING
@@ -422,9 +605,15 @@ defmodule ShotTx.Proof do
           7. ⊥              [3, 6]
   """
   @spec to_text(t()) :: String.t()
-  def to_text(%__MODULE__{root: nil}), do: "(no proof)\n"
+  def to_text(proof, opts \\ [])
+  def to_text(%__MODULE__{root: nil}, _), do: "(no proof)\n"
 
-  def to_text(%__MODULE__{root: root, substitution: sub}) do
+  def to_text(%__MODULE__{} = p, opts) do
+    aliases = resolve_aliases(p, opts)
+    ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_text(p) end)
+  end
+
+  def do_to_text(%__MODULE__{root: root, substitution: sub}) do
     proof_text =
       root
       |> render_root("")
@@ -505,6 +694,13 @@ defmodule ShotTx.Proof do
 
   defp text_label(%Step{kind: :closure, label: l, sources: srcs}) do
     pad("#{l}. ⊥") <> "[#{Enum.join(srcs, ", ")}]"
+  end
+
+  defp text_label(%Step{kind: :model, label: l, model: {atoms, defs}}) do
+    meaningful = Enum.reject(atoms, &(&1 in [true_term(), neg(false_term())]))
+    lits = Enum.map_join(meaningful, ", ", &format!/1)
+    ds = Enum.map_join(defs, ", ", fn {h, t} -> "#{format!(h)} ← #{format!(t)}" end)
+    pad("#{l}. ★ open") <> "[model: #{Enum.reject([ds, lits], &(&1 == "")) |> Enum.join(" | ")}]"
   end
 
   @label_column_width 36

@@ -11,7 +11,7 @@ defmodule ShotTx.Prover do
 
   @type proof_result ::
           {:thm, ShotTx.Proof.t()}
-          | {:csa, String.t()}
+          | {:csa, String.t(), ShotTx.Proof.t()}
           | :unknown
           | :timeout
           | {:error, term()}
@@ -45,7 +45,7 @@ defmodule ShotTx.Prover do
       "Attempting to prove:\n" <>
         Enum.map_join(assumptions, ", ", &format!(&1, _hide_types = true)) <>
         " ⊢ " <>
-        format!(conclusion, false)
+        format!(conclusion)
     )
 
     closed_conclusion = close_formula(conclusion)
@@ -54,8 +54,16 @@ defmodule ShotTx.Prover do
     formulas = [neg(closed_conclusion) | closed_assms]
 
     case sat(formulas, defs, params) do
-      {:sat, model} ->
-        {:csa, model}
+      {:sat,
+       %{
+         model_branch_id: bid,
+         model_atoms: atoms,
+         model_defs: ds,
+         model_trace: mt,
+         closed_traces: ct
+       }} ->
+        proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, mt, {atoms, ds})
+        {:csa, format_model(atoms, ds), proof}
 
       {:unsat, global_subst, flex_pairs, traces} ->
         proof = ShotTx.Proof.from_refutation(traces, formulas, global_subst, flex_pairs)
@@ -87,11 +95,11 @@ defmodule ShotTx.Prover do
     format_result(prove(conclusion, assumptions, opts))
   end
 
-  defp format_result({:thm, _proof}), do: "THM"
-  defp format_result({:csa, model}), do: "CSA: #{model}"
-  defp format_result(:unknown), do: "UNK"
-  defp format_result(:timeout), do: "Timeout"
-  defp format_result({:error, reason}), do: "Error: #{inspect(reason)}"
+  def format_result({:thm, _proof}), do: "THM"
+  def format_result({:csa, model, _proof}), do: "CSA\n" <> model
+  def format_result(:unknown), do: "UNK"
+  def format_result(:timeout), do: "Timeout"
+  def format_result({:error, reason}), do: "Error: #{inspect(reason)}"
 
   @doc """
   Checks the satisfiability of a list of formulas. Delegates the execution to
@@ -112,19 +120,16 @@ defmodule ShotTx.Prover do
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     result = GenServer.call(manager_via, :start_proof, :infinity)
 
-    Process.exit(session_pid, :normal)
+    Process.exit(session_pid, :shutdown)
 
     # DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
 
     case result do
-      {:sat, {model_atoms, model_defs}} ->
-        {:sat, format_model(model_atoms, model_defs)}
+      {:sat, results} ->
+        {:sat, results}
 
       {:unsat, global_substitution, remaining_flex, traces} ->
         {:unsat, global_substitution, remaining_flex, traces}
-
-      {:unknown, :max_branches_reached} ->
-        {:unknown, "Branch limit (#{params.max_branches}) reached."}
 
       {:unknown, _} ->
         {:unknown, []}

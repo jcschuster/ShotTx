@@ -241,9 +241,15 @@ res = ~f"p @ a & p @ b => p @ (a & b)" |> prove
 ```
 
 ```elixir
-with_context(~e[h:$o>$i], fn ->
+res = with_context(~e[h:$o>$i], fn ->
   ~f"h @ (h @ $true = h @ $false) = h @ $false"
 end) |> prove
+```
+
+<!-- livebook:{"output_size":"wide"} -->
+
+```elixir
+render res
 ```
 
 ```elixir
@@ -289,7 +295,7 @@ thf(conj,conjecture,
 <!-- livebook:{"continue_on_error":true} -->
 
 ```elixir
-with_context(~e[h:$o>$i], fn ->
+res = with_context(~e[h:$o>$i], fn ->
   ~f"(c @ (h @ $false)) & (h @ $true = h @ $false) => c @ (h @ $true)"
 end) |> prove
 ```
@@ -297,7 +303,7 @@ end) |> prove
 <!-- livebook:{"continue_on_error":true} -->
 
 ```elixir
-with_context(~e[h:$o>$i], fn ->
+res = with_context(~e[h:$o>$i], fn ->
   ~f"(c @ (h @ $false)) & (h @ $true = h @ X) => c @ (h @ $true)"
 end) |> prove
 ```
