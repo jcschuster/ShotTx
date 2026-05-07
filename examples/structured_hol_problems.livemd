@@ -20,13 +20,17 @@ import ShotDs.Hol.Sigils
 defmodule Util do
   def render res do
     case res do
-      {:thm, proof} ->
-        frame = Kino.Frame.new()
-        Kino.render(frame)
-        diagram = proof |> ShotTx.Proof.to_mermaid |> Kino.Mermaid.new
-        Kino.Frame.render frame, diagram
+      {:thm, proof} -> do_render proof
+      {:csat, _model, proof} -> do_render proof
       other -> other
     end
+  end
+
+  defp do_render proof do
+    frame = Kino.Frame.new
+    Kino.render(frame)
+    diagram = proof |> ShotTx.Proof.to_mermaid |> Kino.Mermaid.new
+    Kino.Frame.render frame, diagram
   end
 end
 ```
@@ -1858,6 +1862,10 @@ res = prove ~f"~?[G:$i>$i>$o]: ![F:$i>$o]: ?[J:$i]: G @ J = F"
 
 format_result res
 # THM
+```
+
+```elixir
+render res
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->

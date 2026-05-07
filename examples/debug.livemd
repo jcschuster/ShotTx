@@ -140,8 +140,6 @@ res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y"
 |> prove()
 ```
 
-<!-- livebook:{"output_size":"wide"} -->
-
 ```elixir
 frame = Kino.Frame.new()
 Kino.render(frame)
