@@ -8,6 +8,7 @@ defmodule ShotTx.Prover.Worker do
 
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover.Branch
+  alias ShotTx.Prover.Stats
 
   defstruct id: nil,
             session_id: nil,
@@ -130,6 +131,7 @@ defmodule ShotTx.Prover.Worker do
         {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
 
       steps >= @yield_limit ->
+        Stats.incr(state.ets_tables, :worker_yields)
         push_work(state.ets_tables.work_queue, branch, state.session_id)
 
         {:noreply, %{state | current_branch: nil, steps_since_yield: 0},
@@ -162,11 +164,17 @@ defmodule ShotTx.Prover.Worker do
   ##############################################################################
 
   defp handle_step_result({:continue, updated_branch, effect}, state) do
+    Stats.incr(state.ets_tables, :steps_total)
+    bump_rule(state.ets_tables, updated_branch)
     apply_effect(effect, updated_branch, state)
     {:noreply, %{state | current_branch: updated_branch}, {:continue, :process_next}}
   end
 
   defp handle_step_result({:split, a, b}, state) do
+    Stats.incr(state.ets_tables, :steps_total)
+    Stats.incr(state.ets_tables, :branches_split, 2)
+    bump_rule(state.ets_tables, a)
+
     parent_id = state.current_branch.id
 
     notify_ca_sync(state.session_id, {:branch_active, a.id})
@@ -179,6 +187,9 @@ defmodule ShotTx.Prover.Worker do
   end
 
   defp handle_step_result({:instantiate, branches}, state) do
+    Stats.incr(state.ets_tables, :steps_total)
+    Stats.incr(state.ets_tables, :branches_instantiate_children, length(branches))
+
     parent_id = state.current_branch.id
 
     Enum.each(branches, fn b ->
@@ -191,6 +202,10 @@ defmodule ShotTx.Prover.Worker do
   end
 
   defp handle_step_result({:closed, closed_branch}, state) do
+    Stats.incr(state.ets_tables, :steps_total)
+    Stats.incr(state.ets_tables, :branches_closed_locally)
+    bump_rule(state.ets_tables, closed_branch)
+
     branch_id = closed_branch.id
     trace = Enum.reverse(closed_branch.history)
 
@@ -213,6 +228,8 @@ defmodule ShotTx.Prover.Worker do
   end
 
   defp handle_step_result({:saturated, {defs, literals}}, state) do
+    Stats.incr(state.ets_tables, :branches_saturated)
+
     trace = Enum.reverse(state.current_branch.history)
 
     Logger.info(
@@ -280,4 +297,22 @@ defmodule ShotTx.Prover.Worker do
     ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
     GenServer.call(ca_via, message, :infinity)
   end
+
+  defp bump_rule(tables, %{history: [{_src, rule, _} | _]}) do
+    Stats.incr(tables, rule_key(rule))
+  end
+
+  defp bump_rule(_tables, _branch), do: :ok
+
+  defp rule_key(:contradiction), do: :rule_contradiction
+  defp rule_key(:tautology), do: :rule_tautology
+  defp rule_key({:alpha, _}), do: :rule_alpha
+  defp rule_key({:beta, _}), do: :rule_beta
+  defp rule_key({:delta, _}), do: :rule_delta
+  defp rule_key({:rename, _}), do: :rule_rename
+  defp rule_key({:atomic, _}), do: :rule_atomic
+  defp rule_key({:gamma, _, _, _}), do: :rule_gamma
+  defp rule_key({:prim_subst, _, _, _, _}), do: :rule_prim_subst
+  defp rule_key({:instantiate, _, _}), do: :rule_instantiate
+  defp rule_key(_), do: :rule_other
 end

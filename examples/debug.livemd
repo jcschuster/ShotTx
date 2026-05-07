@@ -209,7 +209,7 @@ res
 ```
 
 ```elixir
-~f"""
+res = ~f"""
 (
   (p @ ^[X : $o]: X) &
   (p @ ^[X : $o]: ~X) &
@@ -220,6 +220,16 @@ res
 ?[Y : $o>$o]: ~ p @ Y
 """
 |> prove
+```
+
+```elixir
+frame = Kino.Frame.new()
+Kino.render(frame)
+
+res
+|> then(fn {:csa, _model, proof} -> proof end)
+|> ShotTx.Proof.to_mermaid()
+|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
 ```
 
 ```elixir

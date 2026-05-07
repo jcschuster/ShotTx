@@ -99,8 +99,17 @@ defmodule ShotTx.Prover.Manager do
     if state.active_caller do
       Logger.info("Manager received final result: #{inspect(result)}")
       if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+
+      ShotTx.Prover.Stats.set(
+        state.ets_tables,
+        :proof_finished_at_us,
+        System.monotonic_time(:microsecond)
+      )
+
+      stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
       :ets.insert(state.ets_tables.stats, {:aborted, true})
-      GenServer.reply(state.active_caller, result)
+
+      GenServer.reply(state.active_caller, {result, stats})
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}
@@ -111,8 +120,11 @@ defmodule ShotTx.Prover.Manager do
   def handle_info(:timeout, state) do
     if state.active_caller do
       Logger.warning("Proof timed out!")
+
+      stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
       :ets.insert(state.ets_tables.stats, {:aborted, true})
-      GenServer.reply(state.active_caller, :timeout)
+
+      GenServer.reply(state.active_caller, {:timeout, stats})
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}
@@ -159,8 +171,17 @@ defmodule ShotTx.Prover.Manager do
     if state.active_caller do
       Logger.info("Manager received final result: #{inspect(result)}")
       if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+
+      ShotTx.Prover.Stats.set(
+        state.ets_tables,
+        :proof_finished_at_us,
+        System.monotonic_time(:microsecond)
+      )
+
+      stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
       :ets.insert(state.ets_tables.stats, {:aborted, true})
-      GenServer.reply(state.active_caller, result)
+
+      GenServer.reply(state.active_caller, {result, stats})
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}

@@ -14,7 +14,6 @@ defmodule ShotTx.Prover.EtsKeeper do
     tables = %{
       stats: :ets.new(:stats, [:set, :public, read_concurrency: true, write_concurrency: true]),
       tombs: :ets.new(:tombs, [:set, :public, read_concurrency: true, write_concurrency: true]),
-      # New lock-free queues for work stealing
       work_queue:
         :ets.new(:work_queue, [
           :ordered_set,
@@ -25,6 +24,8 @@ defmodule ShotTx.Prover.EtsKeeper do
       idle_queue:
         :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true])
     }
+
+    :ets.insert(tables.stats, {:proof_started_at_us, System.monotonic_time(:microsecond)})
 
     {:ok, tables}
   end

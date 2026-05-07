@@ -4,6 +4,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   require Logger
 
   alias ShotTx.Data.Parameters
+  alias ShotTx.Prover.Stats
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotUn
   alias ShotUn.UnifSolution
@@ -142,7 +143,10 @@ defmodule ShotTx.Prover.ContradictionAgent do
   # --- Synchronous Callbacks --------------------------------------------------
 
   defp do_handle_sync({:branch_active, branch_id}, state) do
-    {:reply, :ok, %{state | active_branches: MapSet.put(state.active_branches, branch_id)}}
+    new_active = MapSet.put(state.active_branches, branch_id)
+    Stats.record_max(state.ets_tables, :active_branches_max, MapSet.size(new_active))
+    Stats.incr(state.ets_tables, :branches_activated_total)
+    {:reply, :ok, %{state | active_branches: new_active}}
   end
 
   defp do_handle_sync({:branch_split, branch_id}, state) do
@@ -381,6 +385,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
         end)
 
       if some_branch_cannot_close?(state, branch_clash_lists) do
+        Stats.incr(state.ets_tables, :csp_calls_skipped)
         {:noreply, state}
       else
         Logger.warning(
@@ -416,17 +421,37 @@ defmodule ShotTx.Prover.ContradictionAgent do
     task_sup_via =
       {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
 
+    tables = state.ets_tables
+    depth = state.params.unification_depth
+
     task =
       Task.Supervisor.async_nolink(task_sup_via, fn ->
-        # 1. MRV: process the most constrained branches first
+        t0 = System.monotonic_time(:microsecond)
+        Stats.incr(tables, :csp_calls)
+
+        domain_sizes = Enum.map(branch_clash_lists, &length/1)
+        Stats.record_sample(tables, :csp_branches_count, length(domain_sizes))
+        Stats.record_sample(tables, :csp_max_domain_size, Enum.max(domain_sizes, fn -> 0 end))
+        Stats.record_sample(tables, :csp_total_candidates, Enum.sum(domain_sizes))
+
         sorted = Enum.sort_by(branch_clash_lists, &length/1)
-        # 2. Decompose into independent sub-problems
         groups = partition_independent(sorted)
-        # 3. Solve each group, combine results
-        case solve_groups(groups, state.params.unification_depth) do
-          {:ok, solution} -> {:closure, solution}
-          :error -> :no_closure
-        end
+        Stats.record_sample(tables, :csp_groups_count, length(groups))
+
+        result =
+          case solve_groups(groups, depth) do
+            {:ok, solution} ->
+              Stats.incr(tables, :csp_calls_succeeded)
+              {:closure, solution}
+
+            :error ->
+              Stats.incr(tables, :csp_calls_failed)
+              :no_closure
+          end
+
+        duration_us = System.monotonic_time(:microsecond) - t0
+        Stats.record_sample(tables, :csp_duration_us, duration_us)
+        result
       end)
 
     {:noreply, %{state | pending_search: task.ref}}

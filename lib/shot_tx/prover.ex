@@ -53,7 +53,7 @@ defmodule ShotTx.Prover do
 
     formulas = [neg(closed_conclusion) | closed_assms]
 
-    case sat(formulas, defs, params) do
+    to_res = fn
       {:sat,
        %{
          model_branch_id: bid,
@@ -77,6 +77,14 @@ defmodule ShotTx.Prover do
 
       {:error, reason} ->
         {:error, reason}
+    end
+
+    if opts[:stats] do
+      {sat_res, stats} = sat(formulas, defs, params)
+      {to_res.(sat_res), stats}
+    else
+      sat_res = sat(formulas, defs, params)
+      to_res.(sat_res)
     end
   end
 
@@ -108,7 +116,8 @@ defmodule ShotTx.Prover do
   def sat(formulas, defs \\ %{}, opts \\ [])
 
   def sat(formulas, defs, opts) when is_list(formulas) do
-    params = struct!(Parameters, opts)
+    {return_stats?, param_kws} = Keyword.pop(opts, :stats, false)
+    params = struct!(Parameters, param_kws)
     session_id = make_ref() |> inspect()
 
     {:ok, session_pid} =
@@ -118,28 +127,31 @@ defmodule ShotTx.Prover do
       )
 
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
-    result = GenServer.call(manager_via, :start_proof, :infinity)
+    {result, stats} = GenServer.call(manager_via, :start_proof, :infinity)
 
     Process.exit(session_pid, :shutdown)
 
     # DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
 
-    case result do
-      {:sat, results} ->
-        {:sat, results}
+    unwrapped =
+      case result do
+        {:sat, results} ->
+          {:sat, results}
 
-      {:unsat, global_substitution, remaining_flex, traces} ->
-        {:unsat, global_substitution, remaining_flex, traces}
+        {:unsat, global_substitution, remaining_flex, traces} ->
+          {:unsat, global_substitution, remaining_flex, traces}
 
-      {:unknown, _} ->
-        {:unknown, []}
+        {:unknown, _} ->
+          {:unknown, []}
 
-      :timeout ->
-        :timeout
+        :timeout ->
+          :timeout
 
-      other ->
-        other
-    end
+        other ->
+          other
+      end
+
+    if return_stats?, do: {unwrapped, stats}, else: unwrapped
   end
 
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
