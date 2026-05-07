@@ -30,18 +30,12 @@ defmodule ShotTx.Prover.Manager do
     GenServer.start_link(__MODULE__, {session_id, formulas, defs, params}, name: name)
   end
 
-  def prove(formulas, defs, %Parameters{} = params) do
-    GenServer.call(__MODULE__, {:start_proof, formulas, defs, params}, :infinity)
-  end
-
   ##############################################################################
   # CALLBACKS
   ##############################################################################
 
   @impl true
   def init({session_id, formulas, defs, params}) do
-    Registry.register(ShotTx.Prover.PubSub, "proof_results_#{session_id}", [])
-
     ets_tables = ShotTx.Prover.EtsKeeper.get_tables(session_id)
     worker_count = Map.get(params, :worker_pool_size, System.schedulers_online())
 
@@ -93,28 +87,6 @@ defmodule ShotTx.Prover.Manager do
   end
 
   # --- Kill Switches & Results ------------------------------------------------
-
-  @impl true
-  def handle_info({:proof_result, result}, state) do
-    if state.active_caller do
-      Logger.info("Manager received final result: #{inspect(result)}")
-      if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-
-      ShotTx.Prover.Stats.set(
-        state.ets_tables,
-        :proof_finished_at_us,
-        System.monotonic_time(:microsecond)
-      )
-
-      stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
-      :ets.insert(state.ets_tables.stats, {:aborted, true})
-
-      GenServer.reply(state.active_caller, {result, stats})
-      {:noreply, %{state | active_caller: nil}}
-    else
-      {:noreply, state}
-    end
-  end
 
   @impl true
   def handle_info(:timeout, state) do

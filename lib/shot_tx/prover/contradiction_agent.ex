@@ -149,8 +149,16 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:reply, :ok, %{state | active_branches: new_active}}
   end
 
-  defp do_handle_sync({:branch_split, branch_id}, state) do
-    new_state = %{state | active_branches: MapSet.delete(state.active_branches, branch_id)}
+  defp do_handle_sync({:branch_split, parent_id, child_ids}, state) do
+    new_active =
+      state.active_branches
+      |> MapSet.delete(parent_id)
+      |> MapSet.union(MapSet.new(child_ids))
+
+    Stats.record_max(state.ets_tables, :active_branches_max, MapSet.size(new_active))
+    Stats.incr(state.ets_tables, :branches_activated_total, length(child_ids))
+
+    new_state = %{state | active_branches: new_active}
     {:noreply, after_check} = check_global_closure(new_state)
     {:reply, :ok, after_check}
   end

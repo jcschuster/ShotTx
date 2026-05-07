@@ -177,9 +177,7 @@ defmodule ShotTx.Prover.Worker do
 
     parent_id = state.current_branch.id
 
-    notify_ca_sync(state.session_id, {:branch_active, a.id})
-    notify_ca_sync(state.session_id, {:branch_active, b.id})
-    notify_ca_sync(state.session_id, {:branch_split, parent_id})
+    notify_ca_sync(state.session_id, {:branch_split, parent_id, [a.id, b.id]})
 
     push_work(state.ets_tables.work_queue, a, state.session_id)
     push_work(state.ets_tables.work_queue, b, state.session_id)
@@ -191,13 +189,11 @@ defmodule ShotTx.Prover.Worker do
     Stats.incr(state.ets_tables, :branches_instantiate_children, length(branches))
 
     parent_id = state.current_branch.id
+    child_ids = Enum.map(branches, & &1.id)
 
-    Enum.each(branches, fn b ->
-      notify_ca_sync(state.session_id, {:branch_active, b.id})
-      push_work(state.ets_tables.work_queue, b, state.session_id)
-    end)
+    notify_ca_sync(state.session_id, {:branch_split, parent_id, child_ids})
 
-    notify_ca_sync(state.session_id, {:branch_split, parent_id})
+    Enum.each(branches, fn b -> push_work(state.ets_tables.work_queue, b, state.session_id) end)
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
   end
 

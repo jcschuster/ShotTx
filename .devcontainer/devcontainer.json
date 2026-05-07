@@ -1,23 +1,14 @@
 {
-	"name": "Elixir/Livebook Sandbox",
-	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-	"features": {
-		"ghcr.io/anthropic-ai/claude-code/claude-code:latest": {},
-		"ghcr.io/devcontainers/features/node:1": {},
-		"ghcr.io/devcontainers/features/erlang:1": {},
-		"ghcr.io/devcontainers/features/elixir:1": {}
+	"name": "Elixir Sandbox (Custom)",
+	"build": {
+		"dockerfile": "Dockerfile"
 	},
-	"customizations": {
-		"vscode": {
-			"extensions": ["elixir-lsp.elixir-ls"]
-		}
-	},
-	"postCreateCommand": "apt-get update && apt-get install -y ripgrep fd-find eza bat zoxide && curl -LsSf https://ast-grep.github.io/install.sh | bash",
+	"remoteUser": "node",
+	"workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,Z",
+	"workspaceFolder": "/workspace",
 	"remoteEnv": {
 		"MIX_HOME": "/workspace/.mix",
 		"HEX_HOME": "/workspace/.hex",
 		"LIVEBOOK_HOME": "/workspace/.livebook"
-	},
-	"workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,Z",
-	"workspaceFolder": "/workspace"
+	}
 }

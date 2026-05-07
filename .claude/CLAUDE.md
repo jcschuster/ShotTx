@@ -37,14 +37,14 @@ notify info "Starting test suite..."
 - Keep messages concise (the host will announce them via audio)
 - Don't over-notify - only for significant events
 
-# General Engineering Directives
+# Engineering Directives
 
-- Do not overengineer solutions. Write the simplest code that satisfies the requirements.
-- Favor readability and maintainability over cleverness.
+- **Minimalism:** Do not overengineer. Use the simplest tool for the job. Favor Elixir's standard library over complex custom abstractions.
+- **Architecture:** Follow Clean Architecture principles. Maintain clear boundaries between your core logic and external interfaces (Livebook, Database).
 
-# Elixir & Livebook Rules
+# Elixir Best Practices
 
-- Always follow Elixir best practices and avoid common anti-patterns.
-- Do not rebind variables (do not assign to variables that already hold a value). Instead, use the pipe operator `|>` effectively or use distinct, descriptive variable names.
-- Rely on pattern matching in function heads rather than complex `if/else` or `cond` statements.
-- When editing `.livemd` files, ensure Elixir code blocks compile cleanly and dependencies are properly declared in the `Mix.install/2` setup cell.
+- **Strict Immutability:** NEVER rebind a variable name in the same scope. Once `user` is assigned, do not use `user = ...` again.
+- **Data Flow:** Use the pipe operator `|>` for all sequential data transformations.
+- **Naming:** If you must transform data without a pipe, use descriptive prefixes (e.g., `user` -> `validated_user` -> `saved_user`).
+- **Pattern Matching:** Prefer pattern matching in function heads over `if/else` or `cond` blocks.
