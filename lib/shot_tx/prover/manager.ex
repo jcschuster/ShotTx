@@ -20,6 +20,7 @@ defmodule ShotTx.Prover.Manager do
             parked_count: 0
 
   @root_name "root"
+  @progress_interval_ms 2_000
 
   ##############################################################################
   # PUBLIC API
@@ -72,6 +73,7 @@ defmodule ShotTx.Prover.Manager do
 
       spawn_workers(state)
 
+      Process.send_after(self(), :log_progress, @progress_interval_ms)
       timer = Process.send_after(self(), :timeout, state.params.timeout)
 
       {:noreply,
@@ -96,11 +98,37 @@ defmodule ShotTx.Prover.Manager do
       stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
       :ets.insert(state.ets_tables.stats, {:aborted, true})
 
+      log_timeout_traces(state)
+
       GenServer.reply(state.active_caller, {:timeout, stats})
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info(:log_progress, %{active_caller: nil} = state), do: {:noreply, state}
+
+  @impl true
+  def handle_info(:log_progress, state) do
+    stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
+    queue_size = :ets.info(state.ets_tables.work_queue, :size)
+    parked_size = :ets.info(state.ets_tables.idle_queue, :size)
+
+    Logger.info(
+      "Progress | gamma=#{state.current_gamma_limit} prim=#{state.current_prim_depth_limit}" <>
+        " | idle #{MapSet.size(state.idle_workers)}/#{state.worker_count} workers" <>
+        " | queue=#{queue_size} parked=#{parked_size}" <>
+        " | steps=#{Map.get(stats, :steps_total, 0)}" <>
+        " γ=#{Map.get(stats, :rule_gamma, 0)}" <>
+        " prim=#{Map.get(stats, :rule_prim_subst, 0)}" <>
+        " closed=#{Map.get(stats, :branches_closed_locally, 0)}" <>
+        " sat=#{Map.get(stats, :branches_saturated, 0)}"
+    )
+
+    Process.send_after(self(), :log_progress, @progress_interval_ms)
+    {:noreply, state}
   end
 
   @impl true
@@ -266,6 +294,44 @@ defmodule ShotTx.Prover.Manager do
 
     :ets.delete_all_objects(ets_tables.idle_queue)
     %{state | parked_count: 0}
+  end
+
+  defp log_timeout_traces(state) do
+    queued =
+      state.ets_tables.work_queue
+      |> :ets.tab2list()
+      |> Enum.map(fn {_key, branch} -> branch end)
+
+    parked =
+      state.ets_tables.idle_queue
+      |> :ets.tab2list()
+      |> Enum.map(fn {_id, branch} -> branch end)
+
+    queued_str = Enum.map_join(queued, "\n", &format_branch_for_log/1)
+    parked_str = Enum.map_join(parked, "\n", &format_branch_for_log/1)
+
+    Logger.warning("""
+    Timeout trace — gamma_limit=#{state.current_gamma_limit} prim_limit=#{state.current_prim_depth_limit} idle_workers=#{MapSet.size(state.idle_workers)}/#{state.worker_count}
+    work_queue (#{length(queued)} branch(es)):
+    #{if queued == [], do: "  (empty)", else: queued_str}
+    idle_queue (#{length(parked)} branch(es)):
+    #{if parked == [], do: "  (empty)", else: parked_str}
+    """)
+  end
+
+  defp format_branch_for_log(branch) do
+    total = length(branch.history)
+    recent = branch.history |> Enum.take(20) |> Enum.reverse()
+
+    sleeping_str =
+      case branch.sleeping_gamma_rules do
+        [] -> ""
+        rules -> " [#{length(rules)} sleeping gamma]"
+      end
+
+    rule_lines = Enum.map_join(recent, "\n", fn {_src, rule, _produced} -> "    #{inspect(rule)}" end)
+
+    "  [#{branch.id}] #{total} step(s)#{sleeping_str}:\n#{rule_lines}"
   end
 
   defp ca_via(state),

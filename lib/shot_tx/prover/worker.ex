@@ -294,8 +294,9 @@ defmodule ShotTx.Prover.Worker do
     GenServer.call(ca_via, message, :infinity)
   end
 
-  defp bump_rule(tables, %{history: [{_src, rule, _} | _]}) do
+  defp bump_rule(tables, %{id: branch_id, history: [{_src, rule, _} | _]}) do
     Stats.incr(tables, rule_key(rule))
+    Logger.debug("[#{branch_id}] #{inspect(rule, limit: 4, printable_limit: 40)}")
   end
 
   defp bump_rule(_tables, _branch), do: :ok
