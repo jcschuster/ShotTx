@@ -1,0 +1,12 @@
+{
+  "name": "elixir",
+  "description": "Elixir development",
+  "features": {
+    "ghcr.io/rabdulwahhab/devcontainer-features/erlang-asdf:1": {
+      "version": "latest"
+    },
+    "ghcr.io/rabdulwahhab/devcontainer-features/elixir-asdf:1": {
+      "version": "latest"
+    }
+  }
+}

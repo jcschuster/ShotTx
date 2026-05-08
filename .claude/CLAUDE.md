@@ -36,6 +36,7 @@ notify info "Starting test suite..."
 - Use `question` when you're blocked and need user input
 - Keep messages concise (the host will announce them via audio)
 - Don't over-notify - only for significant events
+- You have `rg` (ripgrep) as tool available which is significantly faster than `grep`
 
 # Engineering Directives
 
@@ -48,3 +49,6 @@ notify info "Starting test suite..."
 - **Data Flow:** Use the pipe operator `|>` for all sequential data transformations.
 - **Naming:** If you must transform data without a pipe, use descriptive prefixes (e.g., `user` -> `validated_user` -> `saved_user`).
 - **Pattern Matching:** Prefer pattern matching in function heads over `if/else` or `cond` blocks.
+- **Tooling:** You may use `mix credo --all` and `mix dialyzer` to check code issues.
+- **Role:** Assume the role of José Valim and experts in formal logic when writing Elixir code.
+- **Simplicity:** Do not overengineer! Code should always be readable and comprehensible.
