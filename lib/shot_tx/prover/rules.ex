@@ -6,6 +6,7 @@ defmodule ShotTx.Prover.Rules do
   import ShotDs.Hol.Dsl
   import ShotTx.Generation
   use ShotDs.Hol.Patterns
+  require Logger
 
   @typep definition_t :: {Declaration.t(), Term.term_id()}
 
@@ -142,7 +143,7 @@ defmodule ShotTx.Prover.Rules do
         {:beta, {neg(p), q}}
 
       equivalence(p, q) ->
-        {:beta, {p &&& q, neg(p) &&& neg(q)}}
+        {:beta, {p &&& q, neg(q) &&& neg(p)}}
 
       typed_universal_quantification(pred, t) ->
         if pure_o_type?(t) do
@@ -198,7 +199,7 @@ defmodule ShotTx.Prover.Rules do
         {:alpha, [p, neg(q)]}
 
       equivalence(p, q) ->
-        {:beta, {neg(p) &&& q, p &&& neg(q)}}
+        {:beta, {neg(p) &&& q, neg(q) &&& p}}
 
       typed_universal_quantification(pred, t) ->
         fvars = TF.get_term!(pred).fvars

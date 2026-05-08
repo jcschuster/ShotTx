@@ -20,8 +20,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
             pending_search: nil,
             settle_waiter: nil
 
-  @empty_solution %UnifSolution{substitutions: [], flex_pairs: []}
-
   ##############################################################################
   # PUBLIC API
   ##############################################################################
@@ -268,9 +266,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
       end
     else
       sorted = Enum.sort_by(branch_clash_lists, &length/1)
-      groups = partition_independent(sorted)
 
-      case solve_groups(groups, state.params.unification_depth) do
+      case solve_groups(sorted, state.params.unification_depth) do
         {:ok, solution} ->
           broadcast_unsat(solution, state)
 
@@ -365,24 +362,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  ##############################################################################
-  # GLOBAL CLOSURE CHECK — DISAGREEMENT PAIRS
-  #
-  # The CSP: for each active branch, pick one disagreement pair from its
-  # inherited clashes such that the union of all chosen pairs is simultaneously
-  # unifiable.
-  #
-  # Optimizations over a naive Cartesian-product approach:
-  #   1. MRV ordering — branches with fewer candidates are tried first
-  #   2. Constraint decomposition — independent groups (no shared fvars) are
-  #      solved separately, turning one large exponential into several small ones
-  #   3. Incremental backtracking — the accumulated unification solution is
-  #      threaded through the search; incompatible candidates are pruned
-  #      immediately without recursing into deeper levels
-  #   4. Forward checking — after extending the solution, remaining branches
-  #      whose domains are fully wiped out trigger an immediate backtrack
-  ##############################################################################
-
   defp check_global_closure(%__MODULE__{} = state) do
     if state.pending_search != nil do
       {:noreply, state}
@@ -416,8 +395,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       :error
     else
       sorted = Enum.sort_by(branch_clash_lists, &length/1)
-      groups = partition_independent(sorted)
-      solve_groups(groups, state.params.unification_depth)
+      solve_groups(sorted, state.params.unification_depth)
     end
   end
 
@@ -443,11 +421,9 @@ defmodule ShotTx.Prover.ContradictionAgent do
         Stats.record_sample(tables, :csp_total_candidates, Enum.sum(domain_sizes))
 
         sorted = Enum.sort_by(branch_clash_lists, &length/1)
-        groups = partition_independent(sorted)
-        Stats.record_sample(tables, :csp_groups_count, length(groups))
 
         result =
-          case solve_groups(groups, depth) do
+          case solve_groups(sorted, depth) do
             {:ok, solution} ->
               Stats.incr(tables, :csp_calls_succeeded)
               {:closure, solution}
@@ -465,207 +441,47 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, %{state | pending_search: task.ref}}
   end
 
-  # Solve each independent group separately, then merge the group solutions.
-  # Because the groups share no free variables their solutions are guaranteed
-  # compatible, but we still verify through unification to account for flex
-  # pairs.
   @spec solve_groups([[list()]], non_neg_integer()) :: {:ok, UnifSolution.t()} | :error
-  defp solve_groups(groups, depth) do
-    Enum.reduce_while(groups, {:ok, @empty_solution}, fn group, {:ok, acc_solution} ->
-      case incremental_search(group, depth, @empty_solution) do
-        {:ok, group_solution} ->
-          case merge_solutions(acc_solution, group_solution, depth) do
-            {:ok, merged} -> {:cont, {:ok, merged}}
-            :error -> {:halt, :error}
-          end
+  defp solve_groups(branch_candidate_lists, depth) do
+    branch_candidate_lists
+    |> cartesian_product()
+    |> Enum.find_value(:error, fn pair_choice ->
+      Logger.debug("CSP trying #{length(pair_choice)} pairs: #{inspect(pair_choice)}")
 
-        :error ->
-          {:halt, :error}
+      case ShotUn.unify(pair_choice, depth) |> Enum.take(1) do
+        [sol] ->
+          Logger.debug("CSP succeeded with: #{inspect(sol.substitutions)}")
+          {:ok, sol}
+
+        [] ->
+          nil
       end
     end)
   end
-
-  @spec incremental_search([[{term(), term()}]], non_neg_integer(), UnifSolution.t()) ::
-          {:ok, UnifSolution.t()} | :error
-  defp incremental_search([], _depth, acc_solution), do: {:ok, acc_solution}
-
-  defp incremental_search([branch_candidates | rest], depth, acc_solution) do
-    Enum.reduce_while(branch_candidates, :error, fn pair, _acc ->
-      case try_extend_with_pair(acc_solution, pair, depth) do
-        {:ok, extended} ->
-          # Forward check: verify no remaining branch is fully wiped out
-          if forward_check_ok?(rest, extended, depth) do
-            case incremental_search(rest, depth, extended) do
-              {:ok, final} -> {:halt, {:ok, final}}
-              :error -> {:cont, :error}
-            end
-          else
-            {:cont, :error}
-          end
-
-        :error ->
-          {:cont, :error}
-      end
-    end)
-  end
-
-  @spec try_extend_with_pair(UnifSolution.t(), {integer(), integer()}, non_neg_integer()) ::
-          {:ok, UnifSolution.t()} | :error
-  defp try_extend_with_pair(%UnifSolution{} = sol, {l_id, r_id}, depth) do
-    existing_pairs =
-      Enum.map(sol.substitutions, fn s -> {TF.make_term(s.fvar), s.term_id} end)
-
-    all_pairs = [{l_id, r_id} | existing_pairs ++ sol.flex_pairs]
-
-    case ShotUn.unify(all_pairs, depth) |> Enum.take(1) do
-      [merged] -> {:ok, merged}
-      [] -> :error
-    end
-  end
-
-  @spec forward_check_ok?([[{integer(), integer()}]], UnifSolution.t(), non_neg_integer()) ::
-          boolean()
-  defp forward_check_ok?(remaining_branches, solution, _depth) do
-    subst_list = solution.substitutions
-
-    Enum.all?(remaining_branches, fn candidates ->
-      Enum.any?(candidates, fn {l_id, r_id} ->
-        quick_compatible?(l_id, r_id, subst_list)
-      end)
-    end)
-  end
-
-  @spec quick_compatible?(integer(), integer(), [ShotDs.Data.Substitution.t()]) :: boolean()
-  defp quick_compatible?(l_id, r_id, subst_list) do
-    l_applied = ShotDs.Stt.Semantics.subst!(subst_list, l_id)
-    r_applied = ShotDs.Stt.Semantics.subst!(subst_list, r_id)
-
-    l_term = TF.get_term!(l_applied)
-    r_term = TF.get_term!(r_applied)
-
-    case {l_term.head.kind, r_term.head.kind} do
-      {:co, :co} -> l_term.head == r_term.head
-      {:bv, :bv} -> l_term.head == r_term.head
-      _ -> true
-    end
-  end
-
-  ##############################################################################
-  # GLOBAL CLOSURE CHECK — BRANCH CLOSURES (verify_all_closed)
-  #
-  # Same CSP but the domains are lists of UnifSolution closures rather than
-  # raw pairs. Uses the same incremental + MRV strategy.
-  ##############################################################################
 
   @spec find_valid_combination([[UnifSolution.t()]], non_neg_integer()) ::
           {:ok, UnifSolution.t()} | :error
-  defp find_valid_combination(branch_options_lists, depth) do
-    # MRV: most constrained branches first
-    sorted = Enum.sort_by(branch_options_lists, &length/1)
-    incremental_search_solutions(sorted, depth, @empty_solution)
-  end
+  defp find_valid_combination(branch_solution_lists, depth) do
+    branch_solution_lists
+    |> cartesian_product()
+    |> Enum.find_value(:error, fn solution_choice ->
+      all_pairs =
+        Enum.flat_map(solution_choice, fn %UnifSolution{substitutions: s, flex_pairs: f} ->
+          Enum.map(s, fn sub -> {TF.make_term(sub.fvar), sub.term_id} end) ++ f
+        end)
 
-  @spec incremental_search_solutions([[UnifSolution.t()]], non_neg_integer(), UnifSolution.t()) ::
-          {:ok, UnifSolution.t()} | :error
-  defp incremental_search_solutions([], _depth, acc), do: {:ok, acc}
-
-  defp incremental_search_solutions([branch_options | rest], depth, acc) do
-    Enum.reduce_while(branch_options, :error, fn candidate_solution, _acc ->
-      case merge_solutions(acc, candidate_solution, depth) do
-        {:ok, extended} ->
-          case incremental_search_solutions(rest, depth, extended) do
-            {:ok, final} -> {:halt, {:ok, final}}
-            :error -> {:cont, :error}
-          end
-
-        :error ->
-          {:cont, :error}
+      case ShotUn.unify(all_pairs, depth) |> Enum.take(1) do
+        [sol] -> {:ok, sol}
+        [] -> nil
       end
     end)
   end
 
-  ##############################################################################
-  # CONSTRAINT DECOMPOSITION
-  #
-  # Partition branches into independent groups based on shared free variables.
-  # Two branches are in the same group iff their disagreement pairs share at
-  # least one free variable (transitively).  Independent groups can be solved
-  # separately, turning one Πᵢ|Dᵢ| search into Σ_g Πᵢ∈g |Dᵢ|.
-  ##############################################################################
+  defp cartesian_product([]), do: [[]]
 
-  @spec partition_independent([[{integer(), integer()}]]) :: [[[{integer(), integer()}]]]
-  defp partition_independent([]), do: []
-  defp partition_independent([single]), do: [[single]]
-
-  defp partition_independent(branches) do
-    n = length(branches)
-    indices = 0..(n - 1)
-
-    # Collect fvars reachable from each branch's candidate pairs
-    fvar_sets =
-      Enum.map(branches, fn candidates ->
-        for {l_id, r_id} <- candidates,
-            id <- [l_id, r_id],
-            fvar <- TF.get_term!(id).fvars,
-            into: MapSet.new(),
-            do: fvar
-      end)
-
-    # Union-Find: merge branches that share at least one fvar
-    parent = Map.new(indices, &{&1, &1})
-    rank = Map.new(indices, &{&1, 0})
-
-    {new_parent, _rank} =
-      for i <- indices,
-          j <- indices,
-          j > i,
-          not MapSet.disjoint?(Enum.at(fvar_sets, i), Enum.at(fvar_sets, j)),
-          reduce: {parent, rank} do
-        {p, r} -> uf_union(p, r, i, j)
-      end
-
-    # Group branch lists by their root representative
-    indices
-    |> Enum.group_by(&uf_find(new_parent, &1))
-    |> Map.values()
-    |> Enum.map(fn group_indices ->
-      Enum.map(group_indices, &Enum.at(branches, &1))
-    end)
-  end
-
-  # Union-Find with union-by-rank for near-constant amortised operations.
-  # Path compression is omitted because the structure is short-lived and small.
-
-  @spec uf_find(map(), non_neg_integer()) :: non_neg_integer()
-  defp uf_find(parent, i) do
-    case Map.fetch!(parent, i) do
-      ^i -> i
-      p -> uf_find(parent, p)
-    end
-  end
-
-  @spec uf_union(map(), map(), non_neg_integer(), non_neg_integer()) :: {map(), map()}
-  defp uf_union(parent, rank, i, j) do
-    ri = uf_find(parent, i)
-    rj = uf_find(parent, j)
-
-    if ri == rj do
-      {parent, rank}
-    else
-      ri_rank = Map.fetch!(rank, ri)
-      rj_rank = Map.fetch!(rank, rj)
-
-      cond do
-        ri_rank < rj_rank ->
-          {Map.put(parent, ri, rj), rank}
-
-        ri_rank > rj_rank ->
-          {Map.put(parent, rj, ri), rank}
-
-        true ->
-          {Map.put(parent, rj, ri), Map.put(rank, ri, ri_rank + 1)}
-      end
-    end
+  defp cartesian_product([list | rest]) do
+    rest_products = cartesian_product(rest)
+    for item <- list, sub <- rest_products, do: [item | sub]
   end
 
   ##############################################################################
@@ -692,20 +508,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     prefixes
     |> Enum.flat_map(fn prefix -> Map.get(state.branch_closures, prefix, []) end)
     |> Enum.uniq()
-  end
-
-  @spec merge_solutions(UnifSolution.t(), UnifSolution.t(), non_neg_integer()) ::
-          {:ok, UnifSolution.t()} | :error
-  defp merge_solutions(%UnifSolution{} = sol1, %UnifSolution{} = sol2, depth) do
-    pairs1 = Enum.map(sol1.substitutions, fn s -> {TF.make_term(s.fvar), s.term_id} end)
-    pairs2 = Enum.map(sol2.substitutions, fn s -> {TF.make_term(s.fvar), s.term_id} end)
-
-    all_pairs = pairs1 ++ pairs2 ++ sol1.flex_pairs ++ sol2.flex_pairs
-
-    case ShotUn.unify(all_pairs, depth) |> Enum.take(1) do
-      [] -> :error
-      [merged_solution] -> {:ok, merged_solution}
-    end
   end
 
   defp broadcast_unsat(solution, state) do
