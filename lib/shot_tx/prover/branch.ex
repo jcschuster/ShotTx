@@ -59,12 +59,13 @@ defmodule ShotTx.Prover.Branch do
             sleeping_gamma_rules: [],
             type_universe: MapSet.new(),
             history: [],
+            last_clash: nil,
             processed_formulas: MapSet.new()
 
   @type history_entry ::
           {Term.term_id() | nil, Rules.rule_t(), [Term.term_id()]}
 
-  @type effect :: :no_effects | {:notify_ca, MapSet.t(), [history_entry()]}
+  @type effect :: :no_effects | {:notify_ca, MapSet.t()}
   @type step_result ::
           {:continue, %__MODULE__{}, effect()}
           | {:split, my_branch :: %__MODULE__{}, sibling :: %__MODULE__{}}
@@ -220,7 +221,11 @@ defmodule ShotTx.Prover.Branch do
   defp apply_rule({:instantiate, branches_stream, count} = rule, source, branch, params, _g, _p) do
     case dual_atomize_source(source, branch, params) do
       {:ground_closure, closed_branch} ->
-        {:closed, record(closed_branch, source, rule, [])}
+        updated =
+          %{closed_branch | last_clash: {:ground, source, [lit_neg(source)]}}
+          |> record(source, rule, [])
+
+        {:closed, updated}
 
       {:continue, lit_branch} ->
         branches = Enum.to_list(branches_stream)
@@ -362,18 +367,28 @@ defmodule ShotTx.Prover.Branch do
         case check_local_clashes(term_id, branch.literals, params) do
           :ground_closure ->
             updated =
-              %{branch | literals: MapSet.put(branch.literals, term_id)}
+              %{
+                branch
+                | literals: MapSet.put(branch.literals, term_id),
+                  last_clash: {:ground, term_id, [lit_neg(term_id)]}
+              }
               |> record(source, rule, [])
 
             {:closed, updated}
 
           {:clashes_found, new_clashes} ->
+            matchings = matchings_from_clashes(new_clashes, term_id)
+
             updated =
-              %{branch | literals: MapSet.put(branch.literals, term_id)}
+              %{
+                branch
+                | literals: MapSet.put(branch.literals, term_id),
+                  last_clash: {:unification, term_id, matchings}
+              }
               |> paramodulate_literal_with_equations(term_id, params)
               |> record(source, rule, [])
 
-            {:continue, updated, {:notify_ca, new_clashes, Enum.reverse(updated.history)}}
+            {:continue, updated, {:notify_ca, new_clashes}}
 
           :ok ->
             updated =
@@ -590,5 +605,21 @@ defmodule ShotTx.Prover.Branch do
       negated(inner) -> inner
       _ -> neg(term_id)
     end
+  end
+
+  defp matchings_from_clashes(clashes, term_id) do
+    neg_new = lit_neg(term_id)
+
+    clashes
+    |> Enum.flat_map(fn {a, b} ->
+      cond do
+        a == term_id -> [lit_neg(b)]
+        b == term_id -> [lit_neg(a)]
+        a == neg_new -> [b]
+        b == neg_new -> [a]
+        true -> []
+      end
+    end)
+    |> Enum.uniq()
   end
 end

@@ -41,7 +41,6 @@ defmodule ShotTx.Proof do
   """
 
   alias ShotDs.Data.Term
-  alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.Dsl, only: [neg: 1]
   import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0]
   import ShotDs.Util.Formatter
@@ -132,6 +131,19 @@ defmodule ShotTx.Proof do
     root = chain_steps(given_steps, derivation_children)
 
     %__MODULE__{root: root, substitution: %{}, flex_pairs: []}
+  end
+
+  @doc """
+  Build a partial `Proof` from whatever traces happen to be in the trace store
+  at a checkpoint (e.g. on timeout).
+
+  Closed branches keep their `⊥` leaf; open / in-flight branches simply end
+  at their last recorded step. No global substitution or flex constraints are
+  attached.
+  """
+  @spec from_partial(map(), [Term.term_id()]) :: t()
+  def from_partial(branch_traces, initial_formulas) do
+    from_refutation(branch_traces, initial_formulas, %{}, [])
   end
 
   defp linearize_model(trace, branch_id, model_data) do
@@ -291,12 +303,16 @@ defmodule ShotTx.Proof do
 
     {interior_entries, [last_entry]} = Enum.split(trace, length(trace) - 1)
 
-    {events_rev, _segs} =
+    {events_rev, segs} =
       Enum.reduce(interior_entries, {[], segments}, &interior_event/2)
 
     case closure_event(last_entry) do
-      nil -> Enum.reverse(events_rev)
-      ev -> Enum.reverse([ev | events_rev])
+      nil ->
+        {tail_events_rev, _} = interior_event(last_entry, {events_rev, segs})
+        Enum.reverse(tail_events_rev)
+
+      ev ->
+        Enum.reverse([ev | events_rev])
     end
   end
 
@@ -357,6 +373,9 @@ defmodule ShotTx.Proof do
 
   defp interior_event({_src, {:atomic, _}, []}, state), do: state
 
+  defp interior_event({_src, {:close_pair, _, _}, _}, state), do: state
+  defp interior_event({_src, {:clash_candidates, _, _}, _}, state), do: state
+
   defp interior_event(_unhandled, state), do: state
 
   defp fold_rule_events(rule_atom, src, produced, evs) do
@@ -364,7 +383,13 @@ defmodule ShotTx.Proof do
   end
 
   defp closure_event({src, :contradiction, _}), do: {:closure, src, :contradiction}
-  defp closure_event({src, {:atomic, _}, []}), do: {:closure, src, :atomic}
+
+  defp closure_event({_src, {:close_pair, term_id, matchings}, _}),
+    do: {:closure_pair, term_id, matchings, :ground}
+
+  defp closure_event({_src, {:clash_candidates, term_id, matchings}, _}),
+    do: {:closure_pair, term_id, matchings, :unification}
+
   defp closure_event(_), do: nil
 
   ##############################################################################
@@ -410,6 +435,19 @@ defmodule ShotTx.Proof do
     {step, counter + 1}
   end
 
+  defp make_step({:closure_pair, src, matchings, kind}, _tails, t2l, counter) do
+    step = %Step{
+      label: counter,
+      formula: nil,
+      rule: closure_rule(kind),
+      sources: closure_pair_sources(src, matchings, t2l),
+      kind: :closure,
+      children: []
+    }
+
+    {step, counter + 1}
+  end
+
   defp make_step({:model, {atoms, defs}}, _tails, _t2l, counter) do
     step = %Step{
       label: counter,
@@ -441,12 +479,6 @@ defmodule ShotTx.Proof do
 
   defp lookup_label(t2l, src), do: Map.get(t2l, src)
 
-  defp closure_sources(:atomic, src, t2l) do
-    [Map.get(t2l, src), Map.get(t2l, lit_neg(src))]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
-
   defp closure_sources(:contradiction, src, t2l) do
     case Map.get(t2l, src) do
       nil -> []
@@ -454,12 +486,14 @@ defmodule ShotTx.Proof do
     end
   end
 
-  defp lit_neg(term_id) do
-    case TF.get_term!(term_id) do
-      negated(inner) -> inner
-      _ -> neg(term_id)
-    end
+  defp closure_pair_sources(src, matchings, t2l) do
+    [Map.get(t2l, src) | Enum.map(matchings, &Map.get(t2l, &1))]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
+
+  defp closure_rule(:ground), do: :atomic
+  defp closure_rule(:unification), do: :atomic
 
   defp resolve_aliases(p, opts) do
     case Keyword.get(opts, :aliases, :auto) do
@@ -490,7 +524,7 @@ defmodule ShotTx.Proof do
     ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_mermaid(p) end)
   end
 
-  def do_to_mermaid(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
+  defp do_to_mermaid(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
     {nodes, edges, _} = collect(root, 0)
 
     header = """
@@ -613,7 +647,7 @@ defmodule ShotTx.Proof do
     ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_text(p) end)
   end
 
-  def do_to_text(%__MODULE__{root: root, substitution: sub}) do
+  defp do_to_text(%__MODULE__{root: root, substitution: sub}) do
     proof_text =
       root
       |> render_root("")

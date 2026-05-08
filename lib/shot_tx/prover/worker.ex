@@ -176,6 +176,9 @@ defmodule ShotTx.Prover.Worker do
     bump_rule(state.ets_tables, a)
 
     parent_id = state.current_branch.id
+    :ets.delete(state.ets_tables.traces, parent_id)
+    publish_trace(state.ets_tables, a)
+    publish_trace(state.ets_tables, b)
 
     notify_ca_sync(state.session_id, {:branch_split, parent_id, [a.id, b.id]})
 
@@ -189,6 +192,8 @@ defmodule ShotTx.Prover.Worker do
     Stats.incr(state.ets_tables, :branches_instantiate_children, length(branches))
 
     parent_id = state.current_branch.id
+    :ets.delete(state.ets_tables.traces, parent_id)
+    Enum.each(branches, &publish_trace(state.ets_tables, &1))
     child_ids = Enum.map(branches, & &1.id)
 
     notify_ca_sync(state.session_id, {:branch_split, parent_id, child_ids})
@@ -203,7 +208,7 @@ defmodule ShotTx.Prover.Worker do
     bump_rule(state.ets_tables, closed_branch)
 
     branch_id = closed_branch.id
-    trace = Enum.reverse(closed_branch.history)
+    publish_trace(state.ets_tables, closed_branch)
 
     Logger.debug(
       "Worker #{state.id} found local ground closure on #{branch_id}. Initiating tombstone."
@@ -212,12 +217,13 @@ defmodule ShotTx.Prover.Worker do
     :ets.insert(state.ets_tables.tombs, {branch_id, true})
 
     ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-    GenServer.call(ca_via, {:closed, branch_id, trace}, :infinity)
+    GenServer.call(ca_via, {:closed, branch_id}, :infinity)
 
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
   end
 
   defp handle_step_result({:idle, branch}, state) do
+    publish_trace(state.ets_tables, branch)
     :ets.insert(state.ets_tables.idle_queue, {branch.id, branch})
     notify_manager(state.session_id, {:branch_parked, branch.id})
     {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
@@ -226,13 +232,13 @@ defmodule ShotTx.Prover.Worker do
   defp handle_step_result({:saturated, {defs, literals}}, state) do
     Stats.incr(state.ets_tables, :branches_saturated)
 
-    trace = Enum.reverse(state.current_branch.history)
+    publish_trace(state.ets_tables, state.current_branch)
 
     Logger.info(
       "Worker #{state.id} fully saturated branch #{state.current_branch.id}. Found a counter-model!"
     )
 
-    msg = {:branch_saturated, state.current_branch.id, {defs, literals, trace}}
+    msg = {:branch_saturated, state.current_branch.id, {defs, literals}}
 
     notify_manager(state.session_id, msg)
     notify_ca_sync(state.session_id, msg)
@@ -241,11 +247,40 @@ defmodule ShotTx.Prover.Worker do
 
   # --- Effect Application ---
 
-  defp apply_effect({:notify_ca, clashes, trace}, branch, state) do
-    notify_ca_sync(state.session_id, {:local_clashes_sync, branch.id, clashes, trace})
+  defp apply_effect({:notify_ca, clashes}, branch, state) do
+    publish_trace(state.ets_tables, branch)
+    notify_ca_sync(state.session_id, {:local_clashes_sync, branch.id, clashes})
   end
 
   defp apply_effect(:no_effects, _branch, _state), do: :ok
+
+  defp publish_trace(ets_tables, branch) do
+    base = Enum.reverse(branch.history)
+
+    trace =
+      cond do
+        ends_in_hard_closure?(base) -> base
+        is_nil(branch.last_clash) -> base
+        true -> base ++ [clash_marker(branch.last_clash)]
+      end
+
+    :ets.insert(ets_tables.traces, {branch.id, trace})
+  end
+
+  defp ends_in_hard_closure?([]), do: false
+
+  defp ends_in_hard_closure?(base) do
+    case List.last(base) do
+      {_, :contradiction, _} -> true
+      _ -> false
+    end
+  end
+
+  defp clash_marker({:ground, term_id, matchings}),
+    do: {nil, {:close_pair, term_id, matchings}, []}
+
+  defp clash_marker({:unification, term_id, matchings}),
+    do: {nil, {:clash_candidates, term_id, matchings}, []}
 
   ##############################################################################
   # Helpers (ETS Queues & Poisoning)

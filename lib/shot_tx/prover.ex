@@ -13,7 +13,7 @@ defmodule ShotTx.Prover do
           {:thm, ShotTx.Proof.t()}
           | {:csa, String.t(), ShotTx.Proof.t()}
           | :unknown
-          | :timeout
+          | {:timeout, ShotTx.Proof.t()}
           | {:error, term()}
 
   def prove(problem) when is_struct(problem, Problem), do: prove(problem, [])
@@ -72,8 +72,8 @@ defmodule ShotTx.Prover do
       {:unknown, _partial_model} ->
         :unknown
 
-      :timeout ->
-        :timeout
+      {:timeout, partial_proof} ->
+        {:timeout, partial_proof}
 
       {:error, reason} ->
         {:error, reason}
@@ -106,7 +106,7 @@ defmodule ShotTx.Prover do
   def format_result({:thm, _proof}), do: "THM"
   def format_result({:csa, model, _proof}), do: "CSA\n" <> model
   def format_result(:unknown), do: "UNK"
-  def format_result(:timeout), do: "Timeout"
+  def format_result({:timeout, _partial_proof}), do: "Timeout"
   def format_result({:error, reason}), do: "Error: #{inspect(reason)}"
 
   @doc """
@@ -144,8 +144,8 @@ defmodule ShotTx.Prover do
         {:unknown, _} ->
           {:unknown, []}
 
-        :timeout ->
-          :timeout
+        {:timeout, partial_proof} ->
+          {:timeout, partial_proof}
 
         other ->
           other

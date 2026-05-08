@@ -22,7 +22,9 @@ defmodule ShotTx.Prover.EtsKeeper do
           write_concurrency: true
         ]),
       idle_queue:
-        :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true])
+        :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true]),
+      traces:
+        :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true])
     }
 
     :ets.insert(tables.stats, {:proof_started_at_us, System.monotonic_time(:microsecond)})

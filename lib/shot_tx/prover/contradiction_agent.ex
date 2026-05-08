@@ -15,7 +15,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
             active_branches: MapSet.new(),
             clashing_local_pairs: %{},
             branch_closures: %{},
-            branch_traces: %{},
             params: %Parameters{},
             pending_search: nil,
             settle_waiter: nil
@@ -106,22 +105,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, %{state | settle_waiter: from}}
   end
 
-  defp do_handle_call({:local_clashes, branch_id, new_candidates, trace}, _from, state) do
+  defp do_handle_call({:local_clashes, branch_id, new_candidates}, _from, state) do
     {:noreply, new_state} =
-      do_handle_cast({:local_clashes, branch_id, new_candidates, trace}, state)
+      do_handle_cast({:local_clashes, branch_id, new_candidates}, state)
 
     {:reply, :ok, new_state}
   end
 
-  defp do_handle_call({:closed, branch_id, trace}, _from, state) do
-    new_traces = Map.put(state.branch_traces, branch_id, trace)
-
+  defp do_handle_call({:closed, branch_id}, _from, state) do
     new_closures =
       Map.update(state.branch_closures, branch_id, [%UnifSolution{}], fn existing ->
         [%UnifSolution{} | existing]
       end)
 
-    new_state = %{state | branch_closures: new_closures, branch_traces: new_traces}
+    new_state = %{state | branch_closures: new_closures}
 
     {:noreply, new_check_state} = check_global_closure(new_state)
     {:reply, :ok, new_check_state}
@@ -161,38 +158,37 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:reply, :ok, after_check}
   end
 
-  defp do_handle_sync({:branch_closed, branch_id, trace}, state) do
-    new_traces = Map.put(state.branch_traces, branch_id, trace)
-
+  defp do_handle_sync({:branch_closed, branch_id}, state) do
     new_closures =
       Map.update(state.branch_closures, branch_id, [%UnifSolution{}], fn existing ->
         [%UnifSolution{} | existing]
       end)
 
-    new_state = %{state | branch_closures: new_closures, branch_traces: new_traces}
+    new_state = %{state | branch_closures: new_closures}
     {:noreply, after_check} = check_global_closure(new_state)
     {:reply, :ok, after_check}
   end
 
   defp do_handle_sync(
-         {:branch_saturated, branch_id, {model_defs, model_atoms, model_trace}},
+         {:branch_saturated, branch_id, {model_defs, model_atoms}},
          state
        ) do
     new_active = MapSet.delete(state.active_branches, branch_id)
+    traces = read_traces(state)
 
     results = %{
       model_branch_id: branch_id,
       model_atoms: model_atoms,
       model_defs: model_defs,
-      model_trace: model_trace,
-      closed_traces: state.branch_traces
+      model_trace: Map.get(traces, branch_id, []),
+      closed_traces: Map.delete(traces, branch_id)
     }
 
     send_proof_result({:sat, results}, state)
     {:noreply, %{state | active_branches: new_active}}
   end
 
-  defp do_handle_sync({:local_clashes_sync, branch_id, candidates, trace}, state) do
+  defp do_handle_sync({:local_clashes_sync, branch_id, candidates}, state) do
     Logger.debug(
       "Agent received #{MapSet.size(candidates)} new candidates for local closure from #{branch_id}"
     )
@@ -200,13 +196,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
     updated_local_clashes =
       Map.update(state.clashing_local_pairs, branch_id, candidates, &MapSet.union(&1, candidates))
 
-    updated_traces = Map.put(state.branch_traces, branch_id, trace)
-
-    new_state = %{
-      state
-      | clashing_local_pairs: updated_local_clashes,
-        branch_traces: updated_traces
-    }
+    new_state = %{state | clashing_local_pairs: updated_local_clashes}
 
     {:noreply, after_check} = check_global_closure(new_state)
     {:reply, :ok, after_check}
@@ -291,7 +281,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       {:ok, %UnifSolution{substitutions: final_substs, flex_pairs: flex}} ->
         final_map = Map.new(final_substs, fn s -> {s.fvar, s.term_id} end)
 
-        send_proof_result({:unsat, final_map, flex, state.branch_traces}, state)
+        send_proof_result({:unsat, final_map, flex, read_traces(state)}, state)
 
       :error ->
         if Enum.empty?(state.active_branches) do
@@ -306,7 +296,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
-  defp do_handle_cast({:local_clashes, branch_id, new_candidates, trace}, %__MODULE__{} = state) do
+  defp do_handle_cast({:local_clashes, branch_id, new_candidates}, %__MODULE__{} = state) do
     Logger.debug(
       "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
     )
@@ -319,13 +309,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
         &MapSet.union(&1, new_candidates)
       )
 
-    updated_traces = Map.put(state.branch_traces, branch_id, trace)
-
-    new_state = %{
-      state
-      | clashing_local_pairs: updated_local_clashes,
-        branch_traces: updated_traces
-    }
+    new_state = %{state | clashing_local_pairs: updated_local_clashes}
 
     check_global_closure(new_state)
   end
@@ -345,14 +329,15 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
     case open_branches do
       [model_branch_id | _] ->
-        {model_defs, model_atoms, model_trace} = Map.fetch!(saturated_branch_map, model_branch_id)
+        {model_defs, model_atoms} = Map.fetch!(saturated_branch_map, model_branch_id)
+        traces = read_traces(state)
 
         results = %{
           model_branch_id: model_branch_id,
           model_atoms: model_atoms,
           model_defs: model_defs,
-          model_trace: model_trace,
-          closed_traces: state.branch_traces
+          model_trace: Map.get(traces, model_branch_id, []),
+          closed_traces: Map.delete(traces, model_branch_id)
         }
 
         {:sat, results}
@@ -517,10 +502,16 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
     Logger.warning("GLOBAL CLOSURE FOUND! Status: Theorem")
 
-    send_proof_result({:unsat, final_map, flex, state.branch_traces}, state)
+    send_proof_result({:unsat, final_map, flex, read_traces(state)}, state)
 
     {:noreply, state}
   end
+
+  defp read_traces(%__MODULE__{ets_tables: %{traces: table}}) do
+    Map.new(:ets.tab2list(table))
+  end
+
+  defp read_traces(_), do: %{}
 
   defp send_proof_result(result, state) do
     case Map.get(state.ets_tables, :stats) do

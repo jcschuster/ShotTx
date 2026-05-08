@@ -100,7 +100,9 @@ defmodule ShotTx.Prover.Manager do
 
       log_timeout_traces(state)
 
-      GenServer.reply(state.active_caller, {:timeout, stats})
+      partial_proof = ShotTx.Proof.from_partial(gather_traces(state), state.formulas)
+
+      GenServer.reply(state.active_caller, {{:timeout, partial_proof}, stats})
       {:noreply, %{state | active_caller: nil}}
     else
       {:noreply, state}
@@ -294,6 +296,24 @@ defmodule ShotTx.Prover.Manager do
 
     :ets.delete_all_objects(ets_tables.idle_queue)
     %{state | parked_count: 0}
+  end
+
+  defp gather_traces(state) do
+    ets_traces = Map.new(:ets.tab2list(state.ets_tables.traces))
+
+    queue_branches =
+      state.ets_tables.work_queue
+      |> :ets.tab2list()
+      |> Enum.map(fn {_key, branch} -> branch end)
+
+    idle_branches =
+      state.ets_tables.idle_queue
+      |> :ets.tab2list()
+      |> Enum.map(fn {_id, branch} -> branch end)
+
+    Enum.reduce(queue_branches ++ idle_branches, ets_traces, fn branch, acc ->
+      Map.put(acc, branch.id, Enum.reverse(branch.history))
+    end)
   end
 
   defp log_timeout_traces(state) do
