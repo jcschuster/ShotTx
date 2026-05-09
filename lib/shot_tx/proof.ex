@@ -382,7 +382,8 @@ defmodule ShotTx.Proof do
     Enum.reduce(produced, evs, fn p, acc -> [{:rule, src, rule_atom, p} | acc] end)
   end
 
-  defp closure_event({src, :contradiction, _}), do: {:closure, src, :contradiction}
+  defp closure_event({src, :contradiction, partners}),
+    do: {:closure, src, :contradiction, partners}
 
   defp closure_event({_src, {:close_pair, term_id, matchings}, _}),
     do: {:closure_pair, term_id, matchings, :ground}
@@ -422,12 +423,12 @@ defmodule ShotTx.Proof do
     build_formula_step(src, rule_atom, formula, tails, t2l, counter)
   end
 
-  defp make_step({:closure, src, rule_atom}, _tails, t2l, counter) do
+  defp make_step({:closure, src, rule_atom, partners}, _tails, t2l, counter) do
     step = %Step{
       label: counter,
       formula: nil,
       rule: rule_atom,
-      sources: closure_sources(rule_atom, src, t2l),
+      sources: closure_sources(rule_atom, src, partners, t2l),
       kind: :closure,
       children: []
     }
@@ -479,11 +480,11 @@ defmodule ShotTx.Proof do
 
   defp lookup_label(t2l, src), do: Map.get(t2l, src)
 
-  defp closure_sources(:contradiction, src, t2l) do
-    case Map.get(t2l, src) do
-      nil -> []
-      label -> [label]
-    end
+  defp closure_sources(:contradiction, src, partners, t2l) do
+    [src | partners]
+    |> Enum.map(&Map.get(t2l, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   defp closure_pair_sources(src, matchings, t2l) do

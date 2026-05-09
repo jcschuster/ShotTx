@@ -756,84 +756,6 @@ format_result res
 
 a) Functional Extensionality
 
-<!-- livebook:{"break_markdown":true} -->
-
-$$
-\dfrac{(1)~~
-\neg(\forall(\lambda F_{\iota\to\iota}.\forall(\lambda G_{\iota\to\iota}.(F = G \supset \forall(\lambda X_\iota. F~X = G~X)))))}{
-\dfrac{(2)~~
-\neg(\forall(\lambda G_{\iota\to\iota}.(\mathbf{c}_{\iota\to\iota} = G \supset \forall(\lambda X_\iota. \mathbf{c}_{\iota\to\iota}~X = G~X))))}{
-\dfrac{(3)~~
-\neg(\mathbf{c}_{\iota\to\iota} = \mathbf{d}_{\iota\to\iota} \supset \forall(\lambda X_\iota. \mathbf{c}_{\iota\to\iota}~X = \mathbf{d}_{\iota\to\iota}~X))}{
-\dfrac{\begin{gathered}
-(4)~~\mathbf{c}_{\iota\to\iota} = \mathbf{d}_{\iota\to\iota} \\
-(5)~~\neg\forall(\lambda X_\iota. \mathbf{c}_{\iota\to\iota}~X = \mathbf{d}_{\iota\to\iota}~X)
-\end{gathered}}{
-\dfrac{(6)~~
-\forall(\lambda X_\iota. \mathbf{c}_{\iota\to\iota}~X = \mathbf{d}_{\iota\to\iota}~X)}{
-\dfrac{(7)~~
-\neg(\mathbf{c}_{\iota\to\iota}~\mathbf{e}_{\iota} = \mathbf{d}_{\iota\to\iota}~\mathbf{e}_\iota)}{
-\dfrac{(8)~~
-\neg\forall(\lambda P_{\iota\to o}. P~(\mathbf{c}_{\iota\to\iota}~\mathbf{e}_{\iota}) \equiv P~(\mathbf{d}_{\iota\to\iota}~\mathbf{e}_\iota))}{
-\dfrac{(9)~~
-\mathbf{f}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{e}_{\iota}) \equiv \mathbf{f}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{e}_\iota)}{
-\dfrac{(10)~~
-\mathbf{c}_{\iota\to\iota}~\mathbf{X}_\iota = \mathbf{d}_{\iota\to\iota}~\mathbf{X}_\iota}{
-\dfrac{(11)~~
-\forall(\lambda P_{\iota\to o}. P~(\mathbf{c}_{\iota\to\iota}~\mathbf{X}_\iota) \equiv P~(\mathbf{d}_{\iota\to\iota}~\mathbf{X}_\iota))}{
-\dfrac{(12)~~
-\mathbf{Y}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{X}_\iota) \equiv \mathbf{Y}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{X}_\iota)}{
-{
-\dfrac{\begin{gathered}
-(13)~~\mathbf{f}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{e}_{\iota}) \\
-(14)~~\mathbf{f}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{e}_{\iota})
-\end{gathered}}{
-{\dfrac{\begin{gathered}
-(15)~~ \mathbf{Y}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{X}_\iota)\\
-(16)~~ \mathbf{Y}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{X}_\iota)
-\end{gathered}}{
-\begin{gathered}
-\bot (14, 15) \\
-\sigma_1 = [\lambda X.\neg (\mathbf{f}~(\mathbf{c}~\mathbf{e})) / \mathbf{Y}] \\
-\sigma_2 = [\mathbf{e} / \mathbf{X}, (\lambda X. \neg \mathbf{f}~X) / \mathbf{Y}]
-\end{gathered}
-}} \Bigg| {
-\dfrac{\begin{gathered}
-(17)~~ \neg(\mathbf{Y}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{X}_\iota))\\
-(18)~~ \neg(\mathbf{Y}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{X}_\iota))
-\end{gathered}}{
-
-}
-}
-}(\equiv, 12)
-} \Bigg| {
-\dfrac{\begin{gathered}
-(?)~~\neg(\mathbf{f}_{\iota\to o}~(\mathbf{c}_{\iota\to\iota}~\mathbf{e}_{\iota})) \\
-(??)~~\neg(\mathbf{f}_{\iota\to o}~(\mathbf{d}_{\iota\to\iota}~\mathbf{e}_{\iota}))
-\end{gathered}}{
-
-}
-}
-}(\equiv, 9)
-}(\forall,11)
-}(=^\iota, 10)
-}(\forall, 6)
-}(\neg\forall, 8)
-}(\neg=^{\iota}, 7)
-}(\neg\forall, 5)
-}(=^{\iota\to\iota}, 4)
-}(\neg\supset, 3)
-}(\neg\forall, 2)
-}(\neg\forall, 1)
-$$
-
-```elixir
-with_context(~e[f:$i>$o, c:$i>$i, e:$i, Y:$i>$o, X:$i], fn ->
-  ShotUn.unify({~f"Y @ (c @ X)", ~f"~ f @ (c @ e)"}, _depth=8)
-end)
-|> Enum.map_join("\n", &to_string/1) |> IO.puts
-```
-
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
@@ -843,6 +765,14 @@ thf(conj, conjecture,
 
 format_result res
 # THM
+```
+
+```elixir
+ShotTx.Proof.to_text(elem res, 1) |> IO.puts
+```
+
+```elixir
+render res
 ```
 
 ```elixir

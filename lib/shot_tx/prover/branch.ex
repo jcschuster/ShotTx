@@ -60,7 +60,9 @@ defmodule ShotTx.Prover.Branch do
             type_universe: MapSet.new(),
             history: [],
             last_clash: nil,
-            processed_formulas: MapSet.new()
+            processed_rules: MapSet.new(),
+            term_ids: MapSet.new(),
+            pending_closure: nil
 
   @type history_entry ::
           {Term.term_id() | nil, Rules.rule_t(), [Term.term_id()]}
@@ -87,14 +89,17 @@ defmodule ShotTx.Prover.Branch do
 
     skel = %__MODULE__{
       id: id,
-      queue: Enum.reduce(formulas, FPQ.new(), &insert_formula(&2, &1, defs, params)),
+      queue: FPQ.new(),
       defs: defs,
       equations: equations,
       literals: MapSet.new([true_term(), neg(false_term())]),
+      term_ids: MapSet.new([true_term(), neg(false_term())]),
       type_universe: TypeUniverse.from_formulas(formulas)
     }
 
-    Enum.reduce(formulas, skel, &ingest_formula(&2, &1, params))
+    formulas
+    |> Enum.reduce(skel, &insert_formula(&2, &1, defs, params))
+    |> then(fn b -> Enum.reduce(formulas, b, &ingest_formula(&2, &1, params)) end)
   end
 
   ##############################################################################
@@ -106,9 +111,13 @@ defmodule ShotTx.Prover.Branch do
   instructing the Worker on how to proceed. History is recorded inside
   `apply_rule/6`.
   """
-  @spec step(%__MODULE__{}, %Parameters{}, integer(), integer()) :: step_result()
+  @spec step(%__MODULE__{}, %Parameters{}, non_neg_integer(), non_neg_integer()) :: step_result()
   def step(%__MODULE__{} = branch, params, gamma_limit, prim_limit) do
     cond do
+      branch.pending_closure != nil ->
+        {source, partner} = branch.pending_closure
+        {:closed, record(branch, source, :contradiction, [partner])}
+
       FPQ.empty?(branch.queue) and not Enum.empty?(branch.sleeping_gamma_rules) ->
         {:idle, branch}
 
@@ -118,12 +127,12 @@ defmodule ShotTx.Prover.Branch do
       true ->
         {{source, cf}, rest_queue} = FPQ.take_smallest(branch.queue)
         popped_branch = %{branch | queue: rest_queue}
-        processed = branch.processed_formulas
+        processed = branch.processed_rules
 
         if MapSet.member?(processed, cf) do
           step(popped_branch, params, gamma_limit, prim_limit)
         else
-          updated_branch = %{popped_branch | processed_formulas: MapSet.put(processed, cf)}
+          updated_branch = %{popped_branch | processed_rules: MapSet.put(processed, cf)}
           apply_rule(cf, source, updated_branch, params, gamma_limit, prim_limit)
         end
     end
@@ -157,10 +166,9 @@ defmodule ShotTx.Prover.Branch do
   # --- Linear decompositions --------------------------------------------------
 
   defp apply_rule({:alpha, formulas} = rule, source, branch, params, _g_limit, _p_limit) do
-    queue = Enum.reduce(formulas, branch.queue, &insert_formula(&2, &1, branch.defs, params))
-
     updated =
-      %{branch | queue: queue}
+      formulas
+      |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))
       |> ingest_formulas(formulas, params)
       |> record(source, rule, formulas)
 
@@ -169,11 +177,8 @@ defmodule ShotTx.Prover.Branch do
 
   defp apply_rule({:delta, sk_term_id} = rule, source, branch, params, _g_limit, _p_limit) do
     updated =
-      %{
-        branch
-        | queue: insert_formula(branch.queue, sk_term_id, branch.defs, params),
-          type_universe: register_new_types(branch.type_universe, sk_term_id)
-      }
+      %{branch | type_universe: register_new_types(branch.type_universe, sk_term_id)}
+      |> insert_formula(sk_term_id, branch.defs, params)
       |> ingest_formula(sk_term_id, params)
       |> record(source, rule, [sk_term_id])
 
@@ -181,11 +186,12 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp apply_rule({:rename, {t1, t2}} = rule, source, branch, params, _g_limit, _p_limit) do
-    queue = Enum.reduce([t1, t2], branch.queue, &insert_formula(&2, &1, branch.defs, params))
     universe = branch.type_universe |> register_new_types(t1) |> register_new_types(t2)
 
     updated =
-      %{branch | queue: queue, type_universe: universe}
+      %{branch | type_universe: universe}
+      |> insert_formula(t1, branch.defs, params)
+      |> insert_formula(t2, branch.defs, params)
       |> ingest_formulas([t1, t2], params)
       |> record(source, rule, [t1, t2])
 
@@ -198,19 +204,13 @@ defmodule ShotTx.Prover.Branch do
     recorded = record(branch, source, rule, [b1, b2])
 
     my_branch =
-      %{
-        recorded
-        | id: recorded.id <> "_A",
-          queue: insert_formula(recorded.queue, b1, recorded.defs, params)
-      }
+      %{recorded | id: recorded.id <> "_A"}
+      |> insert_formula(b1, recorded.defs, params)
       |> ingest_formula(b1, params)
 
     sib_branch =
-      %{
-        recorded
-        | id: recorded.id <> "_B",
-          queue: insert_formula(recorded.queue, b2, recorded.defs, params)
-      }
+      %{recorded | id: recorded.id <> "_B"}
+      |> insert_formula(b2, recorded.defs, params)
       |> ingest_formula(b2, params)
 
     {:split, my_branch, sib_branch}
@@ -246,7 +246,7 @@ defmodule ShotTx.Prover.Branch do
         %{
           branch
           | sleeping_gamma_rules: [{source, rule} | branch.sleeping_gamma_rules],
-            processed_formulas: MapSet.delete(branch.processed_formulas, rule)
+            processed_rules: MapSet.delete(branch.processed_rules, rule)
         }
         |> record(source, rule, [])
 
@@ -255,10 +255,10 @@ defmodule ShotTx.Prover.Branch do
       instantiated = app(recipe, TF.make_fresh_var_term(type))
       updated_gamma = {:gamma, recipe, type, prev + 1}
 
+      branch_with_inst = insert_formula(branch, instantiated, branch.defs, params)
+
       queue =
-        branch.queue
-        |> insert_formula(instantiated, branch.defs, params)
-        |> reinsert_rule(source, updated_gamma, params.formula_cost)
+        reinsert_rule(branch_with_inst.queue, source, updated_gamma, params.formula_cost)
 
       queue =
         if prev == params.prim_subst_after and type.goal == :o do
@@ -273,7 +273,7 @@ defmodule ShotTx.Prover.Branch do
         end
 
       updated =
-        %{branch | queue: queue}
+        %{branch_with_inst | queue: queue}
         |> ingest_formula(instantiated, params)
         |> record(source, rule, [instantiated])
 
@@ -284,13 +284,9 @@ defmodule ShotTx.Prover.Branch do
   defp apply_rule({:gamma_finite, recipe, type} = rule, source, branch, params, _g, _p) do
     instances = type |> Generation.gen_o() |> Enum.map(&app(recipe, &1))
 
-    queue =
-      Enum.reduce(instances, branch.queue, fn inst, q ->
-        insert_formula(q, inst, branch.defs, params)
-      end)
-
     updated =
-      %{branch | queue: queue}
+      instances
+      |> Enum.reduce(branch, fn inst, b -> insert_formula(b, inst, branch.defs, params) end)
       |> ingest_formulas(instances, params)
       |> record(source, rule, instances)
 
@@ -338,9 +334,9 @@ defmodule ShotTx.Prover.Branch do
     else
       instances = Enum.map(bindings, &app(recipe, &1))
 
-      queue =
-        Enum.reduce(instances, branch.queue, fn inst, q ->
-          insert_formula(q, inst, branch.defs, params)
+      branch_with_insts =
+        Enum.reduce(instances, branch, fn inst, b ->
+          insert_formula(b, inst, branch.defs, params)
         end)
 
       new_progress = %{
@@ -351,7 +347,10 @@ defmodule ShotTx.Prover.Branch do
       new_rule = {:prim_subst, recipe, type, depth, new_progress}
 
       updated =
-        %{branch | queue: reinsert_rule(queue, source, new_rule, params.formula_cost)}
+        %{
+          branch_with_insts
+          | queue: reinsert_rule(branch_with_insts.queue, source, new_rule, params.formula_cost)
+        }
         |> ingest_formulas(instances, params)
         |> record(source, rule, instances)
 
@@ -399,16 +398,10 @@ defmodule ShotTx.Prover.Branch do
             {:continue, updated, :no_effects}
         end
 
-      {unfolded_source, cf} ->
-        queue =
-          FPQ.insert(
-            branch.queue,
-            {unfolded_source, cf},
-            params.formula_cost.(cf)
-          )
-
+      {unfolded_source, _cf} ->
         updated =
-          %{branch | queue: queue}
+          branch
+          |> insert_formula(unfolded_source, branch.defs, params)
           |> ingest_formula(unfolded_source, params)
           |> record(source, rule, [unfolded_source])
 
@@ -430,13 +423,10 @@ defmodule ShotTx.Prover.Branch do
       |> Enum.reduce([], fn {{b_term, {decl, tid}}, idx}, acc_branches ->
         defs = Map.put(recorded.defs, decl, tid)
 
-        queue =
-          recorded.literals
-          |> unfold_literals(recorded.queue, defs, params.formula_cost)
-          |> insert_formula(b_term, defs, params)
-
         c_branch =
-          %{recorded | id: "#{recorded.id}_I#{idx}", queue: queue, defs: defs}
+          %{recorded | id: "#{recorded.id}_I#{idx}", defs: defs}
+          |> unfold_literals(recorded.literals, defs, params)
+          |> insert_formula(b_term, defs, params)
           |> ingest_formula(b_term, params)
 
         [c_branch | acc_branches]
@@ -489,10 +479,26 @@ defmodule ShotTx.Prover.Branch do
     Enum.reduce(args, universe, &register_new_types(&2, &1))
   end
 
-  defp insert_formula(queue, formula, defs, %Parameters{} = params) do
+  defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params) do
     effective = maybe_unfold(formula, defs, params)
     cf = Rules.classify_formula(effective)
-    FPQ.insert(queue, {effective, cf}, params.formula_cost.(cf))
+
+    pending =
+      case branch.pending_closure do
+        nil ->
+          neg = lit_neg(effective)
+          if MapSet.member?(branch.term_ids, neg), do: {effective, neg}, else: nil
+
+        existing ->
+          existing
+      end
+
+    %{
+      branch
+      | queue: FPQ.insert(branch.queue, {effective, cf}, params.formula_cost.(cf)),
+        term_ids: MapSet.put(branch.term_ids, effective),
+        pending_closure: pending
+    }
   end
 
   defp reinsert_rule(queue, source, rule, cost_fn) do
@@ -534,14 +540,11 @@ defmodule ShotTx.Prover.Branch do
 
         new_eq_only = %{lhs => MapSet.new([rhs]), rhs => MapSet.new([lhs])}
 
-        new_queue =
-          Enum.reduce(branch.literals, branch.queue, fn lit, q ->
-            lit
-            |> Paramodulation.paramodulants(new_eq_only)
-            |> Enum.reduce(q, &insert_formula(&2, &1, branch.defs, params))
-          end)
-
-        %{branch | equations: new_equations, queue: new_queue}
+        Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
+          lit
+          |> Paramodulation.paramodulants(new_eq_only)
+          |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
+        end)
 
       _ ->
         branch
@@ -554,12 +557,9 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp paramodulate_literal_with_equations(branch, term_id, params) do
-    queue =
-      term_id
-      |> Paramodulation.paramodulants(branch.equations)
-      |> Enum.reduce(branch.queue, &insert_formula(&2, &1, branch.defs, params))
-
-    %{branch | queue: queue}
+    term_id
+    |> Paramodulation.paramodulants(branch.equations)
+    |> Enum.reduce(branch, fn p, b -> insert_formula(b, p, b.defs, params) end)
   end
 
   defp record(branch, source, rule, produced) do
@@ -576,11 +576,11 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  defp unfold_literals(literals, queue, defs, cost_fn) do
-    Enum.reduce(literals, queue, fn tid, q ->
+  defp unfold_literals(branch, literals, defs, %Parameters{} = params) do
+    Enum.reduce(literals, branch, fn tid, b ->
       case unfold_if_possible(tid, defs) do
-        nil -> q
-        {_source, cf} = wrapped -> FPQ.insert(q, wrapped, cost_fn.(cf))
+        nil -> b
+        {unfolded, _cf} -> insert_formula(b, unfolded, defs, params)
       end
     end)
   end
