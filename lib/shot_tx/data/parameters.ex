@@ -7,6 +7,7 @@ defmodule ShotTx.Data.Parameters do
             prim_subst_after: 1,
             prim_subst_batch_size: 8,
             unification_depth: 8,
+            unfold_defs: :lazy,
             formula_cost: &Rules.rule_cost/1
 
   @type t :: %__MODULE__{
@@ -15,6 +16,7 @@ defmodule ShotTx.Data.Parameters do
           initial_prim_limit: pos_integer(),
           prim_subst_batch_size: pos_integer(),
           unification_depth: pos_integer(),
+          unfold_defs: :lazy | :eager,
           formula_cost: (Rules.rule_t() -> non_neg_integer())
         }
 end
