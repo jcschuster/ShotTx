@@ -57,21 +57,35 @@ defmodule ShotTx.Generation.GeneralBindings do
 
   @doc """
   Returns polymorphic head specifications over the given set of `types` at the
-  given `depth`. At depth 1 this produces flat heads; at depth $\\geq 2$ it
-  additionally produces compositions with propositional connectives.
+  given `depth`. Equality heads come first; quantifier heads come last so they
+  are tried much later in proof search.
   """
   @spec polymorphic_heads([Type.t()], pos_integer(), Enumerable.t(Type.t())) :: [head_spec()]
   def polymorphic_heads(arg_types, depth, types) do
     hole = Type.new(:o, arg_types)
 
     flat_equality_heads(arg_types, types) ++
-      flat_quantifier_heads(arg_types, types) ++
       if depth >= 2 do
         composed_equality_heads(arg_types, hole, types) ++
+          flat_quantifier_heads(arg_types, types) ++
           composed_quantifier_heads(arg_types, hole, types)
       else
         []
       end
+  end
+
+  @doc """
+  Returns unit-set head specifications: for each constant `c` of type $\\tau$,
+  produces $\\lambda\\overline{y}.\\;(H\\;\\overline{y}) =_\\tau c$ with a single
+  hole $H : \\overline{\\alpha} \\to \\tau$.
+  """
+  @spec unit_set_heads([Type.t()], Enumerable.t(Declaration.const_t())) :: [head_spec()]
+  def unit_set_heads(arg_types, constants) do
+    Enum.map(constants, fn %Declaration{type: c_type} = decl ->
+      h_type = Type.new(c_type, arg_types)
+      c_term = TF.make_term(decl)
+      {fn [h] -> app(equals_term(c_type), [h, c_term]) end, [h_type]}
+    end)
   end
 
   @doc """

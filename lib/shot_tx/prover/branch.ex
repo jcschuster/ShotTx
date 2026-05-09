@@ -49,7 +49,13 @@ defmodule ShotTx.Prover.Branch do
   import ShotDs.Hol.Dsl
   import ShotDs.Hol.Patterns
 
-  @fresh_progress %{base_offset: 0, covered_types: MapSet.new()}
+  @fresh_progress %{
+    base_offset: 0,
+    covered_types: MapSet.new(),
+    covered_constants: MapSet.new()
+  }
+
+  @hol_connective_names ~w(⊤ ⊥ ¬ ∨ ∧ ⊃ ≡ = ∀ ∃)
 
   defstruct id: nil,
             queue: nil,
@@ -213,7 +219,18 @@ defmodule ShotTx.Prover.Branch do
       |> insert_formula(b2, recorded.defs, params)
       |> ingest_formula(b2, params)
 
-    {:split, my_branch, sib_branch}
+    if not params.beta_variant do
+      {:split, my_branch, sib_branch}
+    else
+      additional = neg(b1)
+
+      variant_sib_branch =
+        sib_branch
+        |> insert_formula(additional, recorded.defs, params)
+        |> ingest_formula(additional, params)
+
+      {:split, my_branch, variant_sib_branch}
+    end
   end
 
   # --- Instantiation (dual: original literal is also kept on the branch) -----
@@ -307,6 +324,24 @@ defmodule ShotTx.Prover.Branch do
     args = type.args
 
     new_types = MapSet.difference(branch.type_universe, progress.covered_types)
+    current_constants = branch_constants(branch)
+    new_constants = MapSet.difference(current_constants, progress.covered_constants)
+
+    base =
+      args
+      |> GeneralBindings.base_heads(depth)
+      |> Enum.drop(progress.base_offset)
+      |> Enum.take(batch)
+      |> Enum.map(&GeneralBindings.build_binding(args, &1))
+
+    unit_set =
+      if MapSet.size(new_constants) > 0 do
+        args
+        |> GeneralBindings.unit_set_heads(new_constants)
+        |> Enum.map(&GeneralBindings.build_binding(args, &1))
+      else
+        []
+      end
 
     poly =
       if MapSet.size(new_types) > 0 do
@@ -317,17 +352,7 @@ defmodule ShotTx.Prover.Branch do
         []
       end
 
-    covered = MapSet.union(progress.covered_types, new_types)
-    base_cap = max(0, batch - length(poly))
-
-    base =
-      args
-      |> GeneralBindings.base_heads(depth)
-      |> Enum.drop(progress.base_offset)
-      |> Enum.take(base_cap)
-      |> Enum.map(&GeneralBindings.build_binding(args, &1))
-
-    bindings = poly ++ base
+    bindings = base ++ unit_set ++ poly
 
     if bindings == [] do
       advance_or_sleep(recipe, type, depth, branch, params, prim_limit, source, rule)
@@ -341,7 +366,8 @@ defmodule ShotTx.Prover.Branch do
 
       new_progress = %{
         base_offset: progress.base_offset + length(base),
-        covered_types: covered
+        covered_types: MapSet.union(progress.covered_types, new_types),
+        covered_constants: MapSet.union(progress.covered_constants, new_constants)
       }
 
       new_rule = {:prim_subst, recipe, type, depth, new_progress}
@@ -461,6 +487,26 @@ defmodule ShotTx.Prover.Branch do
       end
 
     {:continue, record(updated_branch, source, source_rule, []), :no_effects}
+  end
+
+  @spec branch_constants(%__MODULE__{}) :: MapSet.t(Declaration.const_t())
+  defp branch_constants(branch) do
+    branch.term_ids
+    |> Enum.flat_map(&collect_constants/1)
+    |> Enum.reject(fn %Declaration{name: name} -> name in @hol_connective_names end)
+    |> Enum.into(MapSet.new())
+  end
+
+  defp collect_constants(term_id) do
+    %Term{head: head, args: args} = TF.get_term!(term_id)
+
+    head_consts =
+      case head do
+        %Declaration{kind: :co} = decl -> [decl]
+        _ -> []
+      end
+
+    head_consts ++ Enum.flat_map(args, &collect_constants/1)
   end
 
   @spec register_new_types(MapSet.t(Type.t()), Term.term_id()) :: MapSet.t(Type.t())

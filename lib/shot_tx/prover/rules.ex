@@ -6,7 +6,6 @@ defmodule ShotTx.Prover.Rules do
   import ShotDs.Hol.Dsl
   import ShotTx.Generation
   use ShotDs.Hol.Patterns
-  require Logger
 
   @typep definition_t :: {Declaration.t(), Term.term_id()}
 

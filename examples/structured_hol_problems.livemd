@@ -768,14 +768,6 @@ format_result res
 ```
 
 ```elixir
-ShotTx.Proof.to_text(elem res, 1) |> IO.puts
-```
-
-```elixir
-render res
-```
-
-```elixir
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
@@ -893,7 +885,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir

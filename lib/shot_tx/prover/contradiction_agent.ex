@@ -431,8 +431,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     branch_candidate_lists
     |> cartesian_product()
     |> Enum.find_value(:error, fn pair_choice ->
-      Logger.debug("CSP trying #{length(pair_choice)} pairs: #{inspect(pair_choice)}")
-
       case ShotUn.unify(pair_choice, depth) |> Enum.take(1) do
         [sol] ->
           Logger.debug("CSP succeeded with: #{inspect(sol.substitutions)}")
