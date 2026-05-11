@@ -64,6 +64,8 @@ defmodule ShotTx.Prover.Branch do
             literals: MapSet.new(),
             sleeping_gamma_rules: [],
             type_universe: MapSet.new(),
+            ground_terms: %{},
+            gamma_recipes: %{},
             history: [],
             last_clash: nil,
             processed_rules: MapSet.new(),
@@ -269,13 +271,28 @@ defmodule ShotTx.Prover.Branch do
 
       {:continue, updated, :no_effects}
     else
-      instantiated = app(recipe, TF.make_fresh_var_term(type))
+      fresh_inst = app(recipe, TF.make_fresh_var_term(type))
+
+      {branch_for_inserts, ground_insts} =
+        if prev == 0 do
+          ground_terms = Map.get(branch.ground_terms, type, MapSet.new())
+          insts = Enum.map(ground_terms, &app(recipe, &1))
+          {register_gamma_recipe(branch, type, source, recipe), insts}
+        else
+          {branch, []}
+        end
+
+      all_insts = [fresh_inst | ground_insts]
+
+      branch_with_insts =
+        Enum.reduce(all_insts, branch_for_inserts, fn inst, b ->
+          insert_formula(b, inst, b.defs, params)
+        end)
+
       updated_gamma = {:gamma, recipe, type, prev + 1}
 
-      branch_with_inst = insert_formula(branch, instantiated, branch.defs, params)
-
       queue =
-        reinsert_rule(branch_with_inst.queue, source, updated_gamma, params.formula_cost)
+        reinsert_rule(branch_with_insts.queue, source, updated_gamma, params.formula_cost)
 
       queue =
         if prev == params.prim_subst_after and type.goal == :o do
@@ -290,9 +307,9 @@ defmodule ShotTx.Prover.Branch do
         end
 
       updated =
-        %{branch_with_inst | queue: queue}
-        |> ingest_formula(instantiated, params)
-        |> record(source, rule, [instantiated])
+        %{branch_with_insts | queue: queue}
+        |> ingest_formulas(all_insts, params)
+        |> record(source, rule, all_insts)
 
       {:continue, updated, :no_effects}
     end
@@ -492,21 +509,84 @@ defmodule ShotTx.Prover.Branch do
   @spec branch_constants(%__MODULE__{}) :: MapSet.t(Declaration.const_t())
   defp branch_constants(branch) do
     branch.term_ids
-    |> Enum.flat_map(&collect_constants/1)
+    |> Enum.flat_map(&TF.get_term!(&1).consts)
     |> Enum.reject(fn %Declaration{name: name} -> name in @hol_connective_names end)
     |> Enum.into(MapSet.new())
   end
 
-  defp collect_constants(term_id) do
-    %Term{head: head, args: args} = TF.get_term!(term_id)
+  ##############################################################################
+  # GROUND-TERM INDEXING & GAMMA SATURATION
+  ##############################################################################
 
-    head_consts =
-      case head do
-        %Declaration{kind: :co} = decl -> [decl]
-        _ -> []
+  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`.
+  # Each new closed subterm is added to the type-indexed map, and for every
+  # registered gamma recipe of matching type, an instantiation `app(recipe, sub)`
+  # is enqueued onto the branch (recursing through `insert_formula` so further
+  # ground subterms cascade naturally).
+  defp register_ground_subterms(%__MODULE__{} = branch, term_id, params) do
+    new_by_type = collect_new_closed_subterms(term_id, branch.ground_terms)
+
+    if map_size(new_by_type) == 0 do
+      branch
+    else
+      branch
+      |> merge_ground_terms(new_by_type)
+      |> enqueue_for_registered_recipes(new_by_type, params)
+    end
+  end
+
+  defp collect_new_closed_subterms(term_id, existing_index) do
+    term_id
+    |> Paramodulation.subterms()
+    |> Enum.reduce(%{}, fn sub_id, acc ->
+      sub = TF.get_term!(sub_id)
+
+      if closed_subterm?(sub) do
+        existing = Map.get(existing_index, sub.type, MapSet.new())
+
+        if MapSet.member?(existing, sub_id) do
+          acc
+        else
+          Map.update(acc, sub.type, MapSet.new([sub_id]), &MapSet.put(&1, sub_id))
+        end
+      else
+        acc
       end
+    end)
+  end
 
-    head_consts ++ Enum.flat_map(args, &collect_constants/1)
+  defp closed_subterm?(%Term{fvars: fvars, bvars: bvars, max_num: max_num}) do
+    fvars == [] and max_num <= length(bvars)
+  end
+
+  defp merge_ground_terms(branch, new_by_type) do
+    updated =
+      Enum.reduce(new_by_type, branch.ground_terms, fn {type, terms}, acc ->
+        Map.update(acc, type, terms, &MapSet.union(&1, terms))
+      end)
+
+    %{branch | ground_terms: updated}
+  end
+
+  defp enqueue_for_registered_recipes(branch, new_by_type, params) do
+    Enum.reduce(new_by_type, branch, fn {type, terms}, acc_branch ->
+      recipes = Map.get(acc_branch.gamma_recipes, type, MapSet.new())
+
+      if MapSet.size(recipes) == 0 do
+        acc_branch
+      else
+        Enum.reduce(terms, acc_branch, fn ground_term, b ->
+          Enum.reduce(recipes, b, fn {_source, recipe}, b2 ->
+            insert_formula(b2, app(recipe, ground_term), b2.defs, params)
+          end)
+        end)
+      end
+    end)
+  end
+
+  defp register_gamma_recipe(branch, type, source, recipe) do
+    set = Map.get(branch.gamma_recipes, type, MapSet.new()) |> MapSet.put({source, recipe})
+    %{branch | gamma_recipes: Map.put(branch.gamma_recipes, type, set)}
   end
 
   @spec register_new_types(MapSet.t(Type.t()), Term.term_id()) :: MapSet.t(Type.t())
@@ -539,12 +619,14 @@ defmodule ShotTx.Prover.Branch do
           existing
       end
 
-    %{
+    base = %{
       branch
       | queue: FPQ.insert(branch.queue, {effective, cf}, params.formula_cost.(cf)),
         term_ids: MapSet.put(branch.term_ids, effective),
         pending_closure: pending
     }
+
+    register_ground_subterms(base, effective, params)
   end
 
   defp reinsert_rule(queue, source, rule, cost_fn) do

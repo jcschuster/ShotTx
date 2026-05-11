@@ -8,5 +8,8 @@
     "ghcr.io/rabdulwahhab/devcontainer-features/elixir-asdf:1": {
       "version": "latest"
     }
+  },
+  "build": {
+    "dockerfile": "Dockerfile"
   }
 }

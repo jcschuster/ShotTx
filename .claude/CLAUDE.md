@@ -36,10 +36,19 @@ notify info "Starting test suite..."
 - Use `question` when you're blocked and need user input
 - Keep messages concise (the host will announce them via audio)
 - Don't over-notify - only for significant events
-- You have `rg` (ripgrep) as tool available which is significantly faster than `grep`
+
+# CLI Tools
+
+You have the following modern CLI tools available that are to be preferred over the traditional ones:
+
+- `fzf`: a fuzzy-finder
+- `rg`: like `grep` but significantly faster
+- `ast-grep`: like `grep` but works on abstract syntax trees
+- `fd`: a faster and more user-friendly alternative to `find`
 
 # Engineering Directives
 
+- **TODO List:** Always show a todo list with your current goals.
 - **Minimalism:** Do not overengineer. Use the simplest tool for the job. Favor Elixir's standard library over complex custom abstractions.
 - **Architecture:** Follow Clean Architecture principles. Maintain clear boundaries between your core logic and external interfaces (Livebook, Database).
 
