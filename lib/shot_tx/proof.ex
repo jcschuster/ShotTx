@@ -40,7 +40,8 @@ defmodule ShotTx.Proof do
   layout via `to_text/1`.
   """
 
-  alias ShotDs.Data.Term
+  alias ShotDs.Data.{Term, Type}
+  alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.Dsl, only: [neg: 1]
   import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0]
   import ShotDs.Util.Formatter
@@ -320,11 +321,11 @@ defmodule ShotTx.Proof do
   defp interior_event({_src, :contradiction, _}, state), do: state
 
   defp interior_event({src, {:alpha, _}, produced}, {evs, segs}) do
-    {fold_rule_events(:alpha, src, produced, evs), segs}
+    {fold_rule_events(concrete_alpha(src), src, produced, evs), segs}
   end
 
   defp interior_event({src, {:delta, _}, [sk]}, {evs, segs}) do
-    {[{:rule, src, :delta, sk} | evs], segs}
+    {[{:rule, src, concrete_delta(src), sk} | evs], segs}
   end
 
   defp interior_event({src, {:rename, _}, produced}, {evs, segs}) do
@@ -332,11 +333,11 @@ defmodule ShotTx.Proof do
   end
 
   defp interior_event({src, {:beta, {b1, _b2}}, _produced}, {evs, ["A" | rest]}) do
-    {[{:branch, src, :beta, b1} | evs], rest}
+    {[{:branch, src, concrete_beta(src), b1} | evs], rest}
   end
 
   defp interior_event({src, {:beta, {_b1, b2}}, _produced}, {evs, ["B" | rest]}) do
-    {[{:branch, src, :beta, b2} | evs], rest}
+    {[{:branch, src, concrete_beta(src), b2} | evs], rest}
   end
 
   defp interior_event({_src, {:instantiate, _, 0}, _}, state), do: state
@@ -349,14 +350,18 @@ defmodule ShotTx.Proof do
     {[{:branch, src, :instantiate, chosen} | evs], rest}
   end
 
-  defp interior_event({src, {:gamma, _, _, _}, [inst]}, {evs, segs}) do
-    {[{:rule, src, :gamma, inst} | evs], segs}
-  end
-
   defp interior_event({_src, {:gamma, _, _, _}, []}, state), do: state
 
+  defp interior_event({src, {:gamma, _, _, _}, [_ | _] = instances}, {evs, segs}) do
+    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
+  end
+
+  defp interior_event({src, {:gamma_ground, _, _}, [_ | _] = instances}, {evs, segs}) do
+    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
+  end
+
   defp interior_event({src, {:gamma_finite, _, _}, [_ | _] = instances}, {evs, segs}) do
-    {fold_rule_events(:gamma_finite, src, instances, evs), segs}
+    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
   end
 
   defp interior_event({_src, {:gamma_finite, _, _}, []}, state), do: state
@@ -373,13 +378,81 @@ defmodule ShotTx.Proof do
 
   defp interior_event({_src, {:atomic, _}, []}, state), do: state
 
+  defp interior_event({_src, :paramodulation, []}, state), do: state
+
+  defp interior_event({src, :paramodulation, [_ | _] = paramodulants}, {evs, segs}) do
+    {fold_rule_events(:paramodulation, src, paramodulants, evs), segs}
+  end
+
+  defp interior_event({src, :beta_variant, [additional]}, {evs, segs}) do
+    {[{:rule, src, :beta_variant, additional} | evs], segs}
+  end
+
   defp interior_event({_src, {:close_pair, _, _}, _}, state), do: state
   defp interior_event({_src, {:clash_candidates, _, _}, _}, state), do: state
 
-  defp interior_event(_unhandled, state), do: state
+  defp interior_event(unhandled, _state) do
+    raise "ShotTx.Proof.interior_event/2: unhandled trace entry #{inspect(unhandled)}"
+  end
 
   defp fold_rule_events(rule_atom, src, produced, evs) do
     Enum.reduce(produced, evs, fn p, acc -> [{:rule, src, rule_atom, p} | acc] end)
+  end
+
+  ##############################################################################
+  # CONCRETE RULE RESOLUTION
+  #
+  # Each event carries a category (:alpha, :beta, :gamma, :delta). The actual
+  # logical rule used depends on the source formula's shape — e.g. ∧-elim vs.
+  # ¬∨ (de Morgan) both classify as :alpha. We resolve the concrete name from
+  # the source term so the proof viz can show "∧E" instead of just "α".
+  ##############################################################################
+
+  defp concrete_alpha(src_id) do
+    case TF.get_term!(src_id) do
+      negated(inner) -> concrete_neg_alpha(TF.get_term!(inner))
+      conjunction(_, _) -> :conj
+      typed_equality(_, _, %Type{goal: :o, args: []}) -> :eq_bool
+      typed_equality(_, _, %Type{args: [_ | _]}) -> :eq_ext
+      typed_equality(_, _, _) -> :eq_leib
+      _ -> :alpha
+    end
+  end
+
+  defp concrete_neg_alpha(negated(_)), do: :dneg
+  defp concrete_neg_alpha(disjunction(_, _)), do: :ndisj
+  defp concrete_neg_alpha(implication(_, _)), do: :nimpl
+  defp concrete_neg_alpha(typed_equality(_, _, %Type{goal: :o, args: []})), do: :neq_bool
+  defp concrete_neg_alpha(typed_equality(_, _, %Type{args: [_ | _]})), do: :neq_ext
+  defp concrete_neg_alpha(typed_equality(_, _, _)), do: :neq_leib
+  defp concrete_neg_alpha(_), do: :alpha
+
+  defp concrete_beta(src_id) do
+    case TF.get_term!(src_id) do
+      negated(inner) -> concrete_neg_beta(TF.get_term!(inner))
+      disjunction(_, _) -> :disj
+      implication(_, _) -> :impl
+      equivalence(_, _) -> :equiv
+      _ -> :beta
+    end
+  end
+
+  defp concrete_neg_beta(conjunction(_, _)), do: :nconj
+  defp concrete_neg_beta(equivalence(_, _)), do: :nequiv
+  defp concrete_neg_beta(_), do: :beta
+
+  defp concrete_gamma(src_id) do
+    case TF.get_term!(src_id) do
+      negated(_) -> :nexists
+      _ -> :forall
+    end
+  end
+
+  defp concrete_delta(src_id) do
+    case TF.get_term!(src_id) do
+      negated(_) -> :nforall
+      _ -> :exists
+    end
   end
 
   defp closure_event({src, :contradiction, partners}),
@@ -749,12 +822,38 @@ defmodule ShotTx.Proof do
   # SHARED RULE SYMBOL TABLE
   ##############################################################################
 
+  # Concrete rules
+  defp rule_symbol(:conj), do: "∧"
+  defp rule_symbol(:ndisj), do: "¬∨"
+  defp rule_symbol(:nimpl), do: "¬⊃"
+  defp rule_symbol(:dneg), do: "¬¬"
+  defp rule_symbol(:eq_bool), do: "=ₒ"
+  defp rule_symbol(:eq_ext), do: "=ext"
+  defp rule_symbol(:eq_leib), do: "=leib"
+  defp rule_symbol(:neq_bool), do: "¬=ₒ"
+  defp rule_symbol(:neq_ext), do: "¬=ext"
+  defp rule_symbol(:neq_leib), do: "¬=leib"
+  defp rule_symbol(:disj), do: "∨"
+  defp rule_symbol(:impl), do: "⊃"
+  defp rule_symbol(:equiv), do: "≡"
+  defp rule_symbol(:nconj), do: "¬∧"
+  defp rule_symbol(:nequiv), do: "¬≡"
+  defp rule_symbol(:forall), do: "∀"
+  defp rule_symbol(:nexists), do: "¬∃"
+  defp rule_symbol(:exists), do: "∃"
+  defp rule_symbol(:nforall), do: "¬∀"
+  defp rule_symbol(:beta_variant), do: "β-var"
+
+  # Categorical fallbacks (used when the source shape didn't match a concrete rule)
   defp rule_symbol(:alpha), do: "α"
   defp rule_symbol(:beta), do: "β"
   defp rule_symbol(:gamma), do: "γ"
   defp rule_symbol(:gamma_finite), do: "γ_fin"
   defp rule_symbol(:delta), do: "δ"
+
+  # Specialised / non-classical rules
   defp rule_symbol(:prim_subst), do: "π"
+  defp rule_symbol(:paramodulation), do: "para"
   defp rule_symbol(:rename), do: "ren"
   defp rule_symbol(:instantiate), do: "inst"
   defp rule_symbol(:unfold), do: "unfold"

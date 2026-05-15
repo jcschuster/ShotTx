@@ -230,6 +230,7 @@ defmodule ShotTx.Prover.Branch do
         sib_branch
         |> insert_formula(additional, recorded.defs, params)
         |> ingest_formula(additional, params)
+        |> record(source, :beta_variant, [additional])
 
       {:split, my_branch, variant_sib_branch}
     end
@@ -572,15 +573,13 @@ defmodule ShotTx.Prover.Branch do
     Enum.reduce(new_by_type, branch, fn {type, terms}, acc_branch ->
       recipes = Map.get(acc_branch.gamma_recipes, type, MapSet.new())
 
-      if MapSet.size(recipes) == 0 do
-        acc_branch
-      else
-        Enum.reduce(terms, acc_branch, fn ground_term, b ->
-          Enum.reduce(recipes, b, fn {_source, recipe}, b2 ->
-            insert_formula(b2, app(recipe, ground_term), b2.defs, params)
-          end)
-        end)
-      end
+      Enum.reduce(recipes, acc_branch, fn {source, recipe}, b ->
+        instances = Enum.map(terms, &app(recipe, &1))
+
+        instances
+        |> Enum.reduce(b, fn inst, b2 -> insert_formula(b2, inst, b2.defs, params) end)
+        |> record(source, {:gamma_ground, recipe, type}, instances)
+      end)
     end)
   end
 
@@ -669,9 +668,15 @@ defmodule ShotTx.Prover.Branch do
         new_eq_only = %{lhs => MapSet.new([rhs]), rhs => MapSet.new([lhs])}
 
         Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
-          lit
-          |> Paramodulation.paramodulants(new_eq_only)
-          |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
+          case Paramodulation.paramodulants(lit, new_eq_only) do
+            [] ->
+              b
+
+            paramodulants ->
+              paramodulants
+              |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
+              |> record(lit, :paramodulation, paramodulants)
+          end
         end)
 
       _ ->
@@ -685,9 +690,15 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp paramodulate_literal_with_equations(branch, term_id, params) do
-    term_id
-    |> Paramodulation.paramodulants(branch.equations)
-    |> Enum.reduce(branch, fn p, b -> insert_formula(b, p, b.defs, params) end)
+    case Paramodulation.paramodulants(term_id, branch.equations) do
+      [] ->
+        branch
+
+      paramodulants ->
+        paramodulants
+        |> Enum.reduce(branch, fn p, b -> insert_formula(b, p, b.defs, params) end)
+        |> record(term_id, :paramodulation, paramodulants)
+    end
   end
 
   defp record(branch, source, rule, produced) do
@@ -707,8 +718,13 @@ defmodule ShotTx.Prover.Branch do
   defp unfold_literals(branch, literals, defs, %Parameters{} = params) do
     Enum.reduce(literals, branch, fn tid, b ->
       case unfold_if_possible(tid, defs) do
-        nil -> b
-        {unfolded, _cf} -> insert_formula(b, unfolded, defs, params)
+        nil ->
+          b
+
+        {unfolded, _cf} ->
+          b
+          |> insert_formula(unfolded, defs, params)
+          |> record(tid, {:atomic, tid}, [unfolded])
       end
     end)
   end
