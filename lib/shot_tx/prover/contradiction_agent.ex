@@ -43,7 +43,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   @impl true
   def handle_info(event, state) do
     if aborted?(state) do
-      {:noreply, state}
+      {:noreply, cancel_pending_search(state)}
     else
       do_handle_info(event, state)
     end
@@ -52,7 +52,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   @impl true
   def handle_cast(event, state) do
     if aborted?(state) do
-      {:noreply, state}
+      {:noreply, cancel_pending_search(state)}
     else
       do_handle_cast(event, state)
     end
@@ -60,22 +60,17 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   @impl true
   def handle_call(:settle, from, state) do
-    case Map.get(state.ets_tables, :stats) do
-      stats when not is_nil(stats) ->
-        case :ets.lookup(stats, :aborted) do
-          [{:aborted, true}] -> {:reply, :closed, state}
-          _ -> do_settle(from, state)
-        end
-
-      _ ->
-        do_settle(from, state)
+    if aborted?(state) do
+      {:reply, :closed, cancel_pending_search(state)}
+    else
+      do_settle(from, state)
     end
   end
 
   @impl true
   def handle_call(event, from, state) do
     if aborted?(state) do
-      {:reply, :aborted, state}
+      {:reply, :aborted, cancel_pending_search(state)}
     else
       do_handle_call(event, from, state)
     end
@@ -90,14 +85,18 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   # --- CALL CALLBACKS ---------------------------------------------------------
 
-  defp do_settle(_from, %{pending_search: nil} = state) do
-    case check_global_closure_sync(state) do
-      {:ok, solution} ->
-        broadcast_unsat(solution, state)
-        {:reply, :closed, state}
+  defp do_settle(from, %{pending_search: nil} = state) do
+    branch_clash_lists =
+      Enum.map(state.active_branches, fn b_id ->
+        get_inherited_clashes(b_id, state) |> Enum.to_list()
+      end)
 
-      :error ->
-        {:reply, :open, state}
+    if some_branch_cannot_close?(state, branch_clash_lists) do
+      Stats.incr(state.ets_tables, :csp_calls_skipped)
+      {:reply, :open, state}
+    else
+      {:noreply, new_state} = dispatch_csp(state, branch_clash_lists)
+      {:noreply, %{new_state | settle_waiter: from}}
     end
   end
 
@@ -206,21 +205,36 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   defp do_handle_info(
          {ref, {:closure, solution}},
-         %{pending_search: ref, settle_waiter: waiter} = state
+         %{pending_search: %Task{ref: ref}, settle_waiter: waiter} = state
        ) do
     Process.demonitor(ref, [:flush])
-    broadcast_unsat(solution, state)
+    cleared = %{state | pending_search: nil, settle_waiter: nil}
+    broadcast_unsat(solution, cleared)
 
     if waiter != nil do
       GenServer.reply(waiter, :closed)
     end
 
+    {:noreply, cleared}
+  end
+
+  defp do_handle_info(
+         {ref, :no_closure},
+         %{pending_search: %Task{ref: ref}, settle_waiter: waiter} = state
+       ) do
+    Process.demonitor(ref, [:flush])
+
+    if waiter != nil do
+      GenServer.reply(waiter, :open)
+    end
+
     {:noreply, %{state | pending_search: nil, settle_waiter: nil}}
   end
 
-  defp do_handle_info({ref, :no_closure}, %{pending_search: ref, settle_waiter: waiter} = state) do
-    Process.demonitor(ref, [:flush])
-
+  defp do_handle_info(
+         {:DOWN, ref, :process, _pid, _reason},
+         %{pending_search: %Task{ref: ref}, settle_waiter: waiter} = state
+       ) do
     if waiter != nil do
       GenServer.reply(waiter, :open)
     end
@@ -370,20 +384,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  defp check_global_closure_sync(state) do
-    branch_clash_lists =
-      Enum.map(state.active_branches, fn b_id ->
-        get_inherited_clashes(b_id, state) |> Enum.to_list()
-      end)
-
-    if some_branch_cannot_close?(state, branch_clash_lists) do
-      :error
-    else
-      sorted = Enum.sort_by(branch_clash_lists, &length/1)
-      solve_groups(sorted, state.params.unification_depth)
-    end
-  end
-
   defp some_branch_cannot_close?(state, branch_clash_lists) do
     Enum.empty?(state.active_branches) || Enum.any?(branch_clash_lists, &Enum.empty?/1)
   end
@@ -423,7 +423,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
         result
       end)
 
-    {:noreply, %{state | pending_search: task.ref}}
+    {:noreply, %{state | pending_search: task}}
+  end
+
+  defp cancel_pending_search(%{pending_search: nil, settle_waiter: nil} = state), do: state
+
+  defp cancel_pending_search(%{pending_search: nil, settle_waiter: waiter} = state) do
+    GenServer.reply(waiter, :closed)
+    %{state | settle_waiter: nil}
+  end
+
+  defp cancel_pending_search(%{pending_search: %Task{} = task, settle_waiter: waiter} = state) do
+    Task.shutdown(task, :brutal_kill)
+    if waiter != nil, do: GenServer.reply(waiter, :closed)
+    %{state | pending_search: nil, settle_waiter: nil}
   end
 
   @spec solve_groups([[list()]], non_neg_integer()) :: {:ok, UnifSolution.t()} | :error

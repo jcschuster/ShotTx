@@ -556,7 +556,7 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp closed_subterm?(%Term{fvars: fvars, bvars: bvars, max_num: max_num}) do
-    fvars == [] and max_num <= length(bvars)
+    MapSet.size(fvars) == 0 and max_num <= length(bvars)
   end
 
   defp merge_ground_terms(branch, new_by_type) do

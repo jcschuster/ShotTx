@@ -129,9 +129,7 @@ defmodule ShotTx.Prover do
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     {result, stats} = GenServer.call(manager_via, :start_proof, :infinity)
 
-    Process.exit(session_pid, :shutdown)
-
-    # DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
+    DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
 
     unwrapped =
       case result do
@@ -157,16 +155,12 @@ defmodule ShotTx.Prover do
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
 
   defp close_formula(term_id) do
-    case TF.get_term!(term_id) do
-      %Term{fvars: []} ->
-        term_id
+    %Term{fvars: fvars} = TF.get_term!(term_id)
 
-      %Term{fvars: fvars} ->
-        Enum.reduce(fvars, term_id, fn %Declaration{type: t} = fv, acc_term ->
-          TF.make_abstr_term!(acc_term, fv)
-          |> then(&app(forall_term(t), &1))
-        end)
-    end
+    Enum.reduce(fvars, term_id, fn %Declaration{type: t} = fv, acc_term ->
+      TF.make_abstr_term!(acc_term, fv)
+      |> then(&app(forall_term(t), &1))
+    end)
   end
 
   defp format_model(model_atoms, model_defs) do

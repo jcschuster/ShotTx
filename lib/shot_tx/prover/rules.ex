@@ -354,7 +354,7 @@ defmodule ShotTx.Prover.Rules do
       not Enum.member?(gen_o(term.type), term_id)
   end
 
-  @spec sk_term([Declaration.free_var_t()], Type.t()) :: Term.term_id()
+  @spec sk_term(MapSet.t(Declaration.free_var_t()), Type.t()) :: Term.term_id()
   defp sk_term(fvars, return_type) do
     skolem =
       Type.new(return_type, Enum.map(fvars, & &1.type))
