@@ -473,7 +473,7 @@ res = prove ~p"""
 thf(conj, conjecture,
   ![X:$i, Y:$i, Z:$i]: ( ((l @ X @ Y) & (l @ Y @ Z)) => (l @ X @ Z) )
 ).
-"""
+""", simplification: :deep
 
 format_result res
 # Timeout
@@ -485,7 +485,7 @@ res = prove ~p"""
 thf(conj, conjecture,
   ![X:$i, Y:$i, Z:$i]: ( ((l @ X @ Y) & (l @ Y @ Z)) => (l @ X @ Z) )
 ).
-"""
+""", simplification: :deep
 
 format_result res
 # Timeout
@@ -497,7 +497,7 @@ res = prove ~p"""
 thf(conj, conjecture,
   ![X:$i, Y:$i, Z:$i]: ( ((a @ X @ Y) & (a @ Y @ Z)) => (a @ X @ Z) )
 ).
-"""
+""", simplification: :deep
 
 format_result res
 # Timeout
@@ -509,7 +509,7 @@ res = prove ~p"""
 thf(conj, conjecture,
   ![X:$i>$i, Y:$i>$i, Z:$i>$i]: ( ((e @ X @ Y) & (e @ Y @ Z)) => (e @ X @ Z) )
 ).
-"""
+""", simplification: :deep
 
 format_result res
 # Timeout
@@ -571,7 +571,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -585,7 +585,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -613,7 +613,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -656,7 +656,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -670,7 +670,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -684,7 +684,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -758,7 +758,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# Timeout
+# THM
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->

@@ -19,4 +19,6 @@ RUN adduser -D node && echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node
 USER node
 WORKDIR /workspace
 
+RUN export PATH="/home/node/.asdf/installs/erlang/28.5/bin:$PATH"
+
 ENV SHELL=/bin/zsh

@@ -9,7 +9,8 @@ defmodule ShotTx.Data.Parameters do
             unification_depth: 8,
             unfold_defs: :lazy,
             beta_variant: true,
-            formula_cost: &Rules.rule_cost/1
+            formula_cost: &Rules.rule_cost/1,
+            simplification: :deep
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -19,6 +20,7 @@ defmodule ShotTx.Data.Parameters do
           unification_depth: pos_integer(),
           unfold_defs: :lazy | :eager,
           beta_variant: boolean(),
-          formula_cost: (Rules.rule_t() -> non_neg_integer())
+          formula_cost: (Rules.rule_t() -> non_neg_integer()),
+          simplification: :none | :shallow | :deep
         }
 end

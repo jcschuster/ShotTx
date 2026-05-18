@@ -41,6 +41,7 @@ defmodule ShotTx.Prover.Branch do
   alias ShotTx.Generation.{GeneralBindings, TypeUniverse}
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover.{Paramodulation, Rules}
+  alias ShotTx.Util.PropSimplify
   alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Data.{Declaration, Term, Type}
   alias ShotDs.Stt.TermFactory, as: TF
@@ -141,7 +142,11 @@ defmodule ShotTx.Prover.Branch do
           step(popped_branch, params, gamma_limit, prim_limit)
         else
           updated_branch = %{popped_branch | processed_rules: MapSet.put(processed, cf)}
-          apply_rule(cf, source, updated_branch, params, gamma_limit, prim_limit)
+
+          {eff_source, eff_cf, branch_after_simp} =
+            simplify_formula(source, cf, updated_branch, params)
+
+          apply_rule(eff_cf, eff_source, branch_after_simp, params, gamma_limit, prim_limit)
         end
     end
   end
@@ -450,6 +455,30 @@ defmodule ShotTx.Prover.Branch do
           |> record(source, rule, [unfolded_source])
 
         {:continue, updated, :no_effects}
+    end
+  end
+
+  ##############################################################################
+  # SIMPLIFICATION
+  ##############################################################################
+
+  defp simplify_formula(source, cf, branch, %Parameters{simplification: :none}),
+    do: {source, cf, branch}
+
+  defp simplify_formula(source, cf, branch, %Parameters{simplification: mode}) do
+    simplified = PropSimplify.simplify(source, mode)
+
+    if simplified == source do
+      {source, cf, branch}
+    else
+      simplified_cf = Rules.classify_formula(simplified)
+
+      branch_with_simp =
+        branch
+        |> then(&%{&1 | term_ids: MapSet.put(&1.term_ids, simplified)})
+        |> record(source, :bdd_oracle, [simplified])
+
+      {simplified, simplified_cf, branch_with_simp}
     end
   end
 

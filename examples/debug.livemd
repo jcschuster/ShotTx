@@ -78,6 +78,24 @@ gen_o(Type.new(:o, [:o, :o, :o]))
 
 <!-- livebook:{"branch_parent_index":0} -->
 
+## Simplification
+
+```elixir
+import ShotDs.Hol.Sigils
+import ShotDs.Util.Formatter
+import ShotTx.Util.PropSimplify
+```
+
+```elixir
+simplify(~f"P => ~P") |> format!
+```
+
+```elixir
+simplify(~f"P | $false") |> format!
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
 ## Tableaux Proving
 
 ```elixir

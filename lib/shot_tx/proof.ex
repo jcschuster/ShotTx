@@ -388,6 +388,10 @@ defmodule ShotTx.Proof do
     {[{:rule, src, :beta_variant, additional} | evs], segs}
   end
 
+  defp interior_event({src, :bdd_oracle, [simplified]}, {evs, segs}) do
+    {[{:rule, src, :bdd_oracle, simplified} | evs], segs}
+  end
+
   defp interior_event({_src, {:close_pair, _, _}, _}, state), do: state
   defp interior_event({_src, {:clash_candidates, _, _}, _}, state), do: state
 
@@ -609,6 +613,7 @@ defmodule ShotTx.Proof do
       classDef closure fill:#fff3e0,stroke:#cc5500,stroke-width:2px,color:#000000,rx:8px,ry:8px;
       classDef model fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
       classDef subst fill:#f9fbe7,stroke:#827717,stroke-width:2px,color:#000000,rx:8px,ry:8px,stroke-dasharray: 5 5;
+      classDef bdd_oracle fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#880e4f,rx:8px,ry:8px,stroke-dasharray: 3 3;
     """
 
     node_lines =
@@ -686,6 +691,7 @@ defmodule ShotTx.Proof do
   end
 
   defp node_class(%Step{kind: :given}), do: "given"
+  defp node_class(%Step{kind: :rule, rule: :bdd_oracle}), do: "bdd_oracle"
   defp node_class(%Step{kind: :rule}), do: "rule"
   defp node_class(%Step{kind: :closure}), do: "closure"
   defp node_class(%Step{kind: :model}), do: "model"
@@ -852,6 +858,7 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:delta), do: "δ"
 
   # Specialised / non-classical rules
+  defp rule_symbol(:bdd_oracle), do: "bdd⊢"
   defp rule_symbol(:prim_subst), do: "π"
   defp rule_symbol(:paramodulation), do: "para"
   defp rule_symbol(:rename), do: "ren"
