@@ -3,6 +3,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   use GenServer
   require Logger
 
+  alias ShotTx.Prover.EtsKeeper
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover.Stats
   alias ShotDs.Stt.TermFactory, as: TF
@@ -68,6 +69,11 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   @impl true
+  def handle_call(:set_ets_tables, _from, state) do
+    {:reply, :ok, %{state | ets_tables: EtsKeeper.get_tables(state.session_id)}}
+  end
+
+  @impl true
   def handle_call(event, from, state) do
     if aborted?(state) do
       {:reply, :aborted, cancel_pending_search(state)}
@@ -78,7 +84,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   defp aborted?(state) do
     case Map.get(state.ets_tables, :stats) do
-      nil -> false
+      nil -> true
       t -> :ets.lookup(t, :aborted) == [{:aborted, true}]
     end
   end
@@ -247,11 +253,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   # ---- CAST CALLBACKS ----
-
-  defp do_handle_cast({:set_ets_tables, tables}, state) do
-    Logger.debug("ContradictionAgent received ETS tables.")
-    {:noreply, %{state | ets_tables: tables}}
-  end
 
   defp do_handle_cast({:verify_csa, saturated_branch_map}, state) do
     saturated = Map.keys(saturated_branch_map)

@@ -68,7 +68,7 @@ defmodule ShotTx.Prover.Manager do
       :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
 
       ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-      GenServer.cast(ca_via, {:set_ets_tables, state.ets_tables})
+      GenServer.call(ca_via, :set_ets_tables, :infinity)
       GenServer.call(ca_via, {:branch_active, @root_name}, :infinity)
 
       spawn_workers(state)
@@ -349,7 +349,8 @@ defmodule ShotTx.Prover.Manager do
         rules -> " [#{length(rules)} sleeping gamma]"
       end
 
-    rule_lines = Enum.map_join(recent, "\n", fn {_src, rule, _produced} -> "    #{inspect(rule)}" end)
+    rule_lines =
+      Enum.map_join(recent, "\n", fn {_src, rule, _produced} -> "    #{inspect(rule)}" end)
 
     "  [#{branch.id}] #{total} step(s)#{sleeping_str}:\n#{rule_lines}"
   end

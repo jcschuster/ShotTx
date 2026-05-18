@@ -12,7 +12,6 @@ defmodule ShotTx.Prover.SessionSupervisor do
       {Task.Supervisor, name: via(session_id, :task_supervisor)},
       {ShotTx.Prover.Manager, {session_id, formulas, defs, params}},
       {ShotTx.Prover.ContradictionAgent, {session_id, params}},
-      # {DynamicSupervisor, name: via(session_id, :branch_supervisor), strategy: :one_for_one},
       %{
         id: :branch_supervisor,
         start:
