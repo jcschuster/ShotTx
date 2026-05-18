@@ -21,7 +21,7 @@ defmodule Util do
   def render res do
     case res do
       {:thm, proof} -> do_render proof
-      {:csat, _model, proof} -> do_render proof
+      {:csa, _model, proof} -> do_render proof
       {:timeout, partial_proof} -> do_render partial_proof
       other -> other
     end

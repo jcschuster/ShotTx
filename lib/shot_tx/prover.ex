@@ -1,4 +1,8 @@
 defmodule ShotTx.Prover do
+  @moduledoc """
+  Main module that defines the public API.
+  """
+
   import ShotDs.Hol.Dsl
   alias ShotTx.Data.Parameters
   use ShotDs.Hol.Patterns
