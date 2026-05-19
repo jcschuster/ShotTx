@@ -248,7 +248,8 @@ defmodule ShotTx.Prover.Rules do
 
           branches =
             Stream.map(gen_o(type), fn instance ->
-              inst_term = %{term | args: List.replace_at(args, idx, instance)} |> TF.memoize()
+              new_args = List.replace_at(args, idx, instance)
+              inst_term = TF.with_scratchpad!(fn -> rebuild_term(term, new_args) end)
               {inst_term, {decl, instance}}
             end)
 
@@ -263,13 +264,15 @@ defmodule ShotTx.Prover.Rules do
           if current_term.id == candidate_id do
             {c_id, acc_cache}
           else
-            new_term = %{current_term | args: new_args}
-            {TF.memoize(new_term), acc_cache}
+            {rebuild_term(current_term, new_args), acc_cache}
           end
         end
 
-        {replaced_term_id, _cache} =
-          TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+        replaced_term_id =
+          TF.with_scratchpad!(fn ->
+            {id, _cache} = TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+            id
+          end)
 
         {:rename, {replaced_term_id, eq(c_id, candidate_id)}}
 
@@ -282,13 +285,15 @@ defmodule ShotTx.Prover.Rules do
               if current_term.id == candidate_id do
                 {instance, acc_cache}
               else
-                new_term = %{current_term | args: new_args}
-                {TF.memoize(new_term), acc_cache}
+                {rebuild_term(current_term, new_args), acc_cache}
               end
             end
 
-            {inst_term_id, _cache} =
-              TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+            inst_term_id =
+              TF.with_scratchpad!(fn ->
+                {id, _cache} = TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+                id
+              end)
 
             {inst_term_id, {decl, instance}}
           end)
@@ -367,4 +372,12 @@ defmodule ShotTx.Prover.Rules do
 
   defp o_occurrences(%Type{goal: :o, args: args}),
     do: 1 + Enum.sum_by(args, &o_occurrences/1)
+
+  # Rebuild a term from its head and new args, recomputing all metadata fields.
+  # Avoids the stale consts/fvars/max_num/tvars left by %{term | args: new_args}.
+  defp rebuild_term(%Term{head: head, bvars: bvars}, new_args) do
+    head_id = TF.make_term(head)
+    body_id = TF.fold_apply!(head_id, new_args)
+    List.foldr(bvars, body_id, &TF.make_abstr_term!(&2, &1))
+  end
 end
