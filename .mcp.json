@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "atp": {
+      "command": "atp_mcp"
+    }
+  }
+}

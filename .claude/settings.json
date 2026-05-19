@@ -1,4 +1,8 @@
 {
+  "enabledMcpjsonServers": ["atp"],
+  "env": {
+    "PATH": "/home/node/.asdf/shims:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/share/npm-global/bin:/workspace/.claude/claudeman/bin"
+  },
   "hooks": {
     "TaskCompleted": [
       {

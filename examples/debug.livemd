@@ -178,6 +178,10 @@ format_result res
 ```
 
 ```elixir
+IO.puts ShotTx.Proof.to_text elem res, 1
+```
+
+```elixir
 render res
 ```
 
@@ -271,14 +275,9 @@ import ShotTx.Prover
 ```elixir
 {:ok, problem} = ShotTx.Tptp.load_problem("KRS272^7")
 res = prove(problem)
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
