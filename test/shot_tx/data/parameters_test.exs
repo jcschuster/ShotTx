@@ -10,7 +10,7 @@ defmodule ShotTx.Data.ParametersTest do
     assert p.timeout == 5_000
     assert p.initial_gamma_limit == 1
     assert p.initial_prim_limit == 1
-    assert p.prim_subst_after == 1
+    assert p.prim_subst_after == 0
     assert p.prim_subst_batch_size == 8
     assert p.unification_depth == 8
     assert p.unfold_defs == :lazy

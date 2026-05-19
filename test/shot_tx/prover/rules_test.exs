@@ -136,5 +136,27 @@ defmodule ShotTx.Prover.RulesTest do
         assert Rules.classify_formula(t) == {:atomic, t}
       end)
     end
+
+    test "neg_ext: ~(f = g) at arrow type with closed sides produces alpha with skolem application" do
+      ctx = ~e"f: $i>$i, g: $i>$i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        neg_eq = ~f"~ (f = g)"
+        assert {:alpha, [result]} = Rules.classify_formula(neg_eq)
+        formatted = ShotDs.Util.Formatter.format!(result)
+        assert formatted =~ "f"
+        assert formatted =~ "g"
+        assert String.starts_with?(formatted, "¬") or String.contains?(formatted, "¬")
+      end)
+    end
+
+    test "neg_ext: ~(f = g) at arrow type with free variable sides falls back to extensional equality" do
+      ctx = ~e"X: $i>$i, g: $i>$i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        neg_eq = ~f"~ (X = g)"
+        assert {:alpha, [_]} = Rules.classify_formula(neg_eq)
+      end)
+    end
   end
 end

@@ -65,6 +65,59 @@ defmodule ShotTx.Prover.ParamodulationTest do
     end
   end
 
+  describe "unifying_paramodulants/3" do
+    test "empty equation map yields no paramodulants" do
+      ctx = ~e"f: $i>$i, p: $i>$o, a: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert Paramodulation.unifying_paramodulants(~f"p @ (f @ a)", %{}, 4) == []
+      end)
+    end
+
+    test "equation LHS with free variable unifies against a ground subterm" do
+      ctx = ~e"X: $i, f: $i>$i, p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        literal = ~f"p @ (f @ b)"
+        fx = ~f"f @ X"
+        rhs = ~f"a"
+        equations = %{fx => MapSet.new([rhs])}
+
+        results = Paramodulation.unifying_paramodulants(literal, equations, 4)
+        assert [result] = results
+        assert format!(result) == format!(~f"p @ a")
+      end)
+    end
+
+    test "ground equation LHS unifies against a free variable subterm in literal" do
+      ctx = ~e"X: $i, f: $i>$i, p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        literal = ~f"p @ (f @ X)"
+        lhs_ground = ~f"f @ a"
+        rhs = ~f"b"
+        equations = %{lhs_ground => MapSet.new([rhs])}
+
+        results = Paramodulation.unifying_paramodulants(literal, equations, 4)
+        formatted = Enum.map(results, &format!/1)
+        assert format!(~f"p @ b") in formatted
+      end)
+    end
+
+    test "structural match is excluded (handled by paramodulants/2)" do
+      ctx = ~e"p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        a = ~f"a"
+        b = ~f"b"
+        pa = ~f"p @ a"
+        equations = %{a => MapSet.new([b])}
+
+        assert Paramodulation.unifying_paramodulants(pa, equations, 4) == []
+      end)
+    end
+  end
+
   describe "paramodulants/2" do
     test "empty equation map yields no paramodulants" do
       ctx = ~e"f: $i>$i, a: $i"

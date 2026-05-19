@@ -188,7 +188,13 @@ defmodule ShotTx.Prover.Rules do
         {:alpha, [neg(a <~> b)]}
 
       typed_equality(a, b, %Type{args: [_ | _]} = t) ->
-        {:alpha, [neg(app(extensional_equality(t), [a, b]))]}
+        if closed_term?(a) and closed_term?(b) do
+          [h | _] = t.args
+          c = sk_term(MapSet.new(), h)
+          {:alpha, [neg(eq(app(a, c), app(b, c)))]}
+        else
+          {:alpha, [neg(app(extensional_equality(t), [a, b]))]}
+        end
 
       typed_equality(a, b, t) ->
         {:alpha, [neg(app(leibniz_equality(t), [a, b]))]}
@@ -348,6 +354,9 @@ defmodule ShotTx.Prover.Rules do
   ##############################################################################
   # HELPERS
   ##############################################################################
+
+  @spec closed_term?(Term.term_id()) :: boolean()
+  defp closed_term?(term_id), do: MapSet.size(TF.get_term!(term_id).fvars) == 0
 
   @spec pure_o_type?(Type.t()) :: boolean()
   defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)

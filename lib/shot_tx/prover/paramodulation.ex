@@ -31,6 +31,7 @@ defmodule ShotTx.Prover.Paramodulation do
   """
 
   alias ShotDs.Data.Term
+  alias ShotDs.Stt.Semantics
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
 
@@ -65,6 +66,50 @@ defmodule ShotTx.Prover.Paramodulation do
             end
           end)
       end
+    end)
+    |> Enum.uniq()
+  end
+
+  @doc """
+  Returns paramodulants using higher-order pre-unification.
+
+  Complements `paramodulants/2` by trying to unify each equation LHS with
+  each subterm of `term_id` that does not already match structurally. For
+  each unification solution the resulting substitution is applied to the
+  literal and the equation RHS, and `replace_subterm/3` produces the
+  paramodulant, which is committed to the global term factory.
+  """
+  @spec unifying_paramodulants(Term.term_id(), equation_map(), non_neg_integer()) ::
+          [Term.term_id()]
+  def unifying_paramodulants(_term_id, equations, _depth) when map_size(equations) == 0, do: []
+
+  def unifying_paramodulants(term_id, equations, depth) do
+    subs = subterms(term_id)
+
+    equations
+    |> Enum.flat_map(fn {lhs_id, rhs_ids} ->
+      Enum.flat_map(subs, fn sub_id ->
+        if sub_id == lhs_id do
+          []
+        else
+          ShotUn.unify({lhs_id, sub_id}, depth)
+          |> Enum.flat_map(fn %{substitutions: substs} ->
+            applied_literal = Semantics.subst!(substs, term_id)
+            applied_lhs = Semantics.subst!(substs, lhs_id)
+
+            Enum.flat_map(MapSet.to_list(rhs_ids), fn rhs_id ->
+              applied_rhs = Semantics.subst!(substs, rhs_id)
+              candidate = replace_subterm(applied_literal, applied_lhs, applied_rhs)
+
+              if candidate == applied_literal do
+                []
+              else
+                [TF.commit_to_global!(candidate)]
+              end
+            end)
+          end)
+        end
+      end)
     end)
     |> Enum.uniq()
   end

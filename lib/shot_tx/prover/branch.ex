@@ -345,57 +345,28 @@ defmodule ShotTx.Prover.Branch do
          _g_limit,
          prim_limit
        ) do
-    batch = params.prim_subst_batch_size
     args = type.args
-
-    new_types = MapSet.difference(branch.type_universe, progress.covered_types)
     current_constants = branch_constants(branch)
     new_constants = MapSet.difference(current_constants, progress.covered_constants)
 
-    base =
-      args
-      |> GeneralBindings.base_heads(depth)
-      |> Enum.drop(progress.base_offset)
-      |> Enum.take(batch)
-      |> Enum.map(&GeneralBindings.build_binding(args, &1))
-
-    unit_set =
-      if MapSet.size(new_constants) > 0 do
+    # First pass: emit all unit-set bindings (λy. H(y) = c) for every constant
+    # already in the branch, bypassing base/poly heads and the batch cap. This
+    # front-loads the bindings most likely to close Leibniz-style goals without
+    # waiting for propositional heads to exhaust the batch budget.
+    if progress == @fresh_progress and MapSet.size(new_constants) > 0 do
+      unit_set =
         args
         |> GeneralBindings.unit_set_heads(new_constants)
         |> Enum.map(&GeneralBindings.build_binding(args, &1))
-      else
-        []
-      end
 
-    poly =
-      if MapSet.size(new_types) > 0 do
-        args
-        |> GeneralBindings.polymorphic_heads(depth, new_types)
-        |> Enum.map(&GeneralBindings.build_binding(args, &1))
-      else
-        []
-      end
-
-    bindings = base ++ unit_set ++ poly
-
-    if bindings == [] do
-      advance_or_sleep(recipe, type, depth, branch, params, prim_limit, source, rule)
-    else
-      instances = Enum.map(bindings, &app(recipe, &1))
+      instances = Enum.map(unit_set, &app(recipe, &1))
 
       branch_with_insts =
         Enum.reduce(instances, branch, fn inst, b ->
           insert_formula(b, inst, branch.defs, params)
         end)
 
-      new_progress = %{
-        base_offset: progress.base_offset + length(base),
-        covered_types: MapSet.union(progress.covered_types, new_types),
-        covered_constants: MapSet.union(progress.covered_constants, new_constants)
-      }
-
-      new_rule = {:prim_subst, recipe, type, depth, new_progress}
+      new_rule = {:prim_subst, recipe, type, depth, %{@fresh_progress | covered_constants: current_constants}}
 
       updated =
         %{
@@ -406,6 +377,65 @@ defmodule ShotTx.Prover.Branch do
         |> record(source, rule, instances)
 
       {:continue, updated, :no_effects}
+    else
+      batch = params.prim_subst_batch_size
+      new_types = MapSet.difference(branch.type_universe, progress.covered_types)
+
+      base =
+        args
+        |> GeneralBindings.base_heads(depth)
+        |> Enum.drop(progress.base_offset)
+        |> Enum.take(batch)
+        |> Enum.map(&GeneralBindings.build_binding(args, &1))
+
+      unit_set =
+        if MapSet.size(new_constants) > 0 do
+          args
+          |> GeneralBindings.unit_set_heads(new_constants)
+          |> Enum.map(&GeneralBindings.build_binding(args, &1))
+        else
+          []
+        end
+
+      poly =
+        if MapSet.size(new_types) > 0 do
+          args
+          |> GeneralBindings.polymorphic_heads(depth, new_types)
+          |> Enum.map(&GeneralBindings.build_binding(args, &1))
+        else
+          []
+        end
+
+      bindings = base ++ unit_set ++ poly
+
+      if bindings == [] do
+        advance_or_sleep(recipe, type, depth, branch, params, prim_limit, source, rule)
+      else
+        instances = Enum.map(bindings, &app(recipe, &1))
+
+        branch_with_insts =
+          Enum.reduce(instances, branch, fn inst, b ->
+            insert_formula(b, inst, branch.defs, params)
+          end)
+
+        new_progress = %{
+          base_offset: progress.base_offset + length(base),
+          covered_types: MapSet.union(progress.covered_types, new_types),
+          covered_constants: MapSet.union(progress.covered_constants, new_constants)
+        }
+
+        new_rule = {:prim_subst, recipe, type, depth, new_progress}
+
+        updated =
+          %{
+            branch_with_insts
+            | queue: reinsert_rule(branch_with_insts.queue, source, new_rule, params.formula_cost)
+          }
+          |> ingest_formulas(instances, params)
+          |> record(source, rule, instances)
+
+        {:continue, updated, :no_effects}
+      end
     end
   end
 
@@ -687,7 +717,12 @@ defmodule ShotTx.Prover.Branch do
         new_eq_only = %{ol => MapSet.new([or_])}
 
         Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
-          case Paramodulation.paramodulants(lit, new_eq_only) do
+          all_ps =
+            (Paramodulation.paramodulants(lit, new_eq_only) ++
+               Paramodulation.unifying_paramodulants(lit, new_eq_only, params.unification_depth))
+            |> Enum.uniq()
+
+          case all_ps do
             [] ->
               b
 
@@ -739,7 +774,12 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp paramodulate_literal_with_equations(branch, term_id, params) do
-    case Paramodulation.paramodulants(term_id, branch.equations) do
+    all_ps =
+      (Paramodulation.paramodulants(term_id, branch.equations) ++
+         Paramodulation.unifying_paramodulants(term_id, branch.equations, params.unification_depth))
+      |> Enum.uniq()
+
+    case all_ps do
       [] ->
         branch
 
