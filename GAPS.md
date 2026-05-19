@@ -10,14 +10,14 @@ representative cases.
 Most ShotTx timeouts trace back to one of five missing or under-tuned
 capabilities. In priority order:
 
-1. **Unifying paramodulation** — by far the biggest gap.
-2. **Negative extensionality rule** for ground inequations of arrow type.
-3. **Re-prioritised primitive substitution** for unit-set bindings on the
-   first pass.
+1. ~~**Unifying paramodulation** — by far the biggest gap.~~ ✓ **Done** (R1)
+2. ~~**Negative extensionality rule** for ground inequations of arrow type.~~ ✓ **Done** (R2)
+3. ~~**Re-prioritised primitive substitution** for unit-set bindings on the
+   first pass.~~ ✓ **Done** (R3)
 4. **Flex-headed literal shortcut** at depth 1.
 5. **Lambda-lifting / rewriting under abstraction** — heavy, fewest payoffs.
 
-Items 1–4 cover the bulk of the failures. The Non-Theorems section
+Items 4–5 remain open. The Non-Theorems section
 (livebook lines 168–263) is intentional countersatisfiables and not a real
 failure cluster.
 
@@ -138,33 +138,37 @@ cluster.
 
 In priority order, with rough effort and payoff annotations.
 
-### R1. Make paramodulation unifying, not just structural (large payoff)
+### ✓ R1. Make paramodulation unifying, not just structural (large payoff)
 
-When a new equation `s = t` enters the branch, run `ShotUn.unify({s, sub})`
-against subterms of existing literals (and vice versa for new literals against
-existing equations). Apply the resulting substitution to produce the
-paramodulant. Keep the structural fast path for cases where the unifier is
-trivially empty.
+**Implemented.** `lib/shot_tx/prover/paramodulation.ex` now exposes
+`unifying_paramodulants/3` which calls `ShotUn.unify/2` to match equation
+sides against subterms of existing literals (and new literals against existing
+equations). The structural fast path is preserved; the unifying path is called
+alongside it in `branch.ex`'s `ingest_formula/3` and
+`paramodulate_literal_with_equations/3`.
 
-This single change unlocks the entire transitivity/congruence cluster and most
-of §20.
+### ✓ R2. Add a direct `neg_ext` rule (small payoff, very small change)
 
-### R2. Add a direct `neg_ext` rule (small payoff, very small change)
+**Implemented.** `classify_neg_formula/1` in `lib/shot_tx/prover/rules.ex` now
+handles `¬(f = g)` at arrow type: when both sides are closed it emits
+`¬(f @ c = g @ c)` for a fresh skolem `c` directly (one-step α rule). When
+either side has free variables it falls back to the extensional-equality
+unfolding. This bypasses the gamma/δ round-trip that previously made these
+goals expensive.
 
-For ground inequations of arrow type — when `¬(f = g)` reaches the atomic
-stage with `f, g` closed — emit `¬(f c = g c)` for a fresh skolem `c`
-directly, bypassing the gamma round-trip. Completeness-preserving. Large
-payoff on Examples 9, 13, 14.
+### ✓ R3. Re-prioritise primitive substitution (small change, focused payoff)
 
-### R3. Re-prioritise primitive substitution (small change, focused payoff)
+**Implemented** via two changes:
 
-Either:
-
-- pre-seed `branch.term_ids` constants from the input formulas so unit-set
-  heads are generated on the first prim-subst pass, or
-- drop `prim_subst_after` to `0` for goal-only branches.
-
-Combined with R1, should close Example 8 in seconds.
+- `prim_subst_after` default dropped from `1` to `0` in
+  `lib/shot_tx/data/parameters.ex`, so prim-subst is scheduled on the very
+  first gamma firing.
+- First-pass optimisation in `apply_rule({:prim_subst, …})` in
+  `lib/shot_tx/prover/branch.ex`: when `progress == @fresh_progress` and the
+  branch already has constants, all unit-set bindings (`λy. H(y) = c` for each
+  constant `c`) are emitted immediately, bypassing the base/poly heads and the
+  batch cap. The rule is then requeued with `covered_constants` set so
+  subsequent firings follow the normal batched path.
 
 ### R4. Flex-headed shortcut (tiny rule)
 
