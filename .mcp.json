@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "atp": {
-      "command": "atp_mcp"
+      "command": "/home/node/.asdf/installs/elixir/1.19.5-otp-28/.mix/escripts/atp_mcp"
     }
   }
 }

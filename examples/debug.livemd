@@ -255,7 +255,7 @@ render res
 ```
 
 ```elixir
-res = ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
+res = ~f"p @ a & q @ b => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
 |> prove
 format_result res
 ```
