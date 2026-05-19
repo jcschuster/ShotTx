@@ -1,10 +1,29 @@
 defmodule ShotTx.Prover.EtsKeeper do
+  @moduledoc """
+  GenServer that owns the ETS tables for a single proof session.
+
+  Creates five shared, public tables on startup and keeps them alive for the
+  duration of the session tree. All other processes obtain the table references
+  via `get_tables/1`.
+
+  Tables created:
+  - `:stats` — proof-search counters and timing metadata.
+  - `:tombs` — branch IDs that have been closed; used to poison descendants.
+  - `:work_queue` — ordered set of `{priority_key, Branch.t()}` entries.
+  - `:idle_queue` — branches parked waiting for iterative deepening.
+  - `:traces` — per-branch rule application history for proof reconstruction.
+  """
+
   use GenServer
 
+  @doc "Starts the ETS keeper for the given `session_id`."
+  @spec start_link({String.t(), term()}) :: GenServer.on_start()
   def start_link({session_id, _params}) do
     GenServer.start_link(__MODULE__, session_id, name: via(session_id))
   end
 
+  @doc "Returns the ETS table map for the given `session_id`."
+  @spec get_tables(String.t()) :: map()
   def get_tables(session_id) do
     GenServer.call(via(session_id), :get_tables)
   end

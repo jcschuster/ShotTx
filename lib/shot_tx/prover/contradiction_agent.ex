@@ -1,5 +1,17 @@
 defmodule ShotTx.Prover.ContradictionAgent do
-  # GenServer, listens to PubSub and searches for closure
+  @moduledoc """
+  GenServer that detects global closure and extracts countermodels.
+
+  Subscribes to `local_closures_<session>` and `branch_events_<session>` PubSub
+  channels. Accumulates clash candidates per branch and dispatches a CSP task via
+  `shot_un` whenever every open branch has at least one candidate clash pair.
+
+  - If the CSP finds a compatible global unifier, a `:unsat` result is broadcast
+    and the session is declared a theorem.
+  - If a branch saturates with no clashes, a countermodel (`:sat`) is reported.
+  - When the search space is exhausted without closure, `:unknown` is returned.
+  """
+
   use GenServer
   require Logger
 
@@ -24,6 +36,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
   # PUBLIC API
   ##############################################################################
 
+  @doc "Starts the ContradictionAgent for the given session."
+  @spec start_link({String.t(), Parameters.t()}) :: GenServer.on_start()
   def start_link({session_id, params}) do
     name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
 

@@ -87,6 +87,7 @@ defmodule ShotTx.Prover.Rules do
           | instantiate_t()
           | atomic_t()
 
+  @doc "Returns the priority cost for a rule; lower cost means higher priority in the queue."
   @spec rule_cost(rule_t()) :: non_neg_integer()
   def rule_cost(rule) do
     case rule do
@@ -108,6 +109,7 @@ defmodule ShotTx.Prover.Rules do
   # CLASSIFICATION
   ##############################################################################
 
+  @doc "Classifies a term ID as the tableau rule that should be applied to it."
   @spec classify_formula(Term.term_id()) :: rule_t()
   def classify_formula(term_id) when is_integer(term_id) do
     case TF.get_term!(term_id) do

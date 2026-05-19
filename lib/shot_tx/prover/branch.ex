@@ -92,6 +92,7 @@ defmodule ShotTx.Prover.Branch do
   @doc """
   Constructs a new root branch or an explicitly defined child branch.
   """
+  @spec new(String.t(), [Term.term_id()], Parameters.t(), keyword()) :: %__MODULE__{}
   def new(id, formulas, params, opts \\ []) do
     defs = Keyword.get(opts, :defs, %{})
     equations = Keyword.get(opts, :equations, %{})
@@ -155,6 +156,7 @@ defmodule ShotTx.Prover.Branch do
   Wakes up a sleeping branch by reinserting its sleeping gamma rules into the
   queue.
   """
+  @spec wake_up(%__MODULE__{}, (Rules.rule_t() -> non_neg_integer())) :: %__MODULE__{}
   def wake_up(%__MODULE__{} = branch, cost_fn) do
     new_queue =
       Enum.reduce(branch.sleeping_gamma_rules, branch.queue, fn {source, rule}, acc ->

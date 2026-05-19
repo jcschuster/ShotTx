@@ -40,6 +40,17 @@ defmodule ShotTx.Prover do
     end
   end
 
+  @doc """
+  Attempts to prove `conclusion` from `assumptions`.
+
+  Accepts three call shapes:
+  - `prove(problem)` — a `Problem` struct with a conjecture and axioms.
+  - `prove(conclusion)` / `prove(conclusion, assumptions)` — term IDs.
+  - `prove(conclusion, assumptions, opts)` — full form; `opts` are forwarded to
+    `Parameters` except for the `:defs` key (a definition map).
+
+  Returns a `proof_result()`.
+  """
   @spec prove(Term.term_id(), [Term.term_id()], keyword()) :: proof_result()
   def prove(conclusion, assumptions, opts)
       when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
@@ -107,6 +118,8 @@ defmodule ShotTx.Prover do
     format_result(prove(conclusion, assumptions, opts))
   end
 
+  @doc "Formats a `proof_result()` as a short human-readable string for quick inspection."
+  @spec format_result(proof_result()) :: String.t()
   def format_result({:thm, _proof}), do: "THM"
   def format_result({:csa, model, _proof}), do: "CSA\n" <> model
   def format_result(:unknown), do: "UNK"
@@ -117,6 +130,12 @@ defmodule ShotTx.Prover do
   Checks the satisfiability of a list of formulas. Delegates the execution to
   the Manager GenServer.
   """
+  @spec sat([Term.term_id()] | Term.term_id(), map(), keyword()) ::
+          {:sat, map()}
+          | {:unsat, map(), list(), map()}
+          | {:unknown, term()}
+          | {:timeout, ShotTx.Proof.t()}
+          | {sat_result :: term(), stats :: map()}
   def sat(formulas, defs \\ %{}, opts \\ [])
 
   def sat(formulas, defs, opts) when is_list(formulas) do

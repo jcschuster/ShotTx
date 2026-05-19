@@ -1,4 +1,15 @@
 defmodule ShotTx.Prover.Manager do
+  @moduledoc """
+  GenServer that orchestrates the proof search for a single session.
+
+  On `start_proof`, seeds the root branch into the ETS work queue, spawns `N`
+  worker processes, and sets a timeout timer. Workers report back as idle when
+  their queue empties; once all workers stall the Manager triggers iterative
+  deepening by incrementing the gamma and prim-subst limits and waking the parked
+  branches. The final proof result is returned synchronously to the caller of
+  `start_proof`.
+  """
+
   use GenServer
   require Logger
 
@@ -26,6 +37,8 @@ defmodule ShotTx.Prover.Manager do
   # PUBLIC API
   ##############################################################################
 
+  @doc "Starts the Manager for the given session."
+  @spec start_link({String.t(), [term()], map(), Parameters.t()}) :: GenServer.on_start()
   def start_link({session_id, formulas, defs, params}) do
     name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
     GenServer.start_link(__MODULE__, {session_id, formulas, defs, params}, name: name)

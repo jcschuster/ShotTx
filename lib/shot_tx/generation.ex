@@ -9,6 +9,13 @@ defmodule ShotTx.Generation do
 
   @typep o_type :: %Type{goal: :o, args: [o_type()]}
 
+  @doc """
+  Enumerates all closed terms of the given propositional type.
+
+  Results are memoized per-process after the first call. Covers truth values
+  (`o`), unary connectives (`o → o`), binary connectives (`o → o → o`), and
+  general finite Boolean functions of higher arities via if-then-else expansion.
+  """
   @spec gen_o(o_type()) :: Enumerable.t(Term.term_id())
   def gen_o(type) do
     cache_key = {:gen_o_cache, type}
