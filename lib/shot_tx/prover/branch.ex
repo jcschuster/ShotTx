@@ -40,7 +40,7 @@ defmodule ShotTx.Prover.Branch do
   alias ShotTx.Generation
   alias ShotTx.Generation.{GeneralBindings, TypeUniverse}
   alias ShotTx.Data.Parameters
-  alias ShotTx.Prover.{Paramodulation, Rules}
+  alias ShotTx.Prover.{Paramodulation, Rules, TermOrder}
   alias ShotTx.Util.PropSimplify
   alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Data.{Declaration, Term, Type}
@@ -634,7 +634,7 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params) do
-    effective = maybe_unfold(formula, defs, params)
+    effective = formula |> maybe_unfold(defs, params) |> maybe_orient(params)
     cf = Rules.classify_formula(effective)
 
     pending =
@@ -676,25 +676,13 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp ingest_formula(branch, term_id, params) do
-    effective_id = maybe_unfold(term_id, branch.defs, params)
+    effective_id = term_id |> maybe_unfold(branch.defs, params) |> maybe_orient(params)
 
     case TF.get_term!(effective_id) do
-      equality(lhs, rhs) ->
-        new_equations =
-          cond do
-            contains?(lhs, rhs) ->
-              Map.update(branch.equations, lhs, MapSet.new([rhs]), &MapSet.put(&1, rhs))
-
-            contains?(rhs, lhs) ->
-              Map.update(branch.equations, rhs, MapSet.new([lhs]), &MapSet.put(&1, lhs))
-
-            true ->
-              branch.equations
-              |> Map.update(lhs, MapSet.new([rhs]), &MapSet.put(&1, rhs))
-              |> Map.update(rhs, MapSet.new([lhs]), &MapSet.put(&1, lhs))
-          end
-
-        new_eq_only = %{lhs => MapSet.new([rhs]), rhs => MapSet.new([lhs])}
+      equality(lhs, rhs) when lhs != rhs ->
+        {ol, or_} = orient_pair(lhs, rhs, params.term_order)
+        new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
+        new_eq_only = %{ol => MapSet.new([or_])}
 
         Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
           case Paramodulation.paramodulants(lit, new_eq_only) do
@@ -710,6 +698,36 @@ defmodule ShotTx.Prover.Branch do
 
       _ ->
         branch
+    end
+  end
+
+  defp orient_pair(lhs, rhs, order_params) do
+    cond do
+      contains?(lhs, rhs) -> {lhs, rhs}
+      contains?(rhs, lhs) -> {rhs, lhs}
+      TermOrder.gt?(lhs, rhs, order_params) -> {lhs, rhs}
+      true -> {rhs, lhs}
+    end
+  end
+
+  defp maybe_orient(term_id, %Parameters{orient: false}), do: term_id
+
+  defp maybe_orient(term_id, %Parameters{orient: true, term_order: order}) do
+    case TF.get_term!(term_id) do
+      disjunction(p, q) ->
+        if TermOrder.gt?(q, p, order), do: q ||| p, else: term_id
+
+      conjunction(p, q) ->
+        if TermOrder.gt?(q, p, order), do: q &&& p, else: term_id
+
+      equivalence(p, q) ->
+        if TermOrder.gt?(q, p, order), do: q <~> p, else: term_id
+
+      equality(p, q) ->
+        if TermOrder.gt?(q, p, order), do: eq(q, p), else: term_id
+
+      _ ->
+        term_id
     end
   end
 

@@ -12,5 +12,6 @@
   "makeup_erlang": {:hex, :makeup_erlang, "1.1.0", "835f7e60792e08824cda445639555d7bf1bbbddb1b60b306e33cb6f6db24dc74", [:mix], [{:makeup, "~> 1.0", [hex: :makeup, repo: "hexpm", optional: false]}], "hexpm", "1cd6780fb1dd1a03979abaed0fe82712b0625118fd5257d3ebbf73f960c73c3c"},
   "nimble_parsec": {:hex, :nimble_parsec, "1.4.2", "8efba0122db06df95bfaa78f791344a89352ba04baedd3849593bfce4d0dc1c6", [:mix], [], "hexpm", "4b21398942dda052b403bbe1da991ccd03a053668d147d53fb8c4e0efe09c973"},
   "shot_ds": {:hex, :shot_ds, "1.2.0", "fc38203949974d99e2efdda5d41fbf53c18cc42a7f19825f952cea0ec32be750", [:mix], [{:nimble_parsec, "~> 1.4.2", [hex: :nimble_parsec, repo: "hexpm", optional: false]}], "hexpm", "d2dcf68d7cae084f3902ebd722c3e81fb164d1bda9f1ecd6edf96c94c0860c1f"},
+  "shot_to": {:hex, :shot_to, "0.1.0", "207505508a02ef70218b58f64d503880a29840aab623f883a774354ef2e54d2f", [:mix], [{:shot_ds, "~> 1.2", [hex: :shot_ds, repo: "hexpm", optional: false]}], "hexpm", "1fc31c5c38579f8604b5485e4c1151546f92e9af92b7c3ec682dfd8a3545ebc8"},
   "shot_un": {:hex, :shot_un, "0.1.4", "5ab02b4a370f30ff2923b2667c9bc43809b960f8eec505ab8000f224486c0972", [:mix], [{:shot_ds, "~> 1.2", [hex: :shot_ds, repo: "hexpm", optional: false]}], "hexpm", "dc492a8de3c3c3374f923534dba77037201780e012eea327de716edd193d5d32"},
 }

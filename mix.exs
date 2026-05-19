@@ -26,6 +26,8 @@ defmodule ShotTx.MixProject do
       {:shot_ds, "~> 1.2"},
       # Unification algorithm
       {:shot_un, "~> 0.1"},
+      # NCPO Term Ordering
+      {:shot_to, "~> 0.1"},
       # Code analyzer, duplication checker and security analyzer
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       # Code analyzer and type checker

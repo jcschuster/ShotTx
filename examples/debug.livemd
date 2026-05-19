@@ -10,30 +10,52 @@ Mix.install([
 ## Setup
 
 ```elixir
+defmodule Util do
+  def render res do
+    case res do
+      {:thm, proof} -> do_render proof
+      {:csa, _model, proof} -> do_render proof
+      {:timeout, partial_proof} -> do_render partial_proof
+      other -> other
+    end
+  end
+
+  defp do_render proof do
+    frame = Kino.Frame.new
+    Kino.render(frame)
+    diagram = proof |> ShotTx.Proof.to_mermaid |> Kino.Mermaid.new
+    Kino.Frame.render frame, diagram
+  end
+end
+```
+
+```elixir
 import ShotDs.Hol.Definitions
 import ShotTx.Generation
 import ShotDs.Util.Formatter
 alias ShotDs.Data.Type
+import Util
 ```
 
 ```elixir
+default_to_debug = true
+
 form =
   Kino.Control.form(
     [
-      name: Kino.Input.checkbox("Debug", default: true)
+      name: Kino.Input.checkbox("Print debug logs", default: default_to_debug)
     ],
     report_changes: true
   )
 
-Kino.listen(form, fn event ->
-  if event.data.name == true do
-    Logger.configure(level: :debug)
-  else
-    Logger.configure(level: :warning)
-  end
-end)
+set_logger_debug = fn
+  true  -> Logger.configure(level: :debug)
+  false -> Logger.configure(level: :error)
+end
 
-Logger.configure(level: :debug)
+Kino.listen(form, fn event -> set_logger_debug.(event.data.name) end)
+
+set_logger_debug.(default_to_debug)
 form
 ```
 
@@ -87,11 +109,11 @@ import ShotTx.Util.PropSimplify
 ```
 
 ```elixir
-simplify(~f"P => ~P") |> format!
+simplify(~f"P & ~P") |> format!
 ```
 
 ```elixir
-simplify(~f"P | $false") |> format!
+simplify(~f"P | $true") |> format!
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
@@ -107,48 +129,33 @@ $\exists X. X$
 
 ```elixir
 res = ~f"?[X: $o]: X" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 $a \land b \supset a$
 
 ```elixir
 res = ~f"a & b => a" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 $a \supset a \lor b$
 
 ```elixir
 res = ~f"a => (a | b)" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 **Cantor:** $\nexists F. \forall Y. \exists X. F X = Y$
@@ -156,48 +163,33 @@ res
 ```elixir
 res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y"
 |> prove()
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 **Extensionality:** $p (a \land b) \supset p (b \land a)$
 
 ```elixir
 res = ~f"p @ (a & b) => p @ (b & a)" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 **Extensionality:** $\forall X Y. p~X \land p~Y \supset p (X \land Y)$
 
 ```elixir
 res = ~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 **Finite domain of type $o\to o$**
@@ -214,16 +206,11 @@ res = ~f"""
 ![Y : $o>$o]: p @ Y
 """
 |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 ```elixir
@@ -238,50 +225,39 @@ res = ~f"""
 ?[Y : $o>$o]: ~ p @ Y
 """
 |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:csa, _model, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 ```elixir
 res = ~f"p @ a & p @ b => p @ (a & b)" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 ```elixir
 res = ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b" |> prove
+format_result res
 ```
 
 ```elixir
-frame = Kino.Frame.new()
-Kino.render(frame)
-
-res
-|> then(fn {:thm, proof} -> proof end)
-|> ShotTx.Proof.to_mermaid()
-|> then(& Kino.Frame.render(frame, Kino.Mermaid.new(&1)))
+render res
 ```
 
 ```elixir
-res =
-  ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
-  |> prove
+res = ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
+|> prove
+format_result res
+```
+
+```elixir
+render res
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
@@ -289,12 +265,11 @@ res =
 ## TPTP Problems
 
 ```elixir
-alias ShotDs.Tptp
 import ShotTx.Prover
 ```
 
 ```elixir
-{:ok, problem} = Tptp.parse_tptp_file("KRS272^7")
+{:ok, problem} = ShotTx.Tptp.load_problem("KRS272^7")
 res = prove(problem)
 ```
 
