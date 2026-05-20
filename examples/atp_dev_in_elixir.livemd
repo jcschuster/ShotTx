@@ -98,7 +98,7 @@ formula =
 ```
 
 ```elixir
-IO.puts format! formula
+IO.puts format! parsed_formula_or_problem
 ```
 
 <!-- livebook:{"attrs":"eyJjb250ZXh0X3N0ciI6IiIsImZvcm11bGFfc3RyIjoiIVtYIDogJG9dOiBYID0+IFgiLCJtb2RlIjoicHJvYmxlbSIsInByb2JsZW1fc3RyIjoidGhmKGZfdHlwZSwgdHlwZSwgZjogJGk+JGkpLlxyXG50aGYodGVzdCwgY29uamVjdHVyZSxcclxuICAgID9bWCA6ICRpLCBZIDogJGldOiAoIChmIEAgWCkgPSBmIEAgWSApXHJcbikuIiwidGhlbWUiOiJEcmFjdWxhIiwidmFyX25hbWUiOiJwcm9ibGVtIn0","chunks":null,"kind":"Elixir.KinoShotDs.TptpParser","livebook_object":"smart_cell"} -->
@@ -117,7 +117,7 @@ problem =
 ```
 
 ```elixir
-IO.puts format! problem
+IO.puts format! parsed_formula_or_problem
 ```
 
 ## Proof Tree Rendering with Kino and Mermaid
