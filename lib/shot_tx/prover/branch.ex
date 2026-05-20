@@ -40,7 +40,7 @@ defmodule ShotTx.Prover.Branch do
   alias ShotTx.Generation
   alias ShotTx.Generation.{GeneralBindings, TypeUniverse}
   alias ShotTx.Data.Parameters
-  alias ShotTx.Prover.{Paramodulation, Rules, TermOrder}
+  alias ShotTx.Prover.{LambdaLift, Paramodulation, Rules, TermOrder}
   alias ShotTx.Util.PropSimplify
   alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Data.{Declaration, Term, Type}
@@ -97,6 +97,8 @@ defmodule ShotTx.Prover.Branch do
     defs = Keyword.get(opts, :defs, %{})
     equations = Keyword.get(opts, :equations, %{})
 
+    {expanded_formulas, lift_history} = lift_user_formulas(formulas)
+
     skel = %__MODULE__{
       id: id,
       queue: FPQ.new(),
@@ -104,12 +106,35 @@ defmodule ShotTx.Prover.Branch do
       equations: equations,
       literals: MapSet.new([true_term(), neg(false_term())]),
       term_ids: MapSet.new([true_term(), neg(false_term())]),
-      type_universe: TypeUniverse.from_formulas(formulas)
+      type_universe: TypeUniverse.from_formulas(expanded_formulas),
+      history: lift_history
     }
 
-    formulas
+    expanded_formulas
     |> Enum.reduce(skel, &insert_formula(&2, &1, defs, params))
-    |> then(fn b -> Enum.reduce(formulas, b, &ingest_formula(&2, &1, params)) end)
+    |> then(fn b -> Enum.reduce(expanded_formulas, b, &ingest_formula(&2, &1, params)) end)
+  end
+
+  # Runs lambda-lifting once per user formula. For each formula that produces
+  # axioms, records a `:lambda_lift` history entry sourced at the original
+  # formula. Returns the expanded formula list (lifted form + axioms in place
+  # of any lifted original) and the history pre-populated in newest-first
+  # order, so chronological replay shows lifts before any rule firing.
+  defp lift_user_formulas(formulas) do
+    {expanded_rev, history_chrono} =
+      Enum.reduce(formulas, {[], []}, fn formula, {acc_terms, acc_hist} ->
+        case LambdaLift.lift(formula) do
+          {^formula, []} ->
+            {[formula | acc_terms], acc_hist}
+
+          {lifted, axioms} ->
+            produced = [lifted | axioms]
+            entry = {formula, :lambda_lift, produced}
+            {Enum.reverse(produced) ++ acc_terms, [entry | acc_hist]}
+        end
+      end)
+
+    {Enum.reverse(expanded_rev), history_chrono}
   end
 
   ##############################################################################

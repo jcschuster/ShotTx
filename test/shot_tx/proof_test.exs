@@ -28,9 +28,24 @@ defmodule ShotTx.ProofTest do
       assert ShotTx.Proof.to_text(proof) =~ ~r/./
       assert ShotTx.Proof.to_mermaid(proof) =~ ~r/./
     end
+
+    test "lambda lifting on a predicate argument is recorded as :lambda_lift" do
+      proof =
+        assert_thm(~p"""
+        thf(p_t, type, p: ($i>$i)>$o).
+        thf(c, conjecture, (p @ (^[X:$i]: X)) => (p @ (^[X:$i]: X))).
+        """)
+
+      assert :lambda_lift in collect_rules(proof.root)
+      assert ShotTx.Proof.to_text(proof) =~ "λ↑"
+    end
   end
 
   defp collect_kinds(%ShotTx.Proof.Step{kind: k, children: cs}) do
     [k | Enum.flat_map(cs, &collect_kinds/1)]
+  end
+
+  defp collect_rules(%ShotTx.Proof.Step{rule: r, children: cs}) do
+    [r | Enum.flat_map(cs, &collect_rules/1)]
   end
 end

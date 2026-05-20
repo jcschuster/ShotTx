@@ -388,6 +388,12 @@ defmodule ShotTx.Proof do
     {[{:rule, src, :beta_variant, additional} | evs], segs}
   end
 
+  defp interior_event({_src, :lambda_lift, []}, state), do: state
+
+  defp interior_event({src, :lambda_lift, [_ | _] = produced}, {evs, segs}) do
+    {fold_rule_events(:lambda_lift, src, produced, evs), segs}
+  end
+
   defp interior_event({src, :bdd_oracle, [simplified]}, {evs, segs}) do
     {[{:rule, src, :bdd_oracle, simplified} | evs], segs}
   end
@@ -864,6 +870,7 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:rename), do: "ren"
   defp rule_symbol(:instantiate), do: "inst"
   defp rule_symbol(:unfold), do: "unfold"
+  defp rule_symbol(:lambda_lift), do: "λ↑"
   defp rule_symbol(:atomic), do: "atomic"
   defp rule_symbol(:contradiction), do: "⊥"
   defp rule_symbol(other), do: to_string(other)
