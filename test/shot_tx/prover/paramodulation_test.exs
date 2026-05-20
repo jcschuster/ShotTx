@@ -152,5 +152,88 @@ defmodule ShotTx.Prover.ParamodulationTest do
         assert Paramodulation.paramodulants(pa, equations) == []
       end)
     end
+
+    test "head equation f = g rewrites f(a) to g(a)" do
+      ctx = ~e"f: $i>$o, g: $i>$o, a: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        f = ~f"f"
+        g = ~f"g"
+        fa = ~f"f @ a"
+        ga = ~f"g @ a"
+        equations = %{f => MapSet.new([g])}
+
+        results = Paramodulation.paramodulants(fa, equations)
+        formatted = Enum.map(results, &format!/1)
+
+        assert format!(ga) in formatted
+      end)
+    end
+
+    test "head equation rewrites under a propositional context" do
+      ctx = ~e"f: $i>$o, g: $i>$o, a: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        f = ~f"f"
+        g = ~f"g"
+        not_fa = ~f"~(f @ a)"
+        not_ga = ~f"~(g @ a)"
+        equations = %{f => MapSet.new([g])}
+
+        results = Paramodulation.paramodulants(not_fa, equations)
+        formatted = Enum.map(results, &format!/1)
+
+        assert format!(not_ga) in formatted
+      end)
+    end
+
+    test "binary head equation rewrites at every shared occurrence" do
+      ctx = ~e"f: $i>$i>$o, g: $i>$i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        f = ~f"f"
+        g = ~f"g"
+        fab = ~f"f @ a @ b"
+        gab = ~f"g @ a @ b"
+        equations = %{f => MapSet.new([g])}
+
+        results = Paramodulation.paramodulants(fab, equations)
+        formatted = Enum.map(results, &format!/1)
+
+        assert format!(gab) in formatted
+      end)
+    end
+
+    test "head equation with non-matching head produces no head rewrite" do
+      ctx = ~e"f: $i>$o, g: $i>$o, h: $i>$o, a: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        f = ~f"f"
+        g = ~f"g"
+        ha = ~f"h @ a"
+        equations = %{f => MapSet.new([g])}
+
+        assert Paramodulation.paramodulants(ha, equations) == []
+      end)
+    end
+  end
+
+  describe "unifying_paramodulants/3 head positions" do
+    test "free-variable head LHS rewrites a free-variable head position" do
+      ctx = ~e"X: $i>$o, f: $i>$o, a: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        x = ~f"X"
+        f = ~f"f"
+        xa = ~f"X @ a"
+        fa = ~f"f @ a"
+        equations = %{x => MapSet.new([f])}
+
+        results = Paramodulation.unifying_paramodulants(xa, equations, 4)
+        formatted = Enum.map(results, &format!/1)
+
+        assert format!(fa) in formatted
+      end)
+    end
   end
 end
