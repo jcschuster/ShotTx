@@ -3,6 +3,7 @@
 ```elixir
 Mix.install([
   {:shot_tx, github: "jcschuster/ShotTx"},
+  {:kino_shot_ds, "~> 0.1"},
   {:kino_atp_client, "~> 0.1.4"}
 ])
 ```
@@ -79,6 +80,46 @@ thf(conj, conjecture,
 """ |> format! |> IO.puts
 ```
 
+## Custom Smart Cells
+
+<!-- livebook:{"attrs":"eyJjb250ZXh0X3N0ciI6ImY6ICRpPiRpIiwiZm9ybXVsYV9zdHIiOiI/W1ggOiAkaSwgWSA6ICRpXTogKCAoZiBAIFgpID0gZiBAIFkgKSIsIm1vZGUiOiJmb3JtdWxhIiwicHJvYmxlbV9zdHIiOiJ0aGYodGVzdCwgY29uamVjdHVyZSwgJHRydWUgPT4gJHRydWUpLiIsInRoZW1lIjoiRHJhY3VsYSIsInZhcl9uYW1lIjoiZm9ybXVsYSJ9","chunks":null,"kind":"Elixir.KinoShotDs.TptpParser","livebook_object":"smart_cell"} -->
+
+```elixir
+formula = "?[X : $i, Y : $i]: ( (f @ X) = f @ Y )"
+context = ShotDs.Parser.parse_context!("f: $i>$i")
+
+formula =
+  case ShotDs.Parser.parse(formula, ctx: context) do
+    {:ok, term_id} -> term_id
+    {:error, reason} -> raise "Error: #{inspect(reason)}"
+  end
+
+:ok
+```
+
+```elixir
+IO.puts format! formula
+```
+
+<!-- livebook:{"attrs":"eyJjb250ZXh0X3N0ciI6IiIsImZvcm11bGFfc3RyIjoiIVtYIDogJG9dOiBYID0+IFgiLCJtb2RlIjoicHJvYmxlbSIsInByb2JsZW1fc3RyIjoidGhmKGZfdHlwZSwgdHlwZSwgZjogJGk+JGkpLlxyXG50aGYodGVzdCwgY29uamVjdHVyZSxcclxuICAgID9bWCA6ICRpLCBZIDogJGldOiAoIChmIEAgWCkgPSBmIEAgWSApXHJcbikuIiwidGhlbWUiOiJEcmFjdWxhIiwidmFyX25hbWUiOiJwcm9ibGVtIn0","chunks":null,"kind":"Elixir.KinoShotDs.TptpParser","livebook_object":"smart_cell"} -->
+
+```elixir
+problem =
+  "thf(f_type, type, f: $i>$i).\r\nthf(test, conjecture,\r\n    ?[X : $i, Y : $i]: ( (f @ X) = f @ Y )\r\n)."
+
+problem =
+  case ShotDs.Tptp.parse_tptp_string(problem) do
+    {:ok, parsed} -> parsed
+    {:error, reason} -> raise "Error: #{inspect(reason)}"
+  end
+
+:ok
+```
+
+```elixir
+IO.puts format! problem
+```
+
 ## Proof Tree Rendering with Kino and Mermaid
 
 ```elixir
@@ -100,6 +141,20 @@ render res
 ```
 
 ## Truth Grounding: ATPClient with SmartCell
+
+```elixir
+AtpClient.SystemOnTptp.list_provers |> Enum.join("\n") |> IO.puts
+```
+
+```elixir
+problem = """
+thf(test, conjecture,
+    ![P: $o, Q: $o]: ((P & Q) => (Q & P))
+).
+"""
+
+AtpClient.SystemOnTptp.query_system(problem, "Zipperpin---2.1")
+```
 
 <!-- livebook:{"attrs":"eyJwcm9ibGVtX3N0ciI6InRoZih0ZXN0LCBjb25qZWN0dXJlLFxyXG4gICAgIVtQOiAkbywgUTogJG9dOiAoKFAgJiBRKSA9PiAoUSAmIFApKVxyXG4pLiIsInN5c3RlbSI6Ikxlby1JSUktLS0xLjcuMjAiLCJ0aGVtZSI6Ik1vbm9rYWkgQnJpZ2h0IiwidGltZV9saW1pdCI6NSwidHB0cDR4X2VuYWJsZWQiOmZhbHNlfQ","chunks":null,"kind":"Elixir.KinoAtpClient.SystemOnTptp","livebook_object":"smart_cell"} -->
 
