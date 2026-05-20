@@ -177,6 +177,22 @@ defmodule ShotTx.Prover do
 
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
 
+  @doc """
+  Compiles a raw stats snapshot (as returned by `prove/3` with `stats: true`)
+  into a structured report grouped by `:timing`, `:search`, `:rules`,
+  `:branches`, and `:csp`. Idempotent on already-compiled reports.
+  """
+  @spec compile_stats(map()) :: map()
+  defdelegate compile_stats(stats), to: ShotTx.Prover.Stats, as: :compile
+
+  @doc """
+  Pretty-prints a stats snapshot or compiled report. Pass `verbose: true` to
+  include zero-valued rule/branch counters, or `sections: [:timing, :csp]` to
+  render a subset.
+  """
+  @spec format_stats(map(), keyword()) :: String.t()
+  defdelegate format_stats(stats, opts \\ []), to: ShotTx.Prover.Stats, as: :format
+
   defp close_formula(term_id) do
     %Term{fvars: fvars} = TF.get_term!(term_id)
 
