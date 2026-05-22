@@ -163,6 +163,18 @@ thf(powerset_def, definition,
 set_theory = set_theory_types <> set_theory_defs
 ```
 
+## Section
+
+```elixir
+res = prove ~f"~ ![Y:$o>$o]: ( (~a & Y @ a) | (~ (p @ b) & p @ (Y @ b)) )"
+# TODO: deactivate instance-based gamma instantiation
+format_result res
+```
+
+```elixir
+render res
+```
+
 <!-- livebook:{"branch_parent_index":0} -->
 
 ## Non-Theorems
@@ -476,7 +488,7 @@ thf(conj, conjecture,
 """, simplification: :deep
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -488,7 +500,7 @@ thf(conj, conjecture,
 """, simplification: :deep
 
 format_result res
-# Timeout
+# THM
 ```
 
 ```elixir
@@ -596,10 +608,16 @@ thf(conj, conjecture,
     (l @ X @ Y) => (l @ (F @ X) @ (F @ Y))
   )
 ).
-"""
+""", timeout: 100
 
 format_result res
 # Timeout
+```
+
+<!-- livebook:{"output_size":"full"} -->
+
+```elixir
+render res
 ```
 
 ```elixir
@@ -613,7 +631,7 @@ thf(conj, conjecture,
 """
 
 format_result res
-# THM
+# Timeout
 ```
 
 ```elixir
