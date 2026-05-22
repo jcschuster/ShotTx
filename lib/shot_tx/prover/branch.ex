@@ -504,7 +504,7 @@ defmodule ShotTx.Prover.Branch do
             {:continue, updated, :no_effects}
         end
 
-      {unfolded_source, _cf} ->
+      unfolded_source ->
         updated =
           branch
           |> insert_formula(unfolded_source, branch.defs, params)
@@ -522,13 +522,13 @@ defmodule ShotTx.Prover.Branch do
   defp simplify_formula(source, cf, branch, %Parameters{simplification: :none}),
     do: {source, cf, branch}
 
-  defp simplify_formula(source, cf, branch, %Parameters{simplification: mode}) do
-    simplified = PropSimplify.simplify(source, mode)
+  defp simplify_formula(source, cf, branch, %Parameters{} = params) do
+    simplified = PropSimplify.simplify(source, params.simplification)
 
     if simplified == source do
       {source, cf, branch}
     else
-      simplified_cf = Rules.classify_formula(simplified)
+      simplified_cf = Rules.classify_formula(simplified, params.finite_o_quantification)
 
       branch_with_simp =
         branch
@@ -692,7 +692,7 @@ defmodule ShotTx.Prover.Branch do
 
   defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params) do
     effective = formula |> maybe_unfold(defs, params) |> maybe_orient(params)
-    cf = Rules.classify_formula(effective)
+    cf = Rules.classify_formula(effective, params.finite_o_quantification)
 
     pending =
       case branch.pending_closure do
@@ -744,7 +744,12 @@ defmodule ShotTx.Prover.Branch do
         Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
           all_ps =
             (Paramodulation.paramodulants(lit, new_eq_only) ++
-               Paramodulation.unifying_paramodulants(lit, new_eq_only, params.unification_depth))
+               Paramodulation.unifying_paramodulants(
+                 lit,
+                 new_eq_only,
+                 params.unification_depth,
+                 params.paramodulation_mode
+               ))
             |> Enum.uniq()
 
           case all_ps do
@@ -801,7 +806,12 @@ defmodule ShotTx.Prover.Branch do
   defp paramodulate_literal_with_equations(branch, term_id, params) do
     all_ps =
       (Paramodulation.paramodulants(term_id, branch.equations) ++
-         Paramodulation.unifying_paramodulants(term_id, branch.equations, params.unification_depth))
+         Paramodulation.unifying_paramodulants(
+           term_id,
+           branch.equations,
+           params.unification_depth,
+           params.paramodulation_mode
+         ))
       |> Enum.uniq()
 
     case all_ps do
@@ -821,12 +831,7 @@ defmodule ShotTx.Prover.Branch do
 
   defp unfold_if_possible(term_id, defs) do
     unfolded = Semantics.unfold_defs!(term_id, defs)
-
-    if unfolded == term_id do
-      nil
-    else
-      {unfolded, Rules.classify_formula(unfolded)}
-    end
+    if unfolded == term_id, do: nil, else: unfolded
   end
 
   defp unfold_literals(branch, literals, defs, %Parameters{} = params) do
@@ -835,7 +840,7 @@ defmodule ShotTx.Prover.Branch do
         nil ->
           b
 
-        {unfolded, _cf} ->
+        unfolded ->
           b
           |> insert_formula(unfolded, defs, params)
           |> record(tid, {:atomic, tid}, [unfolded])

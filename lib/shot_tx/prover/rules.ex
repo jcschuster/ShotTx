@@ -109,12 +109,19 @@ defmodule ShotTx.Prover.Rules do
   # CLASSIFICATION
   ##############################################################################
 
-  @doc "Classifies a term ID as the tableau rule that should be applied to it."
-  @spec classify_formula(Term.term_id()) :: rule_t()
-  def classify_formula(term_id) when is_integer(term_id) do
+  @doc """
+  Classifies a term ID as the tableau rule that should be applied to it.
+
+  The second argument controls how quantifiers over pure `o`-types are
+  handled. When `true` (default) they are routed to the finite γ-rule which
+  enumerates the propositional domain; when `false` they fall through to the
+  ordinary γ-rule, the same path used for non-`o` quantifiers.
+  """
+  @spec classify_formula(Term.term_id(), boolean()) :: rule_t()
+  def classify_formula(term_id, finite_o_quantification \\ true) when is_integer(term_id) do
     case TF.get_term!(term_id) do
       negated(inner) ->
-        classify_neg_formula(inner)
+        classify_neg_formula(inner, finite_o_quantification)
 
       falsity() ->
         :contradiction
@@ -147,7 +154,7 @@ defmodule ShotTx.Prover.Rules do
         {:beta, {p &&& q, neg(q) &&& neg(p)}}
 
       typed_universal_quantification(pred, t) ->
-        if pure_o_type?(t) do
+        if finite_o_quantification and pure_o_type?(t) do
           {:gamma_finite, lambda(t, fn x -> app(pred, x) end), t}
         else
           {:gamma, lambda(t, fn x -> app(pred, x) end), t, 0}
@@ -166,8 +173,8 @@ defmodule ShotTx.Prover.Rules do
   # NEGATED CLASSIFICATION
   ##############################################################################
 
-  @spec classify_neg_formula(Term.term_id()) :: rule_t()
-  defp classify_neg_formula(term_id) do
+  @spec classify_neg_formula(Term.term_id(), boolean()) :: rule_t()
+  defp classify_neg_formula(term_id, finite_o_quantification) do
     case TF.get_term!(term_id) do
       negated(inner) ->
         {:alpha, [inner]}
@@ -213,7 +220,7 @@ defmodule ShotTx.Prover.Rules do
         {:delta, neg(app(pred, sk_term(fvars, t)))}
 
       typed_existential_quantification(pred, t) ->
-        if pure_o_type?(t) do
+        if finite_o_quantification and pure_o_type?(t) do
           {:gamma_finite, lambda(t, fn x -> neg(app(pred, x)) end), t}
         else
           {:gamma, lambda(t, fn x -> neg(app(pred, x)) end), t, 0}

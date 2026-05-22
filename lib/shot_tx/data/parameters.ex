@@ -16,6 +16,8 @@ defmodule ShotTx.Data.Parameters do
   | `simplification` | `:deep` | Propositional simplification depth: `:none`, `:shallow`, or `:deep`. |
   | `orient` | `false` | When `true`, orient commutative connectives by term order before classifying. |
   | `term_order` | `%ShotTo.Parameters{}` | Parameters forwarded to the `ShotTo` term-order module. |
+  | `finite_o_quantification` | `true` | When `true`, quantifiers whose bound variable has a pure `o`-type are handled by the finite γ-rule (full enumeration of the propositional domain); when `false`, they are instantiated by the ordinary γ-rule like any other type. |
+  | `paramodulation_mode` | `:unification` | Strategy used to align an equation LHS with a literal position. `:unification` runs full higher-order pre-unification (Huet 1975). `:pattern` runs Miller pattern unification — decidable, unitary, restricted to the higher-order pattern fragment (every flex variable applied to distinct bound variables); positions outside the fragment are skipped. `:matching` runs Huet second-order matching — decidable, terminating, but requires the literal position to be ground and every type to be at most second-order; positions outside the fragment are skipped. |
   """
 
   alias ShotTx.Prover.Rules
@@ -31,7 +33,9 @@ defmodule ShotTx.Data.Parameters do
             formula_cost: &Rules.rule_cost/1,
             simplification: :deep,
             orient: false,
-            term_order: %ShotTo.Parameters{}
+            term_order: %ShotTo.Parameters{},
+            finite_o_quantification: true,
+            paramodulation_mode: :unification
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -45,6 +49,8 @@ defmodule ShotTx.Data.Parameters do
           formula_cost: (Rules.rule_t() -> non_neg_integer()),
           simplification: :none | :shallow | :deep,
           orient: boolean(),
-          term_order: ShotTo.Parameters.t()
+          term_order: ShotTo.Parameters.t(),
+          finite_o_quantification: boolean(),
+          paramodulation_mode: :unification | :pattern | :matching
         }
 end

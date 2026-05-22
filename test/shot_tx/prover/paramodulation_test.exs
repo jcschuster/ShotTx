@@ -116,6 +116,68 @@ defmodule ShotTx.Prover.ParamodulationTest do
         assert Paramodulation.unifying_paramodulants(pa, equations, 4) == []
       end)
     end
+
+    test ":matching rejects bindings on a literal-side free variable" do
+      ctx = ~e"X: $i, f: $i>$i, p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        literal = ~f"p @ (f @ X)"
+        lhs_ground = ~f"f @ a"
+        rhs = ~f"b"
+        equations = %{lhs_ground => MapSet.new([rhs])}
+
+        unif = Paramodulation.unifying_paramodulants(literal, equations, 4, :unification)
+        assert format!(~f"p @ b") in Enum.map(unif, &format!/1)
+
+        assert Paramodulation.unifying_paramodulants(literal, equations, 4, :matching) == []
+      end)
+    end
+
+    test ":matching still accepts equation-side bindings" do
+      ctx = ~e"X: $i, f: $i>$i, p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        literal = ~f"p @ (f @ b)"
+        fx = ~f"f @ X"
+        rhs = ~f"a"
+        equations = %{fx => MapSet.new([rhs])}
+
+        results = Paramodulation.unifying_paramodulants(literal, equations, 4, :matching)
+        assert [result] = results
+        assert format!(result) == format!(~f"p @ a")
+      end)
+    end
+
+    test ":pattern rewrites a ground subterm via an equation-side variable" do
+      ctx = ~e"X: $i, f: $i>$i, p: $i>$o, a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        literal = ~f"p @ (f @ b)"
+        fx = ~f"f @ X"
+        rhs = ~f"a"
+        equations = %{fx => MapSet.new([rhs])}
+
+        results = Paramodulation.unifying_paramodulants(literal, equations, 4, :pattern)
+        assert [result] = results
+        assert format!(result) == format!(~f"p @ a")
+      end)
+    end
+
+    test ":pattern skips positions outside the pattern fragment" do
+      ctx = ~e"F: $i>$i, a: $i, b: $i, p: $i>$o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        # `F @ a` is not in the pattern fragment (the flex `F` is applied to
+        # the constant `a`, not to a bound variable). Pattern unification
+        # must skip this site rather than raise.
+        literal = ~f"p @ (F @ a)"
+        lhs = ~f"f @ a"
+        rhs = ~f"b"
+        equations = %{lhs => MapSet.new([rhs])}
+
+        assert Paramodulation.unifying_paramodulants(literal, equations, 4, :pattern) == []
+      end)
+    end
   end
 
   describe "paramodulants/2" do

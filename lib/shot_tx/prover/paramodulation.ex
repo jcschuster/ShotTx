@@ -20,9 +20,19 @@ defmodule ShotTx.Prover.Paramodulation do
     * **Structural** matching (`paramodulants/2`): identity of memoised
       term-ids, plus a special-case check for equations whose LHS is a
       primitive η-expansion `λv̄. h(v̄)` of a head `h`.
-    * **Higher-order pre-unification** (`unifying_paramodulants/3`): calls
-      `ShotUn.unify/2` against subterms and against η-expanded head prefixes,
-      then applies the resulting substitution before rewriting.
+    * **Higher-order unification** (`unifying_paramodulants/4`): calls
+      `ShotUn.unify/3` against subterms and against η-expanded head prefixes,
+      then applies the resulting substitution before rewriting. The fourth
+      argument selects the alignment fragment:
+
+        * `:unification` — full higher-order pre-unification (Huet 1975);
+        * `:pattern`     — Miller pattern unification (decidable, unitary);
+        * `:matching`    — Huet second-order matching (decidable,
+          terminating; requires the literal position to be ground).
+
+      For `:pattern` and `:matching` the precondition is checked locally
+      via `ShotUn.Fragment`; positions outside the fragment are silently
+      skipped so the strategy stays terminating.
 
   Triggering is lazy (no preprocessing): paramodulants are generated on
   demand when a new literal enters the branch (against all known equations)
@@ -44,7 +54,7 @@ defmodule ShotTx.Prover.Paramodulation do
       Rewriting at a head position inside a λ-abstraction would require
       rebuilding the abstraction over substituted prefix args; the
       α-decomposition path covers those cases.
-    * `unifying_paramodulants/3` enumerates partial-application prefixes for
+    * `unifying_paramodulants/4` enumerates partial-application prefixes for
       every arity `0 ≤ k < arity(s)`; full-spine matching (`k = arity(s)`) is
       already covered by direct subterm unification.
   """
@@ -53,9 +63,25 @@ defmodule ShotTx.Prover.Paramodulation do
   alias ShotDs.Stt.Semantics
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
+  alias ShotUn.Fragment
 
   @typedoc "Map from a term-id to the set of all its known-equal term-ids."
   @type equation_map :: %{Term.term_id() => MapSet.t(Term.term_id())}
+
+  @typedoc """
+  Strategy used when aligning an equation LHS with a literal position.
+
+    * `:unification` — full higher-order pre-unification (Huet 1975).
+    * `:pattern`     — Miller pattern unification: decidable and unitary,
+      restricted to the higher-order pattern fragment.
+    * `:matching`    — Huet second-order matching: decidable and
+      terminating, requires the literal-side term to be ground and every
+      type to be at most second-order.
+
+  For `:pattern` and `:matching` the fragment precondition is checked at
+  each site; pairs that fall outside the fragment are skipped.
+  """
+  @type mode :: :unification | :pattern | :matching
 
   @doc """
   Returns the paramodulants of `term_id` using `equations`.
@@ -152,18 +178,26 @@ defmodule ShotTx.Prover.Paramodulation do
   literal and the rewrite is computed by applying the substituted RHS to the
   remaining (substituted) arguments. Results are committed to the global
   term factory and de-duplicated.
-  """
-  @spec unifying_paramodulants(Term.term_id(), equation_map(), non_neg_integer()) ::
-          [Term.term_id()]
-  def unifying_paramodulants(_term_id, equations, _depth) when map_size(equations) == 0, do: []
 
-  def unifying_paramodulants(term_id, equations, depth) do
-    (subterm_unifying(term_id, equations, depth) ++
-       prefix_unifying(term_id, equations, depth))
+  The `mode` argument selects the unification fragment used at each site
+  (`:unification`, `:pattern`, or `:matching`). For `:pattern` and
+  `:matching` the precondition of the fragment is checked per pair; pairs
+  that fall outside the fragment are silently skipped.
+  """
+  @spec unifying_paramodulants(Term.term_id(), equation_map(), non_neg_integer(), mode()) ::
+          [Term.term_id()]
+  def unifying_paramodulants(term_id, equations, depth, mode \\ :unification)
+
+  def unifying_paramodulants(_term_id, equations, _depth, _mode) when map_size(equations) == 0,
+    do: []
+
+  def unifying_paramodulants(term_id, equations, depth, mode) do
+    (subterm_unifying(term_id, equations, depth, mode) ++
+       prefix_unifying(term_id, equations, depth, mode))
     |> Enum.uniq()
   end
 
-  defp subterm_unifying(term_id, equations, depth) do
+  defp subterm_unifying(term_id, equations, depth, mode) do
     subs = subterms(term_id)
 
     Enum.flat_map(equations, fn {lhs_id, rhs_ids} ->
@@ -171,13 +205,13 @@ defmodule ShotTx.Prover.Paramodulation do
         if sub_id == lhs_id do
           []
         else
-          unify_and_rewrite(term_id, sub_id, lhs_id, rhs_ids, depth, fn _ -> [] end)
+          unify_and_rewrite(term_id, sub_id, lhs_id, rhs_ids, depth, mode, fn _ -> [] end)
         end
       end)
     end)
   end
 
-  defp prefix_unifying(term_id, equations, depth) do
+  defp prefix_unifying(term_id, equations, depth, mode) do
     term_id
     |> applied_subterms()
     |> Enum.flat_map(fn s_id ->
@@ -190,7 +224,7 @@ defmodule ShotTx.Prover.Paramodulation do
         trailing = Enum.drop(s.args, k)
 
         Enum.flat_map(equations, fn {lhs_id, rhs_ids} ->
-          unify_and_rewrite(term_id, prefix_id, lhs_id, rhs_ids, depth, fn substs ->
+          unify_and_rewrite(term_id, prefix_id, lhs_id, rhs_ids, depth, mode, fn substs ->
             applied_trailing = Enum.map(trailing, &Semantics.subst!(substs, &1))
             applied_s = Semantics.subst!(substs, s_id)
             {:rebuild, applied_s, applied_trailing}
@@ -200,33 +234,55 @@ defmodule ShotTx.Prover.Paramodulation do
     end)
   end
 
-  defp unify_and_rewrite(term_id, position_id, lhs_id, rhs_ids, depth, post_unify) do
-    ShotUn.unify({lhs_id, position_id}, depth)
-    |> Enum.flat_map(fn %{substitutions: substs} ->
-      applied_literal = Semantics.subst!(substs, term_id)
-      applied_lhs = Semantics.subst!(substs, lhs_id)
-      rebuild = post_unify.(substs)
+  defp unify_and_rewrite(term_id, position_id, lhs_id, rhs_ids, depth, mode, post_unify) do
+    case unify_stream({lhs_id, position_id}, depth, mode) do
+      :skip ->
+        []
 
-      Enum.flat_map(MapSet.to_list(rhs_ids), fn rhs_id ->
-        applied_rhs = Semantics.subst!(substs, rhs_id)
+      stream ->
+        Enum.flat_map(stream, fn %{substitutions: substs} ->
+          applied_literal = Semantics.subst!(substs, term_id)
+          applied_lhs = Semantics.subst!(substs, lhs_id)
+          rebuild = post_unify.(substs)
 
-        candidate =
-          case rebuild do
-            [] ->
-              replace_subterm(applied_literal, applied_lhs, applied_rhs)
+          Enum.flat_map(MapSet.to_list(rhs_ids), fn rhs_id ->
+            applied_rhs = Semantics.subst!(substs, rhs_id)
 
-            {:rebuild, target_id, trailing} ->
-              rewritten = TF.fold_apply!(applied_rhs, trailing)
-              replace_subterm(applied_literal, target_id, rewritten)
-          end
+            candidate =
+              case rebuild do
+                [] ->
+                  replace_subterm(applied_literal, applied_lhs, applied_rhs)
 
-        if candidate == applied_literal do
-          []
-        else
-          [TF.commit_to_global!(candidate)]
-        end
-      end)
-    end)
+                {:rebuild, target_id, trailing} ->
+                  rewritten = TF.fold_apply!(applied_rhs, trailing)
+                  replace_subterm(applied_literal, target_id, rewritten)
+              end
+
+            if candidate == applied_literal do
+              []
+            else
+              [TF.commit_to_global!(candidate)]
+            end
+          end)
+        end)
+    end
+  end
+
+  # Returns the unifier stream for the chosen strategy, or `:skip` when the
+  # pair falls outside the precondition of a restricted fragment.
+  defp unify_stream(pair, depth, :unification),
+    do: ShotUn.unify(pair, depth)
+
+  defp unify_stream(pair, _depth, :pattern) do
+    if Fragment.pattern_problem?([pair]),
+      do: ShotUn.unify(pair, 0, strategy: :pattern),
+      else: :skip
+  end
+
+  defp unify_stream(pair, _depth, :matching) do
+    if Fragment.matching_problem?([pair]),
+      do: ShotUn.unify(pair, 0, strategy: :matching),
+      else: :skip
   end
 
   @doc """
@@ -235,7 +291,7 @@ defmodule ShotTx.Prover.Paramodulation do
 
   Heads are not separately represented as term-id nodes; they only count as
   subterms when they appear as zero-arity terms. To rewrite at head positions
-  see `paramodulants/2` and `unifying_paramodulants/3`.
+  see `paramodulants/2` and `unifying_paramodulants/4`.
   """
   @spec subterms(Term.term_id()) :: MapSet.t(Term.term_id())
   def subterms(term_id) do
