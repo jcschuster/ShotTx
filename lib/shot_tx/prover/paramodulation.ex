@@ -319,8 +319,7 @@ defmodule ShotTx.Prover.Paramodulation do
       if current_term.id == target do
         {replacement, acc_cache}
       else
-        new_term = %{current_term | args: new_args}
-        {TF.memoize(new_term), acc_cache}
+        {rebuild_term(current_term, new_args), acc_cache}
       end
     end
 
@@ -328,6 +327,14 @@ defmodule ShotTx.Prover.Paramodulation do
       TermTraversal.map_term!(term_id, nil, fn _, env -> env end, transform)
 
     result_id
+  end
+
+  # Rebuild a term from its head and new args, recomputing all metadata fields.
+  # Avoids the stale consts/fvars/max_num/tvars left by %{term | args: new_args}.
+  defp rebuild_term(%Term{head: head, bvars: bvars}, new_args) do
+    head_id = TF.make_term(head)
+    body_id = TF.fold_apply!(head_id, new_args)
+    List.foldr(bvars, body_id, &TF.make_abstr_term!(&2, &1))
   end
 
   # ----------------------------------------------------------------------------
