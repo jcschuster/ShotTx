@@ -34,6 +34,30 @@ defmodule ShotTx.Prover.RulesTest do
       assert Rules.rule_cost({:prim_subst, 1, t, 1, progress}) <
                Rules.rule_cost({:prim_subst, 1, t, 4, progress})
     end
+
+    test "equality_expansion costs default to iff_o < extensional < leibniz" do
+      iff_o = {:equality_expansion, :iff_o, [1]}
+      ext = {:equality_expansion, :extensional, [1]}
+      leib = {:equality_expansion, :leibniz, [1]}
+
+      assert Rules.rule_cost(iff_o) < Rules.rule_cost(ext)
+      assert Rules.rule_cost(ext) < Rules.rule_cost(leib)
+    end
+
+    test "leibniz expansion is more expensive than gamma so paramodulation gets first crack" do
+      gamma = {:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0}
+      leib = {:equality_expansion, :leibniz, [1]}
+      assert Rules.rule_cost(gamma) < Rules.rule_cost(leib)
+    end
+
+    test "equality_expansion overrides apply per-kind and leave other kinds at default" do
+      ext = {:equality_expansion, :extensional, [1]}
+      leib = {:equality_expansion, :leibniz, [1]}
+
+      overrides = %{leibniz: 5}
+      assert Rules.rule_cost(leib, overrides) == 5
+      assert Rules.rule_cost(ext, overrides) == Rules.rule_cost(ext)
+    end
   end
 
   describe "classify_formula/1" do
@@ -130,11 +154,43 @@ defmodule ShotTx.Prover.RulesTest do
       end)
     end
 
-    test "boolean equality unfolds to equivalence (alpha)" do
+    test "boolean equality unfolds to equivalence (equality_expansion :iff_o)" do
       ctx = ~e"p: $o, q: $o"
 
       ShotDs.Hol.Sigils.with_context(ctx, fn ->
-        assert {:alpha, [_eqv]} = Rules.classify_formula(~f"p = q")
+        assert {:equality_expansion, :iff_o, [_eqv]} = Rules.classify_formula(~f"p = q")
+      end)
+    end
+
+    test "equality at a base type classifies as Leibniz expansion" do
+      ctx = ~e"a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert {:equality_expansion, :leibniz, [_]} = Rules.classify_formula(~f"a = b")
+      end)
+    end
+
+    test "equality at a functional type classifies as extensional expansion" do
+      ctx = ~e"f: $i>$i, g: $i>$i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert {:equality_expansion, :extensional, [_]} = Rules.classify_formula(~f"f = g")
+      end)
+    end
+
+    test "negated boolean equality classifies as equality_expansion :iff_o" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert {:equality_expansion, :iff_o, [_]} = Rules.classify_formula(~f"~ (p = q)")
+      end)
+    end
+
+    test "negated base-type equality classifies as Leibniz expansion" do
+      ctx = ~e"a: $i, b: $i"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert {:equality_expansion, :leibniz, [_]} = Rules.classify_formula(~f"~ (a = b)")
       end)
     end
 
@@ -147,12 +203,12 @@ defmodule ShotTx.Prover.RulesTest do
       end)
     end
 
-    test "neg_ext: ~(f = g) at arrow type with closed sides produces alpha with skolem application" do
+    test "neg_ext: ~(f = g) at arrow type with closed sides produces equality_expansion :extensional with skolem application" do
       ctx = ~e"f: $i>$i, g: $i>$i"
 
       ShotDs.Hol.Sigils.with_context(ctx, fn ->
         neg_eq = ~f"~ (f = g)"
-        assert {:alpha, [result]} = Rules.classify_formula(neg_eq)
+        assert {:equality_expansion, :extensional, [result]} = Rules.classify_formula(neg_eq)
         formatted = ShotDs.Util.Formatter.format!(result)
         assert formatted =~ "f"
         assert formatted =~ "g"
@@ -160,12 +216,12 @@ defmodule ShotTx.Prover.RulesTest do
       end)
     end
 
-    test "neg_ext: ~(f = g) at arrow type with free variable sides falls back to extensional equality" do
+    test "neg_ext: ~(X = g) at arrow type with free variable sides falls back to extensional equality expansion" do
       ctx = ~e"X: $i>$i, g: $i>$i"
 
       ShotDs.Hol.Sigils.with_context(ctx, fn ->
         neg_eq = ~f"~ (X = g)"
-        assert {:alpha, [_]} = Rules.classify_formula(neg_eq)
+        assert {:equality_expansion, :extensional, [_]} = Rules.classify_formula(neg_eq)
       end)
     end
   end

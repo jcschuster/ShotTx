@@ -324,6 +324,10 @@ defmodule ShotTx.Proof do
     {fold_rule_events(concrete_alpha(src), src, produced, evs), segs}
   end
 
+  defp interior_event({src, {:equality_expansion, _kind, _}, produced}, {evs, segs}) do
+    {fold_rule_events(concrete_alpha(src), src, produced, evs), segs}
+  end
+
   defp interior_event({src, {:delta, _}, [sk]}, {evs, segs}) do
     {[{:rule, src, concrete_delta(src), sk} | evs], segs}
   end

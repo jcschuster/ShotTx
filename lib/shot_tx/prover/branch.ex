@@ -23,8 +23,9 @@ defmodule ShotTx.Prover.Branch do
   ## Equality handling
 
   Every formula added to the branch is run through `ingest_formula/3`. This
-  preserves the existing alpha-decomposition of equality (Leibniz /
-  extensional / equiv) and additionally:
+  preserves the existing decomposition of equality via the
+  `:equality_expansion` rule (Leibniz / extensional / o-type iff) and
+  additionally:
 
     * If the formula is an equation `s = t`, it is recorded in
       `branch.equations` and every existing literal is paramodulated against
@@ -206,6 +207,23 @@ defmodule ShotTx.Prover.Branch do
   # --- Linear decompositions --------------------------------------------------
 
   defp apply_rule({:alpha, formulas} = rule, source, branch, params, _g_limit, _p_limit) do
+    updated =
+      formulas
+      |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))
+      |> ingest_formulas(formulas, params)
+      |> record(source, rule, formulas)
+
+    {:continue, updated, :no_effects}
+  end
+
+  defp apply_rule(
+         {:equality_expansion, _kind, formulas} = rule,
+         source,
+         branch,
+         params,
+         _g_limit,
+         _p_limit
+       ) do
     updated =
       formulas
       |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))

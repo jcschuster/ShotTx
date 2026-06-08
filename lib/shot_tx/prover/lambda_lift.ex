@@ -5,10 +5,11 @@ defmodule ShotTx.Prover.LambdaLift do
   Walks a term and, for every *closed* lambda subterm that occurs as an
   argument of a non-logical rigid constant, replaces the abstraction with a
   fresh constant `c` of the same arrow type and emits a typed-equality axiom
-  `c =_τ λx̄. body`. The axiom is a normal branch formula — the existing
-  α-rule on `typed_equality` (Rules.classify_formula/1) decomposes it via
-  `extensional_equality` / `leibniz_equality`, so subsequent reasoning rides
-  on the standard γ/α/atomic/paramodulation pipeline.
+  `c =_τ λx̄. body`. The axiom is a normal branch formula — the
+  `:equality_expansion` rule on `typed_equality` (Rules.classify_formula/1)
+  decomposes it via `extensional_equality` / `leibniz_equality`, so
+  subsequent reasoning rides on the standard γ/α/atomic/paramodulation
+  pipeline.
 
   Importantly, lift constants are *not* added to `branch.defs`; they cannot
   be undone by `Semantics.unfold_defs!`. Definition unfolding and lambda

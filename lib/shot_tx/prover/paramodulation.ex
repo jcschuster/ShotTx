@@ -42,10 +42,12 @@ defmodule ShotTx.Prover.Paramodulation do
 
   Rewriting is by **DAG occurrence**, not tree occurrence: replacing `s` with
   `t` rewrites all shared occurrences of `s` simultaneously, consistent with
-  the term factory's structure-sharing semantics. The α-decomposition of
-  equality into Leibniz / extensional form remains a sound and complete
-  fallback for higher-order equality reasoning; paramodulation supplements it
-  with cheap direct rewrites.
+  the term factory's structure-sharing semantics. The `:equality_expansion`
+  rule (Leibniz / extensional / o-type iff) remains a sound and complete
+  fallback for higher-order equality reasoning; paramodulation supplements
+  it with cheap direct rewrites. The expansion rule is priced separately
+  per kind so Leibniz can be held back behind paramodulation on first-order
+  problems — see `ShotTx.Prover.Rules.rule_cost/2`.
 
   ## Limitations
 

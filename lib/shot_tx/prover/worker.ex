@@ -345,5 +345,6 @@ defmodule ShotTx.Prover.Worker do
   defp rule_key({:gamma, _, _, _}), do: :rule_gamma
   defp rule_key({:prim_subst, _, _, _, _}), do: :rule_prim_subst
   defp rule_key({:instantiate, _, _}), do: :rule_instantiate
+  defp rule_key({:equality_expansion, _, _}), do: :rule_equality_expansion
   defp rule_key(_), do: :rule_other
 end

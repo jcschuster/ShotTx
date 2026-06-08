@@ -74,6 +74,27 @@ defmodule ShotTx.Prover.Rules do
   """
   @type atomic_t :: {:atomic, Term.term_id()}
 
+  @typedoc """
+  Discriminates the three flavors of equality expansion.
+
+    * `:iff_o`       — equality at type `o` is just `↔`.
+    * `:extensional` — equality at a functional type expands via
+      extensional equality (or, for closed sides, a fresh-constant
+      application form).
+    * `:leibniz`     — equality at any remaining type expands via the
+      Leibniz schema `∀P. P(a) ↔ P(b)`. The expensive one for FO.
+  """
+  @type equality_kind :: :iff_o | :extensional | :leibniz
+
+  @typedoc """
+  Equality expansion rule. Mechanically identical to an α-rule (a linear
+  decomposition into a list of produced formulas), but tagged with its
+  `equality_kind` so the cost function can charge each kind separately and
+  proof-search can de-prioritize Leibniz behind paramodulation.
+  """
+  @type equality_expansion_t ::
+          {:equality_expansion, equality_kind(), nonempty_list(Term.term_id())}
+
   @type rule_t() ::
           alpha_t()
           | beta_t()
@@ -86,10 +107,33 @@ defmodule ShotTx.Prover.Rules do
           | rename_t()
           | instantiate_t()
           | atomic_t()
+          | equality_expansion_t()
 
-  @doc "Returns the priority cost for a rule; lower cost means higher priority in the queue."
+  @typedoc """
+  Partial override map for `rule_cost/2`. Any kind absent from the map keeps
+  its default. Keys not recognised by the rule case are ignored.
+  """
+  @type cost_overrides :: %{optional(equality_kind()) => non_neg_integer()}
+
+  @doc """
+  Returns the priority cost for a rule; lower cost means higher priority in
+  the queue. Equivalent to `rule_cost(rule, %{})`.
+  """
   @spec rule_cost(rule_t()) :: non_neg_integer()
-  def rule_cost(rule) do
+  def rule_cost(rule), do: rule_cost(rule, %{})
+
+  @doc """
+  Returns the priority cost for a rule, allowing per-kind overrides for
+  equality expansion. The `overrides` map only needs to mention the kinds
+  whose default should change; unlisted kinds keep their defaults.
+
+  Typical use is to pin a heavy cost on Leibniz expansion while letting the
+  o-type and extensional forms stay cheap:
+
+      formula_cost: &ShotTx.Prover.Rules.rule_cost(&1, %{leibniz: 100})
+  """
+  @spec rule_cost(rule_t(), cost_overrides()) :: non_neg_integer()
+  def rule_cost(rule, overrides) do
     case rule do
       :contradiction -> 0
       :tautology -> 1
@@ -102,8 +146,14 @@ defmodule ShotTx.Prover.Rules do
       {:rename, _} -> 3
       {:instantiate, _, c} -> 2 + c
       {:atomic, _} -> 1
+      {:equality_expansion, kind, _} -> Map.get(overrides, kind, default_equality_cost(kind))
     end
   end
+
+  @spec default_equality_cost(equality_kind()) :: non_neg_integer()
+  defp default_equality_cost(:iff_o), do: 2
+  defp default_equality_cost(:extensional), do: 10
+  defp default_equality_cost(:leibniz), do: 15
 
   ##############################################################################
   # CLASSIFICATION
@@ -136,13 +186,13 @@ defmodule ShotTx.Prover.Rules do
         {:alpha, [p, q]}
 
       typed_equality(a, b, %Type{goal: :o, args: []}) ->
-        {:alpha, [a <~> b]}
+        {:equality_expansion, :iff_o, [a <~> b]}
 
       typed_equality(a, b, %Type{args: [_ | _]} = t) ->
-        {:alpha, [app(extensional_equality(t), [a, b])]}
+        {:equality_expansion, :extensional, [app(extensional_equality(t), [a, b])]}
 
       typed_equality(a, b, t) ->
-        {:alpha, [app(leibniz_equality(t), [a, b])]}
+        {:equality_expansion, :leibniz, [app(leibniz_equality(t), [a, b])]}
 
       disjunction(p, q) ->
         {:beta, {p, q}}
@@ -192,19 +242,19 @@ defmodule ShotTx.Prover.Rules do
         {:beta, {neg(p), neg(q)}}
 
       typed_equality(a, b, %Type{goal: :o, args: []}) ->
-        {:alpha, [neg(a <~> b)]}
+        {:equality_expansion, :iff_o, [neg(a <~> b)]}
 
       typed_equality(a, b, %Type{args: [_ | _]} = t) ->
         if closed_term?(a) and closed_term?(b) do
           [h | _] = t.args
           c = sk_term(MapSet.new(), h)
-          {:alpha, [neg(eq(app(a, c), app(b, c)))]}
+          {:equality_expansion, :extensional, [neg(eq(app(a, c), app(b, c)))]}
         else
-          {:alpha, [neg(app(extensional_equality(t), [a, b]))]}
+          {:equality_expansion, :extensional, [neg(app(extensional_equality(t), [a, b]))]}
         end
 
       typed_equality(a, b, t) ->
-        {:alpha, [neg(app(leibniz_equality(t), [a, b]))]}
+        {:equality_expansion, :leibniz, [neg(app(leibniz_equality(t), [a, b]))]}
 
       disjunction(p, q) ->
         {:alpha, [neg(p), neg(q)]}
