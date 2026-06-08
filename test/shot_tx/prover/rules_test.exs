@@ -101,6 +101,63 @@ defmodule ShotTx.Prover.RulesTest do
       end)
     end
 
+    test "equivalence defaults to a same-polarity beta rule" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert {:beta, {_, _}} = Rules.classify_formula(~f"p <=> q")
+      end)
+    end
+
+    test "equivalence under :bidirectional_imp is an alpha of both implications" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        p_imp_q = ~f"p => q"
+        q_imp_p = ~f"q => p"
+
+        assert {:alpha, [^p_imp_q, ^q_imp_p]} =
+                 Rules.classify_formula(~f"p <=> q", true, :bidirectional_imp)
+      end)
+    end
+
+    test "equivalence under :dual emits both implications plus the same-polarity disjunction" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        p_imp_q = ~f"p => q"
+        q_imp_p = ~f"q => p"
+        same_pol = ~f"(p & q) | (~p & ~q)"
+
+        assert {:alpha, [^p_imp_q, ^q_imp_p, ^same_pol]} =
+                 Rules.classify_formula(~f"p <=> q", true, :dual)
+      end)
+    end
+
+    test "negated equivalence under :bidirectional_imp betas on negated implications" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        neg_p_imp_q = ~f"~ (p => q)"
+        neg_q_imp_p = ~f"~ (q => p)"
+
+        assert {:beta, {^neg_p_imp_q, ^neg_q_imp_p}} =
+                 Rules.classify_formula(~f"~ (p <=> q)", true, :bidirectional_imp)
+      end)
+    end
+
+    test "negated equivalence under :dual emits both disjunctive forms as an alpha" do
+      ctx = ~e"p: $o, q: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        bidir = ~f"~ (p => q) | ~ (q => p)"
+        same_pol = ~f"(~p & q) | (~q & p)"
+
+        assert {:alpha, [^bidir, ^same_pol]} =
+                 Rules.classify_formula(~f"~ (p <=> q)", true, :dual)
+      end)
+    end
+
     test "double negation decomposes to its inner formula" do
       ctx = ~e"p: $o"
 

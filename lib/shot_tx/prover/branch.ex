@@ -546,7 +546,12 @@ defmodule ShotTx.Prover.Branch do
     if simplified == source do
       {source, cf, branch}
     else
-      simplified_cf = Rules.classify_formula(simplified, params.finite_o_quantification)
+      simplified_cf =
+        Rules.classify_formula(
+          simplified,
+          params.finite_o_quantification,
+          params.equivalence_processing
+        )
 
       branch_with_simp =
         branch
@@ -710,7 +715,12 @@ defmodule ShotTx.Prover.Branch do
 
   defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params) do
     effective = formula |> maybe_unfold(defs, params) |> maybe_orient(params)
-    cf = Rules.classify_formula(effective, params.finite_o_quantification)
+    cf =
+      Rules.classify_formula(
+        effective,
+        params.finite_o_quantification,
+        params.equivalence_processing
+      )
 
     pending =
       case branch.pending_closure do

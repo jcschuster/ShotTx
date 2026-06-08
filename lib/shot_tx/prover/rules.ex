@@ -159,6 +159,20 @@ defmodule ShotTx.Prover.Rules do
   # CLASSIFICATION
   ##############################################################################
 
+  @typedoc """
+  Selects how equivalence (`↔`) is expanded.
+
+    * `:same_polarity`     — current default. Positive `p ↔ q` β-splits into
+      `{p ∧ q, ¬p ∧ ¬q}`; negative `¬(p ↔ q)` β-splits into `{¬p ∧ q, ¬q ∧ p}`.
+    * `:bidirectional_imp` — rewrites `p ↔ q` as `(p → q) ∧ (q → p)`. Positive
+      becomes an α producing both implications; negative becomes a β over the
+      two negated implications.
+    * `:dual`              — emits both forms in a single α, so the prover can
+      exploit either expansion. Positive: `[p → q, q → p, (p ∧ q) ∨ (¬p ∧ ¬q)]`;
+      negative: `[¬(p → q) ∨ ¬(q → p), (¬p ∧ q) ∨ (¬q ∧ p)]`.
+  """
+  @type equivalence_mode :: :same_polarity | :bidirectional_imp | :dual
+
   @doc """
   Classifies a term ID as the tableau rule that should be applied to it.
 
@@ -166,12 +180,20 @@ defmodule ShotTx.Prover.Rules do
   handled. When `true` (default) they are routed to the finite γ-rule which
   enumerates the propositional domain; when `false` they fall through to the
   ordinary γ-rule, the same path used for non-`o` quantifiers.
+
+  The third argument selects an equivalence expansion strategy; see
+  `t:equivalence_mode/0`.
   """
-  @spec classify_formula(Term.term_id(), boolean()) :: rule_t()
-  def classify_formula(term_id, finite_o_quantification \\ true) when is_integer(term_id) do
+  @spec classify_formula(Term.term_id(), boolean(), equivalence_mode()) :: rule_t()
+  def classify_formula(
+        term_id,
+        finite_o_quantification \\ true,
+        equivalence_mode \\ :same_polarity
+      )
+      when is_integer(term_id) do
     case TF.get_term!(term_id) do
       negated(inner) ->
-        classify_neg_formula(inner, finite_o_quantification)
+        classify_neg_formula(inner, finite_o_quantification, equivalence_mode)
 
       falsity() ->
         :contradiction
@@ -201,7 +223,7 @@ defmodule ShotTx.Prover.Rules do
         {:beta, {neg(p), q}}
 
       equivalence(p, q) ->
-        {:beta, {p &&& q, neg(q) &&& neg(p)}}
+        expand_pos_equivalence(p, q, equivalence_mode)
 
       typed_universal_quantification(pred, t) ->
         if finite_o_quantification and pure_o_type?(t) do
@@ -219,12 +241,26 @@ defmodule ShotTx.Prover.Rules do
     end
   end
 
+  @spec expand_pos_equivalence(Term.term_id(), Term.term_id(), equivalence_mode()) :: rule_t()
+  defp expand_pos_equivalence(p, q, :same_polarity), do: {:beta, {p &&& q, neg(q) &&& neg(p)}}
+  defp expand_pos_equivalence(p, q, :bidirectional_imp), do: {:alpha, [p ~> q, q ~> p]}
+
+  defp expand_pos_equivalence(p, q, :dual),
+    do: {:alpha, [p ~> q, q ~> p, (p &&& q) ||| (neg(p) &&& neg(q))]}
+
+  @spec expand_neg_equivalence(Term.term_id(), Term.term_id(), equivalence_mode()) :: rule_t()
+  defp expand_neg_equivalence(p, q, :same_polarity), do: {:beta, {neg(p) &&& q, neg(q) &&& p}}
+  defp expand_neg_equivalence(p, q, :bidirectional_imp), do: {:beta, {neg(p ~> q), neg(q ~> p)}}
+
+  defp expand_neg_equivalence(p, q, :dual),
+    do: {:alpha, [neg(p ~> q) ||| neg(q ~> p), (neg(p) &&& q) ||| (neg(q) &&& p)]}
+
   ##############################################################################
   # NEGATED CLASSIFICATION
   ##############################################################################
 
-  @spec classify_neg_formula(Term.term_id(), boolean()) :: rule_t()
-  defp classify_neg_formula(term_id, finite_o_quantification) do
+  @spec classify_neg_formula(Term.term_id(), boolean(), equivalence_mode()) :: rule_t()
+  defp classify_neg_formula(term_id, finite_o_quantification, equivalence_mode) do
     case TF.get_term!(term_id) do
       negated(inner) ->
         {:alpha, [inner]}
@@ -263,7 +299,7 @@ defmodule ShotTx.Prover.Rules do
         {:alpha, [p, neg(q)]}
 
       equivalence(p, q) ->
-        {:beta, {neg(p) &&& q, neg(q) &&& p}}
+        expand_neg_equivalence(p, q, equivalence_mode)
 
       typed_universal_quantification(pred, t) ->
         fvars = TF.get_term!(pred).fvars

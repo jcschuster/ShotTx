@@ -18,6 +18,7 @@ defmodule ShotTx.Data.Parameters do
   | `term_order` | `%ShotTo.Parameters{}` | Parameters forwarded to the `ShotTo` term-order module. |
   | `finite_o_quantification` | `true` | When `true`, quantifiers whose bound variable has a pure `o`-type are handled by the finite γ-rule (full enumeration of the propositional domain); when `false`, they are instantiated by the ordinary γ-rule like any other type. |
   | `paramodulation_mode` | `:unification` | Strategy used to align an equation LHS with a literal position. `:unification` runs full higher-order pre-unification (Huet 1975). `:pattern` runs Miller pattern unification — decidable, unitary, restricted to the higher-order pattern fragment (every flex variable applied to distinct bound variables); positions outside the fragment are skipped. `:matching` runs Huet second-order matching — decidable, terminating, but requires the literal position to be ground and every type to be at most second-order; positions outside the fragment are skipped. |
+  | `equivalence_processing` | `:same_polarity` | How `↔` is expanded. `:same_polarity` keeps the current β-split into `{p∧q, ¬p∧¬q}` (and dually for negation). `:bidirectional_imp` rewrites `p↔q` as `(p→q) ∧ (q→p)`, producing an α on the positive side. `:dual` does both: emits an α with both implications and the same-polarity disjunction so the prover can exploit either path. |
   """
 
   alias ShotTx.Prover.Rules
@@ -35,7 +36,8 @@ defmodule ShotTx.Data.Parameters do
             orient: false,
             term_order: %ShotTo.Parameters{},
             finite_o_quantification: true,
-            paramodulation_mode: :unification
+            paramodulation_mode: :unification,
+            equivalence_processing: :same_polarity
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -51,6 +53,7 @@ defmodule ShotTx.Data.Parameters do
           orient: boolean(),
           term_order: ShotTo.Parameters.t(),
           finite_o_quantification: boolean(),
-          paramodulation_mode: :unification | :pattern | :matching
+          paramodulation_mode: :unification | :pattern | :matching,
+          equivalence_processing: :same_polarity | :bidirectional_imp | :dual
         }
 end
