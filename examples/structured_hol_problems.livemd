@@ -587,6 +587,10 @@ format_result res
 ```
 
 ```elixir
+render res
+```
+
+```elixir
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
@@ -608,7 +612,7 @@ thf(conj, conjecture,
     (l @ X @ Y) => (l @ (F @ X) @ (F @ Y))
   )
 ).
-""", timeout: 100
+""", timeout: 200, prim_subst_after: 1000
 
 format_result res
 # Timeout

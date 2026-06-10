@@ -180,7 +180,7 @@ defmodule ShotTx.Prover.Worker do
     publish_trace(state.ets_tables, a)
     publish_trace(state.ets_tables, b)
 
-    notify_ca_sync(state.session_id, {:branch_split, parent_id, [a.id, b.id]})
+    notify_ca_call(state.session_id, {:branch_split, parent_id, [a.id, b.id]})
 
     push_work(state.ets_tables.work_queue, a, state.session_id)
     push_work(state.ets_tables.work_queue, b, state.session_id)
@@ -196,7 +196,7 @@ defmodule ShotTx.Prover.Worker do
     Enum.each(branches, &publish_trace(state.ets_tables, &1))
     child_ids = Enum.map(branches, & &1.id)
 
-    notify_ca_sync(state.session_id, {:branch_split, parent_id, child_ids})
+    notify_ca_call(state.session_id, {:branch_split, parent_id, child_ids})
 
     Enum.each(branches, fn b -> push_work(state.ets_tables.work_queue, b, state.session_id) end)
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
@@ -241,7 +241,7 @@ defmodule ShotTx.Prover.Worker do
     msg = {:branch_saturated, state.current_branch.id, {defs, literals}}
 
     notify_manager(state.session_id, msg)
-    notify_ca_sync(state.session_id, msg)
+    notify_ca(state.session_id, msg)
     {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
   end
 
@@ -249,7 +249,7 @@ defmodule ShotTx.Prover.Worker do
 
   defp apply_effect({:notify_ca, clashes}, branch, state) do
     publish_trace(state.ets_tables, branch)
-    notify_ca_sync(state.session_id, {:local_clashes_sync, branch.id, clashes})
+    notify_ca(state.session_id, {:local_clashes, branch.id, clashes})
   end
 
   defp apply_effect(:no_effects, _branch, _state), do: :ok
@@ -324,9 +324,14 @@ defmodule ShotTx.Prover.Worker do
     GenServer.cast(manager_via, message)
   end
 
-  defp notify_ca_sync(session_id, message) do
+  defp notify_ca_call(session_id, message) do
     ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
     GenServer.call(ca_via, message, :infinity)
+  end
+
+  defp notify_ca(session_id, message) do
+    ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
+    GenServer.cast(ca_via, message)
   end
 
   defp bump_rule(tables, %{history: [{_src, rule, _} | _]}) do

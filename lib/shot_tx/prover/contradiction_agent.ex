@@ -52,7 +52,19 @@ defmodule ShotTx.Prover.ContradictionAgent do
   def init({session_id, params}) do
     Registry.register(ShotTx.Prover.PubSub, "local_closures_#{session_id}", [])
     Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
-    {:ok, %__MODULE__{session_id: session_id, params: params}}
+
+    ets_tables = EtsKeeper.get_tables(session_id)
+    active_branches = MapSet.new(["root"])
+    Stats.record_max(ets_tables, :active_branches_max, 1)
+    Stats.incr(ets_tables, :branches_activated_total)
+
+    {:ok,
+     %__MODULE__{
+       session_id: session_id,
+       params: params,
+       ets_tables: ets_tables,
+       active_branches: active_branches
+     }}
   end
 
   @impl true
@@ -80,11 +92,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     else
       do_settle(from, state)
     end
-  end
-
-  @impl true
-  def handle_call(:set_ets_tables, _from, state) do
-    {:reply, :ok, %{state | ets_tables: EtsKeeper.get_tables(state.session_id)}}
   end
 
   @impl true
@@ -124,13 +131,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, %{state | settle_waiter: from}}
   end
 
-  defp do_handle_call({:local_clashes, branch_id, new_candidates}, _from, state) do
-    {:noreply, new_state} =
-      do_handle_cast({:local_clashes, branch_id, new_candidates}, state)
-
-    {:reply, :ok, new_state}
-  end
-
   defp do_handle_call({:closed, branch_id}, _from, state) do
     new_closures =
       Map.update(state.branch_closures, branch_id, [%UnifSolution{}], fn existing ->
@@ -144,24 +144,11 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp do_handle_call(req, _from, state)
-       when elem(req, 0) in [
-              :branch_active,
-              :branch_saturated,
-              :branch_closed,
-              :branch_split,
-              :local_clashes_sync
-            ] do
+       when elem(req, 0) in [:branch_closed, :branch_split] do
     do_handle_sync(req, state)
   end
 
   # --- Synchronous Callbacks --------------------------------------------------
-
-  defp do_handle_sync({:branch_active, branch_id}, state) do
-    new_active = MapSet.put(state.active_branches, branch_id)
-    Stats.record_max(state.ets_tables, :active_branches_max, MapSet.size(new_active))
-    Stats.incr(state.ets_tables, :branches_activated_total)
-    {:reply, :ok, %{state | active_branches: new_active}}
-  end
 
   defp do_handle_sync({:branch_split, parent_id, child_ids}, state) do
     new_active =
@@ -184,39 +171,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
       end)
 
     new_state = %{state | branch_closures: new_closures}
-    {:noreply, after_check} = check_global_closure(new_state)
-    {:reply, :ok, after_check}
-  end
-
-  defp do_handle_sync(
-         {:branch_saturated, branch_id, {model_defs, model_atoms}},
-         state
-       ) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    traces = read_traces(state)
-
-    results = %{
-      model_branch_id: branch_id,
-      model_atoms: model_atoms,
-      model_defs: model_defs,
-      model_trace: Map.get(traces, branch_id, []),
-      closed_traces: Map.delete(traces, branch_id)
-    }
-
-    send_proof_result({:sat, results}, state)
-    {:noreply, %{state | active_branches: new_active}}
-  end
-
-  defp do_handle_sync({:local_clashes_sync, branch_id, candidates}, state) do
-    Logger.debug(
-      "Agent received #{MapSet.size(candidates)} new candidates for local closure from #{branch_id}"
-    )
-
-    updated_local_clashes =
-      Map.update(state.clashing_local_pairs, branch_id, candidates, &MapSet.union(&1, candidates))
-
-    new_state = %{state | clashing_local_pairs: updated_local_clashes}
-
     {:noreply, after_check} = check_global_closure(new_state)
     {:reply, :ok, after_check}
   end
@@ -323,6 +277,22 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
 
     {:noreply, state}
+  end
+
+  defp do_handle_cast({:branch_saturated, branch_id, {model_defs, model_atoms}}, state) do
+    new_active = MapSet.delete(state.active_branches, branch_id)
+    traces = read_traces(state)
+
+    results = %{
+      model_branch_id: branch_id,
+      model_atoms: model_atoms,
+      model_defs: model_defs,
+      model_trace: Map.get(traces, branch_id, []),
+      closed_traces: Map.delete(traces, branch_id)
+    }
+
+    send_proof_result({:sat, results}, state)
+    {:noreply, %{state | active_branches: new_active}}
   end
 
   defp do_handle_cast({:local_clashes, branch_id, new_candidates}, %__MODULE__{} = state) do

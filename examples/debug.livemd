@@ -3,7 +3,8 @@
 ```elixir
 Mix.install([
   {:shot_tx, path: Path.join(__DIR__, "..")},
-  {:kino, "~> 0.19.0"}
+  {:kino, "~> 0.19.0"},
+  {:kino_atp_client, "0.1.2"}
 ])
 ```
 
@@ -123,6 +124,16 @@ simplify(~f"P | $true") |> format!
 ```elixir
 import ShotDs.Hol.Sigils
 import ShotTx.Prover
+```
+
+```elixir
+res = ~f"![P:$i>$o, Q:$i>$o]: ((?[X:$i]: P @ X & Q @ X) => (?[X:$i]: P @ X) & (?[X:$i]: Q @ X))"
+|> prove
+format_result res
+```
+
+```elixir
+render res
 ```
 
 $\exists X. X$
@@ -280,4 +291,146 @@ format_result res
 
 ```elixir
 render res
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Section
+
+```elixir
+import ShotTx.Prover
+import ShotDs.Hol.Sigils
+```
+
+```elixir
+input = ~p"""
+%------------------------------------------------------------------------------
+% File     : PUZ001^1 : TPTP v9.2.1.
+% Domain   : Puzzles
+% Problem  : Dreadbury Mansion
+% Version  : Especial. Theorem formulation : Reduced > Complete.
+% English  : Who killed Aunt Agatha.
+% Status   : Theorem
+%------------------------------------------------------------------------------
+%----Types
+thf(person_type,type,
+    person: $tType ).
+
+%----Constants
+thf(agatha_decl,type,
+    agatha: person ).
+
+thf(butler_decl,type,
+    butler: person ).
+
+thf(charles_decl,type,
+    charles: person ).
+
+%----Predicates
+thf(lives_decl,type,
+    lives: person > $o ).
+
+thf(killed_decl,type,
+    killed: person > person > $o ).
+
+thf(hates_decl,type,
+    hates: person > person > $o ).
+
+thf(richer_decl,type,
+    richer: person > person > $o ).
+
+%----Problem axioms
+thf(pel55_1,axiom,
+    ? [X: person] :
+      ( ( lives @ X )
+      & ( killed @ X @ agatha ) ) ).
+
+thf(pel55_2_1,axiom,
+    lives @ agatha ).
+
+thf(pel55_2_2,axiom,
+    lives @ butler ).
+
+thf(pel55_2_3,axiom,
+    lives @ charles ).
+
+thf(pel55_3,axiom,
+    ! [X: person] :
+      ( ( lives @ X )
+     => ( ( X = agatha )
+        | ( X = butler )
+        | ( X = charles ) ) ) ).
+
+thf(pel55_4,axiom,
+    ! [X: person,Y: person] :
+      ( ( killed @ X @ Y )
+     => ( hates @ X @ Y ) ) ).
+
+thf(pel55_5,axiom,
+    ! [X: person,Y: person] :
+      ( ( killed @ X @ Y )
+     => ~ ( richer @ X @ Y ) ) ).
+
+thf(pel55_6,axiom,
+    ! [X: person] :
+      ( ( hates @ agatha @ X )
+     => ~ ( hates @ charles @ X ) ) ).
+
+thf(pel55_7,axiom,
+    ! [X: person] :
+      ( ( X != butler )
+     => ( hates @ agatha @ X ) ) ).
+
+thf(pel55_8,axiom,
+    ! [X: person] :
+      ( ~ ( richer @ X @ agatha )
+     => ( hates @ butler @ X ) ) ).
+
+thf(pel55_9,axiom,
+    ! [X: person] :
+      ( ( hates @ agatha @ X )
+     => ( hates @ butler @ X ) ) ).
+
+thf(pel55_10,axiom,
+    ! [X: person] :
+    ? [Y: person] :
+      ~ ( hates @ X @ Y ) ).
+
+thf(pel55_11,axiom,
+    agatha != butler ).
+
+thf(pel55,conjecture,
+    killed @ agatha @ agatha ).
+
+%------------------------------------------------------------------------------
+"""
+
+{res, stats} = prove input, stats: true, timeout: 100
+# format_result res
+stats
+```
+
+<!-- livebook:{"output_size":"full"} -->
+
+```elixir
+render res
+```
+
+<!-- livebook:{"attrs":"eyJwcm9ibGVtX3N0ciI6IiUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS1cbiUgRmlsZSAgICAgOiBQVVowMDFeMSA6IFRQVFAgdjkuMi4xLlxuJSBEb21haW4gICA6IFB1enpsZXNcbiUgUHJvYmxlbSAgOiBEcmVhZGJ1cnkgTWFuc2lvblxuJSBWZXJzaW9uICA6IEVzcGVjaWFsLiBUaGVvcmVtIGZvcm11bGF0aW9uIDogUmVkdWNlZCA+IENvbXBsZXRlLlxuJSBFbmdsaXNoICA6IFdobyBraWxsZWQgQXVudCBBZ2F0aGEuXG4lIFN0YXR1cyAgIDogVGhlb3JlbVxuJS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLVxuJS0tLS1UeXBlc1xudGhmKHBlcnNvbl90eXBlLHR5cGUsXG4gICAgcGVyc29uOiAkdFR5cGUgKS5cblxuJS0tLS1Db25zdGFudHNcbnRoZihhZ2F0aGFfZGVjbCx0eXBlLFxuICAgIGFnYXRoYTogcGVyc29uICkuXG5cbnRoZihidXRsZXJfZGVjbCx0eXBlLFxuICAgIGJ1dGxlcjogcGVyc29uICkuXG5cbnRoZihjaGFybGVzX2RlY2wsdHlwZSxcbiAgICBjaGFybGVzOiBwZXJzb24gKS5cblxuJS0tLS1QcmVkaWNhdGVzXG50aGYobGl2ZXNfZGVjbCx0eXBlLFxuICAgIGxpdmVzOiBwZXJzb24gPiAkbyApLlxuXG50aGYoa2lsbGVkX2RlY2wsdHlwZSxcbiAgICBraWxsZWQ6IHBlcnNvbiA+IHBlcnNvbiA+ICRvICkuXG5cbnRoZihoYXRlc19kZWNsLHR5cGUsXG4gICAgaGF0ZXM6IHBlcnNvbiA+IHBlcnNvbiA+ICRvICkuXG5cbnRoZihyaWNoZXJfZGVjbCx0eXBlLFxuICAgIHJpY2hlcjogcGVyc29uID4gcGVyc29uID4gJG8gKS5cblxuJS0tLS1Qcm9ibGVtIGF4aW9tc1xudGhmKHBlbDU1XzEsYXhpb20sXG4gICAgPyBbWDogcGVyc29uXSA6XG4gICAgICAoICggbGl2ZXMgQCBYIClcbiAgICAgICYgKCBraWxsZWQgQCBYIEAgYWdhdGhhICkgKSApLlxuXG50aGYocGVsNTVfMl8xLGF4aW9tLFxuICAgIGxpdmVzIEAgYWdhdGhhICkuXG5cbnRoZihwZWw1NV8yXzIsYXhpb20sXG4gICAgbGl2ZXMgQCBidXRsZXIgKS5cblxudGhmKHBlbDU1XzJfMyxheGlvbSxcbiAgICBsaXZlcyBAIGNoYXJsZXMgKS5cblxudGhmKHBlbDU1XzMsYXhpb20sXG4gICAgISBbWDogcGVyc29uXSA6XG4gICAgICAoICggbGl2ZXMgQCBYIClcbiAgICAgPT4gKCAoIFggPSBhZ2F0aGEgKVxuICAgICAgICB8ICggWCA9IGJ1dGxlciApXG4gICAgICAgIHwgKCBYID0gY2hhcmxlcyApICkgKSApLlxuXG50aGYocGVsNTVfNCxheGlvbSxcbiAgICAhIFtYOiBwZXJzb24sWTogcGVyc29uXSA6XG4gICAgICAoICgga2lsbGVkIEAgWCBAIFkgKVxuICAgICA9PiAoIGhhdGVzIEAgWCBAIFkgKSApICkuXG5cbnRoZihwZWw1NV81LGF4aW9tLFxuICAgICEgW1g6IHBlcnNvbixZOiBwZXJzb25dIDpcbiAgICAgICggKCBraWxsZWQgQCBYIEAgWSApXG4gICAgID0+IH4gKCByaWNoZXIgQCBYIEAgWSApICkgKS5cblxudGhmKHBlbDU1XzYsYXhpb20sXG4gICAgISBbWDogcGVyc29uXSA6XG4gICAgICAoICggaGF0ZXMgQCBhZ2F0aGEgQCBYIClcbiAgICAgPT4gfiAoIGhhdGVzIEAgY2hhcmxlcyBAIFggKSApICkuXG5cbnRoZihwZWw1NV83LGF4aW9tLFxuICAgICEgW1g6IHBlcnNvbl0gOlxuICAgICAgKCAoIFggIT0gYnV0bGVyIClcbiAgICAgPT4gKCBoYXRlcyBAIGFnYXRoYSBAIFggKSApICkuXG5cbnRoZihwZWw1NV84LGF4aW9tLFxuICAgICEgW1g6IHBlcnNvbl0gOlxuICAgICAgKCB+ICggcmljaGVyIEAgWCBAIGFnYXRoYSApXG4gICAgID0+ICggaGF0ZXMgQCBidXRsZXIgQCBYICkgKSApLlxuXG50aGYocGVsNTVfOSxheGlvbSxcbiAgICAhIFtYOiBwZXJzb25dIDpcbiAgICAgICggKCBoYXRlcyBAIGFnYXRoYSBAIFggKVxuICAgICA9PiAoIGhhdGVzIEAgYnV0bGVyIEAgWCApICkgKS5cblxudGhmKHBlbDU1XzEwLGF4aW9tLFxuICAgICEgW1g6IHBlcnNvbl0gOlxuICAgID8gW1k6IHBlcnNvbl0gOlxuICAgICAgfiAoIGhhdGVzIEAgWCBAIFkgKSApLlxuXG50aGYocGVsNTVfMTEsYXhpb20sXG4gICAgYWdhdGhhICE9IGJ1dGxlciApLlxuXG50aGYocGVsNTUsY29uamVjdHVyZSxcbiAgICBraWxsZWQgQCBhZ2F0aGEgQCBhZ2F0aGEgKS5cblxuJS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSIsInN5c3RlbSI6Ikxlby1JSUktLS0xLjcuMjAiLCJ0aGVtZSI6IkRyYWN1bGEiLCJ0aW1lX2xpbWl0Ijo1LCJ0cHRwNHhfZW5hYmxlZCI6dHJ1ZX0","chunks":null,"kind":"Elixir.KinoAtpClient.SystemOnTptp","livebook_object":"smart_cell"} -->
+
+```elixir
+# Generated by SystemOnTPTP Smart Cell
+problem = "%------------------------------------------------------------------------------\n% File     : PUZ001^1 : TPTP v9.2.1.\n% Domain   : Puzzles\n% Problem  : Dreadbury Mansion\n% Version  : Especial. Theorem formulation : Reduced > Complete.\n% English  : Who killed Aunt Agatha.\n% Status   : Theorem\n%------------------------------------------------------------------------------\n%----Types\nthf(person_type,type,\n    person: $tType ).\n\n%----Constants\nthf(agatha_decl,type,\n    agatha: person ).\n\nthf(butler_decl,type,\n    butler: person ).\n\nthf(charles_decl,type,\n    charles: person ).\n\n%----Predicates\nthf(lives_decl,type,\n    lives: person > $o ).\n\nthf(killed_decl,type,\n    killed: person > person > $o ).\n\nthf(hates_decl,type,\n    hates: person > person > $o ).\n\nthf(richer_decl,type,\n    richer: person > person > $o ).\n\n%----Problem axioms\nthf(pel55_1,axiom,\n    ? [X: person] :\n      ( ( lives @ X )\n      & ( killed @ X @ agatha ) ) ).\n\nthf(pel55_2_1,axiom,\n    lives @ agatha ).\n\nthf(pel55_2_2,axiom,\n    lives @ butler ).\n\nthf(pel55_2_3,axiom,\n    lives @ charles ).\n\nthf(pel55_3,axiom,\n    ! [X: person] :\n      ( ( lives @ X )\n     => ( ( X = agatha )\n        | ( X = butler )\n        | ( X = charles ) ) ) ).\n\nthf(pel55_4,axiom,\n    ! [X: person,Y: person] :\n      ( ( killed @ X @ Y )\n     => ( hates @ X @ Y ) ) ).\n\nthf(pel55_5,axiom,\n    ! [X: person,Y: person] :\n      ( ( killed @ X @ Y )\n     => ~ ( richer @ X @ Y ) ) ).\n\nthf(pel55_6,axiom,\n    ! [X: person] :\n      ( ( hates @ agatha @ X )\n     => ~ ( hates @ charles @ X ) ) ).\n\nthf(pel55_7,axiom,\n    ! [X: person] :\n      ( ( X != butler )\n     => ( hates @ agatha @ X ) ) ).\n\nthf(pel55_8,axiom,\n    ! [X: person] :\n      ( ~ ( richer @ X @ agatha )\n     => ( hates @ butler @ X ) ) ).\n\nthf(pel55_9,axiom,\n    ! [X: person] :\n      ( ( hates @ agatha @ X )\n     => ( hates @ butler @ X ) ) ).\n\nthf(pel55_10,axiom,\n    ! [X: person] :\n    ? [Y: person] :\n      ~ ( hates @ X @ Y ) ).\n\nthf(pel55_11,axiom,\n    agatha != butler ).\n\nthf(pel55,conjecture,\n    killed @ agatha @ agatha ).\n\n%------------------------------------------------------------------------------"
+system_name = "Leo-III---1.7.20"
+time_limit = 5
+
+case AtpClient.SystemOnTptp.query_system(problem, system_name, time_limit_sec: time_limit, raw: true) do
+  {:ok, result} ->
+    IO.puts(result)
+    result
+
+  {:error, reason} ->
+    raise "Error: #{inspect(reason)}"
+end
+
 ```
