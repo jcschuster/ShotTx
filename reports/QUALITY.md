@@ -184,13 +184,15 @@ re-enqueues *all* sleeping gamma rules at higher costs. With many parked
 branches this is `O(N · sleeping_rules)` work per deepening round — even
 when most will immediately hit the new gamma cap and re-park.
 
-### 14. `apply_rule({:gamma, ...})` recipe registration
-`branch.ex:295`. The first instantiation (`prev == 0`) registers the recipe in
-`gamma_recipes` and pushes one instance per existing ground term of the right
-type. Subsequent ground terms are discovered via
-`enqueue_for_registered_recipes`. Two formulas with the same recipe and type
-register independently, generating duplicate work, with no de-duplication.
-Worth a comment at least.
+### 14. `apply_rule({:gamma, ...})` first-firing ground instantiation
+`branch.ex`. The first instantiation (`prev == 0`, `instance_based_gamma:
+true`) pushes one instance per existing closed term of the right type from
+`branch.ground_terms`. Ground terms added later are not eagerly fed back
+through past recipes — they are picked up the next time the γ-rule fires
+under iterative deepening. The recipe-cascade mechanism that previously
+chased every newly-discovered ground subterm was removed because it could
+loop forever when a recipe's body produced subterms of its own input type
+(e.g. extensional equality of `ι→ι` functions).
 
 ### 15. β-variant adds `¬B₁` unconditionally to the right branch
 `branch.ex:256`. The "β with extra negated assumption" optimization is sound

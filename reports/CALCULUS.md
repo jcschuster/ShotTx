@@ -69,14 +69,16 @@ Two flavours:
   enumerating every closed term of that type via `ShotTx.Generation.gen_o/1`.
   No reinsertion, no deepening.
 
-**Design decision — ground subterm cascade.** When a γ-rule has just fired for
-the first time (`prev == 0`), its recipe is registered in `branch.gamma_recipes`
-indexed by type, and every previously-known closed subterm of that type is
-also fed through it. Symmetrically, every later closed subterm registered on
-the branch (`register_ground_subterms/3`) is fed through every matching
-registered recipe. This turns γ into an automatic ground-instance pump
-without growing the queue. These instantiations are recorded with the special
-rule tag `{:gamma_ground, recipe, type}`.
+**Design decision — instance-based first firing.** When a γ-rule has just
+fired for the first time (`prev == 0`) and `instance_based_gamma` is `true`,
+every previously-known closed subterm of the matching type
+(`branch.ground_terms[type]`, maintained by `register_ground_subterms/3`) is
+also fed through the recipe alongside the fresh variable. Ground terms
+discovered later are not eagerly re-instantiated; they are picked up the
+next time the same γ-rule fires under iterative deepening. This avoids the
+self-feeding cascade that occurs when the recipe's body produces fresh
+ground subterms of its own input type (e.g. `∀Z:ι. sk0(Z) = sk1(Z)` with
+`sk0, sk1 : ι→ι`).
 
 ## 4. δ (Skolemisation)
 

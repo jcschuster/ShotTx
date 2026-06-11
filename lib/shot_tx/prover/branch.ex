@@ -67,7 +67,6 @@ defmodule ShotTx.Prover.Branch do
             sleeping_gamma_rules: [],
             type_universe: MapSet.new(),
             ground_terms: %{},
-            gamma_recipes: %{},
             history: [],
             last_clash: nil,
             processed_rules: MapSet.new(),
@@ -324,19 +323,19 @@ defmodule ShotTx.Prover.Branch do
     else
       fresh_inst = app(recipe, TF.make_fresh_var_term(type))
 
-      {branch_for_inserts, ground_insts} =
-        if prev == 0 do
-          ground_terms = Map.get(branch.ground_terms, type, MapSet.new())
-          insts = Enum.map(ground_terms, &app(recipe, &1))
-          {register_gamma_recipe(branch, type, source, recipe), insts}
+      ground_insts =
+        if prev == 0 and params.instance_based_gamma do
+          branch.ground_terms
+          |> Map.get(type, MapSet.new())
+          |> Enum.map(&app(recipe, &1))
         else
-          {branch, []}
+          []
         end
 
       all_insts = [fresh_inst | ground_insts]
 
       branch_with_insts =
-        Enum.reduce(all_insts, branch_for_inserts, fn inst, b ->
+        Enum.reduce(all_insts, branch, fn inst, b ->
           insert_formula(b, inst, b.defs, params)
         end)
 
@@ -396,7 +395,7 @@ defmodule ShotTx.Prover.Branch do
     # already in the branch, bypassing base/poly heads and the batch cap. This
     # front-loads the bindings most likely to close Leibniz-style goals without
     # waiting for propositional heads to exhaust the batch budget.
-    if progress == @fresh_progress and MapSet.size(new_constants) > 0 do
+    if progress == @fresh_progress and MapSet.size(new_constants) > 0 and params.instance_based_gamma do
       unit_set =
         args
         |> GeneralBindings.unit_set_heads(new_constants)
@@ -432,7 +431,7 @@ defmodule ShotTx.Prover.Branch do
         |> Enum.map(&GeneralBindings.build_binding(args, &1))
 
       unit_set =
-        if MapSet.size(new_constants) > 0 do
+        if MapSet.size(new_constants) > 0 and params.instance_based_gamma do
           args
           |> GeneralBindings.unit_set_heads(new_constants)
           |> Enum.map(&GeneralBindings.build_binding(args, &1))
@@ -628,20 +627,18 @@ defmodule ShotTx.Prover.Branch do
   # GROUND-TERM INDEXING & GAMMA SATURATION
   ##############################################################################
 
-  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`.
-  # Each new closed subterm is added to the type-indexed map, and for every
-  # registered gamma recipe of matching type, an instantiation `app(recipe, sub)`
-  # is enqueued onto the branch (recursing through `insert_formula` so further
-  # ground subterms cascade naturally).
-  defp register_ground_subterms(%__MODULE__{} = branch, term_id, params) do
+  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`,
+  # and add them to the type-indexed map. The map is consulted at γ-rule firings
+  # (when `prev == 0`) to seed instance-based instantiation; ground terms added
+  # later are picked up the next time the same γ-rule fires under iterative
+  # deepening.
+  defp register_ground_subterms(%__MODULE__{} = branch, term_id, _params) do
     new_by_type = collect_new_closed_subterms(term_id, branch.ground_terms)
 
     if map_size(new_by_type) == 0 do
       branch
     else
-      branch
-      |> merge_ground_terms(new_by_type)
-      |> enqueue_for_registered_recipes(new_by_type, params)
+      merge_ground_terms(branch, new_by_type)
     end
   end
 
@@ -676,25 +673,6 @@ defmodule ShotTx.Prover.Branch do
       end)
 
     %{branch | ground_terms: updated}
-  end
-
-  defp enqueue_for_registered_recipes(branch, new_by_type, params) do
-    Enum.reduce(new_by_type, branch, fn {type, terms}, acc_branch ->
-      recipes = Map.get(acc_branch.gamma_recipes, type, MapSet.new())
-
-      Enum.reduce(recipes, acc_branch, fn {source, recipe}, b ->
-        instances = Enum.map(terms, &app(recipe, &1))
-
-        instances
-        |> Enum.reduce(b, fn inst, b2 -> insert_formula(b2, inst, b2.defs, params) end)
-        |> record(source, {:gamma_ground, recipe, type}, instances)
-      end)
-    end)
-  end
-
-  defp register_gamma_recipe(branch, type, source, recipe) do
-    set = Map.get(branch.gamma_recipes, type, MapSet.new()) |> MapSet.put({source, recipe})
-    %{branch | gamma_recipes: Map.put(branch.gamma_recipes, type, set)}
   end
 
   @spec register_new_types(MapSet.t(Type.t()), Term.term_id()) :: MapSet.t(Type.t())

@@ -360,10 +360,6 @@ defmodule ShotTx.Proof do
     {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
   end
 
-  defp interior_event({src, {:gamma_ground, _, _}, [_ | _] = instances}, {evs, segs}) do
-    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
-  end
-
   defp interior_event({src, {:gamma_finite, _, _}, [_ | _] = instances}, {evs, segs}) do
     {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
   end
