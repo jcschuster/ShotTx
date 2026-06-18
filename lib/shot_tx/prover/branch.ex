@@ -242,6 +242,12 @@ defmodule ShotTx.Prover.Branch do
     {:continue, updated, :no_effects}
   end
 
+  defp apply_rule({:rename, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
+    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+
+  defp apply_rule({:instantiate, _, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
+    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+
   defp apply_rule({:rename, {t1, t2}} = rule, source, branch, params, _g_limit, _p_limit) do
     universe = branch.type_universe |> register_new_types(t1) |> register_new_types(t2)
 
@@ -747,27 +753,33 @@ defmodule ShotTx.Prover.Branch do
         new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
         new_eq_only = %{ol => MapSet.new([or_])}
 
-        Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
-          all_ps =
-            (Paramodulation.paramodulants(lit, new_eq_only) ++
-               Paramodulation.unifying_paramodulants(
-                 lit,
-                 new_eq_only,
-                 params.unification_depth,
-                 params.paramodulation_mode
-               ))
-            |> Enum.uniq()
+        updated_branch = %{branch | equations: new_equations}
 
-          case all_ps do
-            [] ->
-              b
+        if params.paramodulation do
+          Enum.reduce(branch.literals, updated_branch, fn lit, b ->
+            all_ps =
+              (Paramodulation.paramodulants(lit, new_eq_only) ++
+                 Paramodulation.unifying_paramodulants(
+                   lit,
+                   new_eq_only,
+                   params.unification_depth,
+                   params.paramodulation_mode
+                 ))
+              |> Enum.uniq()
 
-            paramodulants ->
-              paramodulants
-              |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
-              |> record(lit, :paramodulation, paramodulants)
-          end
-        end)
+            case all_ps do
+              [] ->
+                b
+
+              paramodulants ->
+                paramodulants
+                |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
+                |> record(lit, :paramodulation, paramodulants)
+            end
+          end)
+        else
+          updated_branch
+        end
 
       _ ->
         branch
@@ -783,31 +795,48 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  defp maybe_orient(term_id, %Parameters{orient: false}), do: term_id
+  defp maybe_orient(term_id, %Parameters{orient: :none}), do: term_id
 
-  defp maybe_orient(term_id, %Parameters{orient: true, term_order: order}) do
+  defp maybe_orient(term_id, %Parameters{orient: :shallow, term_order: order}),
+    do: orient_top(term_id, order)
+
+  defp maybe_orient(term_id, %Parameters{orient: :deep, term_order: order}),
+    do: orient_recursive(term_id, order)
+
+  defp orient_top(term_id, order) do
     case TF.get_term!(term_id) do
-      disjunction(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q ||| p, else: term_id
-
-      conjunction(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q &&& p, else: term_id
-
-      equivalence(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q <~> p, else: term_id
-
-      equality(p, q) ->
-        if TermOrder.gt?(q, p, order), do: eq(q, p), else: term_id
-
-      _ ->
-        term_id
+      disjunction(p, q) -> if TermOrder.gt?(q, p, order), do: q ||| p, else: term_id
+      conjunction(p, q) -> if TermOrder.gt?(q, p, order), do: q &&& p, else: term_id
+      equivalence(p, q) -> if TermOrder.gt?(q, p, order), do: q <~> p, else: term_id
+      equality(p, q) -> if TermOrder.gt?(q, p, order), do: eq(q, p), else: term_id
+      _ -> term_id
     end
+  end
+
+  # Bottom-up: orient args first, rebuild if any changed, then orient the top level.
+  defp orient_recursive(term_id, order) do
+    %Term{head: head, args: args, bvars: bvars} = TF.get_term!(term_id)
+    oriented_args = Enum.map(args, &orient_recursive(&1, order))
+
+    rebuilt =
+      if oriented_args == args do
+        term_id
+      else
+        head_id = TF.make_term(head)
+        body_id = TF.fold_apply!(head_id, oriented_args)
+        List.foldr(bvars, body_id, &TF.make_abstr_term!(&2, &1))
+      end
+
+    orient_top(rebuilt, order)
   end
 
   defp contains?(outer_id, inner_id) do
     outer_id != inner_id and
       inner_id in (Paramodulation.subterms(outer_id) |> MapSet.delete(outer_id))
   end
+
+  defp paramodulate_literal_with_equations(branch, _term_id, %Parameters{paramodulation: false}),
+    do: branch
 
   defp paramodulate_literal_with_equations(branch, term_id, params) do
     all_ps =
