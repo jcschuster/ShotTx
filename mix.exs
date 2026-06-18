@@ -26,7 +26,7 @@ defmodule ShotTx.MixProject do
       # Data structures and semantics for HOL objects
       {:shot_ds, "~> 1.2"},
       # Unification algorithm
-      {:shot_un, "~> 0.1"},
+      {:shot_un, "0.1.6"},
       # NCPO Term Ordering
       {:shot_to, "~> 0.1"},
       # Code analyzer, duplication checker and security analyzer
