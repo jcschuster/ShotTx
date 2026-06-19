@@ -491,8 +491,11 @@ defmodule ShotTx.Prover.ContradictionAgent do
   defp cartesian_product([]), do: [[]]
 
   defp cartesian_product([list | rest]) do
-    rest_products = cartesian_product(rest)
-    for item <- list, sub <- rest_products, do: [item | sub]
+    rest_stream = cartesian_product(rest)
+
+    Stream.flat_map(list, fn item ->
+      Stream.map(rest_stream, fn sub -> [item | sub] end)
+    end)
   end
 
   ##############################################################################
