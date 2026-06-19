@@ -2,32 +2,13 @@ defmodule ShotTx.Util.PropSimplify do
   @moduledoc """
   Propositional simplification of HOL terms via binary decision diagrams.
 
-  The BDD operations come from `Module.Types.Descr`, the set-theoretic
-  type representation Elixir ships with. The on-disk shape used here is
-  the **lazy BDD** documented in the
-  [Dec 2025 Elixir blog post](https://elixir-lang.org/blog/2025/12/02/lazier-bdds-for-set-theoretic-types/)
-  and still in use as of Elixir 1.19:
+  Uses a self-contained ROBDD implementation with no dependency on Elixir
+  internals. BDD nodes: `:bdd_top`, `:bdd_bot`, or `{var, high, low}` where
+  `var` is a term ID integer and the variable ordering is ascending integer.
 
-    * `:bdd_top` / `:bdd_bot` — the constants
-    * `{tag, payload}` — a **leaf**: any 2-tuple, acting as a singleton
-      positive literal when used as a BDD on its own
-    * `{lit, c, u, d}` — a **lazy node** denoting `(lit ∧ C) ∨ U ∨ (¬lit ∧ D)`
-
-  Each non-connective HOL sub-formula becomes a leaf
-  `{:shotds_prop, term_id}`. The tag is unique to this module so the
-  generic `bdd_*` operations (which never introspect leaf tags) treat
-  them opaquely; a tag-dispatched optimisation like the *eager literal
-  intersection* added in Elixir's Feb 2026 update only applies to leaves
-  it recognises (`:closed`, `:open`, …) and falls through for ours.
-
-  > #### Caveat {: .warning}
-  >
-  > `Module.Types.Descr` is marked `@moduledoc false`. Its public
-  > functions are reachable from outside, but the module is internal
-  > to Elixir's compiler and not covered by backward-compatibility
-  > guarantees. The shape changed between the early-BDD (3-tuple
-  > leaves, hashed nodes) and lazy-BDD versions; expect more churn.
-  > Pin a known-working Elixir version and re-test on upgrades.
+  `bdd_to_term/1` reads a BDD back as a minimal HOL formula using Shannon
+  expansion with short-circuit identities, so the result is always at least
+  as simple as the input and often simpler.
 
   ## Modes
 
@@ -40,13 +21,11 @@ defmodule ShotTx.Util.PropSimplify do
       abstractions whose ultimate goal type is `o`.
   """
 
-  alias Module.Types.Descr
-
   alias ShotDs.Data.{Term, Declaration}
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
   use ShotDs.Hol.Patterns
-  import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0]
+  import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0, neg_term: 0, or_term: 0, and_term: 0]
 
   @typedoc "Simplification depth."
   @type mode() :: :shallow | :deep
@@ -70,74 +49,110 @@ defmodule ShotTx.Util.PropSimplify do
   end
 
   ##############################################################################
-  ## Atom encoding — lazy-BDD leaf shape
+  ## Atom encoding — ROBDD variable node
+  ##
+  ## Each propositional atom maps to the variable node {var, ⊤, ⊥}.
+  ## var is the integer term_id, giving a consistent total order.
   ##############################################################################
 
-  # A propositional atom becomes a 2-tuple leaf. The tag is unique to this
-  # module so the descr operations' tag-dispatched optimisations never
-  # claim it; the payload is the HOL term ID, which gives a total order
-  # consistent with equality (different term IDs ⇒ different leaves,
-  # different leaves ⇒ different Erlang term comparison).
   @compile {:inline, atom_for: 1}
-  defp atom_for(term_id) when is_integer(term_id), do: {:shotds_prop, term_id}
+  defp atom_for(term_id) when is_integer(term_id), do: {term_id, :bdd_top, :bdd_bot}
 
   ##############################################################################
-  ## :shallow — compile to BDD and read back
+  ## HOL term → BDD
   ##############################################################################
 
   @doc false
   @spec simplify_top(Term.term_id()) :: Term.term_id()
   def simplify_top(term_id) do
-    bdd_verdict(term_to_bdd(term_id), term_id)
+    term_id |> term_to_bdd() |> bdd_to_term()
   end
 
   defp term_to_bdd(term_id) do
     case TF.get_term!(term_id) do
-      truth() ->
-        :bdd_top
-
-      falsity() ->
-        :bdd_bot
-
-      negated(p) ->
-        Descr.bdd_negation(term_to_bdd(p))
-
-      disjunction(p, q) ->
-        Descr.bdd_union(term_to_bdd(p), term_to_bdd(q))
-
-      conjunction(p, q) ->
-        Descr.bdd_intersection(term_to_bdd(p), term_to_bdd(q))
-
-      implication(p, q) ->
-        # p ⊃ q  ≡  ¬p ∨ q
-        Descr.bdd_union(Descr.bdd_negation(term_to_bdd(p)), term_to_bdd(q))
-
+      truth() -> :bdd_top
+      falsity() -> :bdd_bot
+      negated(p) -> bdd_neg(term_to_bdd(p))
+      disjunction(p, q) -> bdd_or(term_to_bdd(p), term_to_bdd(q))
+      conjunction(p, q) -> bdd_and(term_to_bdd(p), term_to_bdd(q))
+      implication(p, q) -> bdd_or(bdd_neg(term_to_bdd(p)), term_to_bdd(q))
       equivalence(p, q) ->
-        # p ≡ q  ≡  (p ∧ q) ∨ (¬p ∧ ¬q)
         bp = term_to_bdd(p)
         bq = term_to_bdd(q)
-
-        Descr.bdd_union(
-          Descr.bdd_intersection(bp, bq),
-          Descr.bdd_intersection(Descr.bdd_negation(bp), Descr.bdd_negation(bq))
-        )
-
-      _atom ->
-        atom_for(term_id)
+        bdd_or(bdd_and(bp, bq), bdd_and(bdd_neg(bp), bdd_neg(bq)))
+      _atom -> atom_for(term_id)
     end
   end
 
   ##############################################################################
-  ## BDD → verdict
+  ## ROBDD operations
   ##
-  ## Only tautology (⊤) and contradiction (⊥) are detected; any other BDD
-  ## shape leaves the formula unchanged.  This keeps the oracle O(n) in the
-  ## size of the propositional skeleton with no risk of exponential blowup.
+  ## mk/3 is the reduction rule: if high == low the variable is irrelevant.
+  ## bdd_or and bdd_and apply Shannon expansion with the same variable ordering.
   ##############################################################################
 
-  defp bdd_verdict(:bdd_top, _term_id), do: true_term()
-  defp bdd_verdict(:bdd_bot, _term_id), do: false_term()
-  defp bdd_verdict(_bdd, term_id), do: term_id
+  defp bdd_neg(:bdd_top), do: :bdd_bot
+  defp bdd_neg(:bdd_bot), do: :bdd_top
+  defp bdd_neg({a, h, l}), do: mk(a, bdd_neg(h), bdd_neg(l))
+
+  defp bdd_or(:bdd_top, _), do: :bdd_top
+  defp bdd_or(_, :bdd_top), do: :bdd_top
+  defp bdd_or(:bdd_bot, b), do: b
+  defp bdd_or(b, :bdd_bot), do: b
+  defp bdd_or({a, h1, l1}, {a, h2, l2}), do: mk(a, bdd_or(h1, h2), bdd_or(l1, l2))
+  defp bdd_or({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2, do: mk(a1, bdd_or(h1, b2), bdd_or(l1, b2))
+  defp bdd_or(b1, {a2, h2, l2}), do: mk(a2, bdd_or(b1, h2), bdd_or(b1, l2))
+
+  defp bdd_and(:bdd_bot, _), do: :bdd_bot
+  defp bdd_and(_, :bdd_bot), do: :bdd_bot
+  defp bdd_and(:bdd_top, b), do: b
+  defp bdd_and(b, :bdd_top), do: b
+  defp bdd_and({a, h1, l1}, {a, h2, l2}), do: mk(a, bdd_and(h1, h2), bdd_and(l1, l2))
+  defp bdd_and({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2, do: mk(a1, bdd_and(h1, b2), bdd_and(l1, b2))
+  defp bdd_and(b1, {a2, h2, l2}), do: mk(a2, bdd_and(b1, h2), bdd_and(b1, l2))
+
+  defp mk(_a, same, same), do: same
+  defp mk(a, h, l), do: {a, h, l}
+
+  ##############################################################################
+  ## BDD → HOL term (Shannon expansion with short-circuit identities)
+  ##
+  ## Each node {var, high, low} denotes (var ∧ high) ∨ (¬var ∧ low).
+  ## The identities below avoid redundant connectives when one branch is ⊤/⊥:
+  ##
+  ##   {v, ⊤, ⊥}  = v
+  ##   {v, ⊥, ⊤}  = ¬v
+  ##   {v, ⊤, L}  = v ∨ L        (since (v ∧ ⊤) ∨ (¬v ∧ L) = v ∨ L)
+  ##   {v, H, ⊥}  = v ∧ H
+  ##   {v, ⊥, L}  = ¬v ∧ L
+  ##   {v, H, ⊤}  = ¬v ∨ H       (since (v ∧ H) ∨ (¬v ∧ ⊤) = H ∨ ¬v)
+  ##   {v, H, L}  = (v ∧ H) ∨ (¬v ∧ L)
+  ##############################################################################
+
+  defp bdd_to_term(:bdd_top), do: true_term()
+  defp bdd_to_term(:bdd_bot), do: false_term()
+  defp bdd_to_term({var, :bdd_top, :bdd_bot}), do: var
+  defp bdd_to_term({var, :bdd_bot, :bdd_top}), do: TF.make_appl_term!(neg_term(), var)
+  defp bdd_to_term({var, :bdd_top, low}) do
+    or_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(low))
+  end
+  defp bdd_to_term({var, high, :bdd_bot}) do
+    and_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(high))
+  end
+  defp bdd_to_term({var, :bdd_bot, low}) do
+    neg_var = TF.make_appl_term!(neg_term(), var)
+    and_term() |> TF.make_appl_term!(neg_var) |> TF.make_appl_term!(bdd_to_term(low))
+  end
+  defp bdd_to_term({var, high, :bdd_top}) do
+    neg_var = TF.make_appl_term!(neg_term(), var)
+    or_term() |> TF.make_appl_term!(neg_var) |> TF.make_appl_term!(bdd_to_term(high))
+  end
+  defp bdd_to_term({var, high, low}) do
+    neg_var = TF.make_appl_term!(neg_term(), var)
+    pos_branch = and_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(high))
+    neg_branch = and_term() |> TF.make_appl_term!(neg_var) |> TF.make_appl_term!(bdd_to_term(low))
+    or_term() |> TF.make_appl_term!(pos_branch) |> TF.make_appl_term!(neg_branch)
+  end
 
   ##############################################################################
   ## :deep — bottom-up simplification
@@ -175,13 +190,8 @@ defmodule ShotTx.Util.PropSimplify do
         simplify_top(term_id)
 
       true ->
-        body_id = strip_bvars(term)
-
-        case term_to_bdd(body_id) do
-          :bdd_top -> List.foldr(term.bvars, true_term(), &TF.make_abstr_term!(&2, &1))
-          :bdd_bot -> List.foldr(term.bvars, false_term(), &TF.make_abstr_term!(&2, &1))
-          _ -> term_id
-        end
+        simplified_body = term |> strip_bvars() |> term_to_bdd() |> bdd_to_term()
+        List.foldr(term.bvars, simplified_body, &TF.make_abstr_term!(&2, &1))
     end
   end
 

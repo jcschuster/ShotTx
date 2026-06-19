@@ -67,7 +67,6 @@ defmodule ShotTx.Prover.Branch do
             sleeping_gamma_rules: [],
             type_universe: MapSet.new(),
             ground_terms: %{},
-            gamma_recipes: %{},
             history: [],
             last_clash: nil,
             processed_rules: MapSet.new(),
@@ -243,6 +242,12 @@ defmodule ShotTx.Prover.Branch do
     {:continue, updated, :no_effects}
   end
 
+  defp apply_rule({:rename, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
+    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+
+  defp apply_rule({:instantiate, _, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
+    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+
   defp apply_rule({:rename, {t1, t2}} = rule, source, branch, params, _g_limit, _p_limit) do
     universe = branch.type_universe |> register_new_types(t1) |> register_new_types(t2)
 
@@ -324,19 +329,19 @@ defmodule ShotTx.Prover.Branch do
     else
       fresh_inst = app(recipe, TF.make_fresh_var_term(type))
 
-      {branch_for_inserts, ground_insts} =
-        if prev == 0 do
-          ground_terms = Map.get(branch.ground_terms, type, MapSet.new())
-          insts = Enum.map(ground_terms, &app(recipe, &1))
-          {register_gamma_recipe(branch, type, source, recipe), insts}
+      ground_insts =
+        if prev == 0 and params.instance_based_gamma do
+          branch.ground_terms
+          |> Map.get(type, MapSet.new())
+          |> Enum.map(&app(recipe, &1))
         else
-          {branch, []}
+          []
         end
 
       all_insts = [fresh_inst | ground_insts]
 
       branch_with_insts =
-        Enum.reduce(all_insts, branch_for_inserts, fn inst, b ->
+        Enum.reduce(all_insts, branch, fn inst, b ->
           insert_formula(b, inst, b.defs, params)
         end)
 
@@ -396,7 +401,7 @@ defmodule ShotTx.Prover.Branch do
     # already in the branch, bypassing base/poly heads and the batch cap. This
     # front-loads the bindings most likely to close Leibniz-style goals without
     # waiting for propositional heads to exhaust the batch budget.
-    if progress == @fresh_progress and MapSet.size(new_constants) > 0 do
+    if progress == @fresh_progress and MapSet.size(new_constants) > 0 and params.instance_based_gamma do
       unit_set =
         args
         |> GeneralBindings.unit_set_heads(new_constants)
@@ -432,7 +437,7 @@ defmodule ShotTx.Prover.Branch do
         |> Enum.map(&GeneralBindings.build_binding(args, &1))
 
       unit_set =
-        if MapSet.size(new_constants) > 0 do
+        if MapSet.size(new_constants) > 0 and params.instance_based_gamma do
           args
           |> GeneralBindings.unit_set_heads(new_constants)
           |> Enum.map(&GeneralBindings.build_binding(args, &1))
@@ -628,20 +633,18 @@ defmodule ShotTx.Prover.Branch do
   # GROUND-TERM INDEXING & GAMMA SATURATION
   ##############################################################################
 
-  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`.
-  # Each new closed subterm is added to the type-indexed map, and for every
-  # registered gamma recipe of matching type, an instantiation `app(recipe, sub)`
-  # is enqueued onto the branch (recursing through `insert_formula` so further
-  # ground subterms cascade naturally).
-  defp register_ground_subterms(%__MODULE__{} = branch, term_id, params) do
+  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`,
+  # and add them to the type-indexed map. The map is consulted at γ-rule firings
+  # (when `prev == 0`) to seed instance-based instantiation; ground terms added
+  # later are picked up the next time the same γ-rule fires under iterative
+  # deepening.
+  defp register_ground_subterms(%__MODULE__{} = branch, term_id, _params) do
     new_by_type = collect_new_closed_subterms(term_id, branch.ground_terms)
 
     if map_size(new_by_type) == 0 do
       branch
     else
-      branch
-      |> merge_ground_terms(new_by_type)
-      |> enqueue_for_registered_recipes(new_by_type, params)
+      merge_ground_terms(branch, new_by_type)
     end
   end
 
@@ -676,25 +679,6 @@ defmodule ShotTx.Prover.Branch do
       end)
 
     %{branch | ground_terms: updated}
-  end
-
-  defp enqueue_for_registered_recipes(branch, new_by_type, params) do
-    Enum.reduce(new_by_type, branch, fn {type, terms}, acc_branch ->
-      recipes = Map.get(acc_branch.gamma_recipes, type, MapSet.new())
-
-      Enum.reduce(recipes, acc_branch, fn {source, recipe}, b ->
-        instances = Enum.map(terms, &app(recipe, &1))
-
-        instances
-        |> Enum.reduce(b, fn inst, b2 -> insert_formula(b2, inst, b2.defs, params) end)
-        |> record(source, {:gamma_ground, recipe, type}, instances)
-      end)
-    end)
-  end
-
-  defp register_gamma_recipe(branch, type, source, recipe) do
-    set = Map.get(branch.gamma_recipes, type, MapSet.new()) |> MapSet.put({source, recipe})
-    %{branch | gamma_recipes: Map.put(branch.gamma_recipes, type, set)}
   end
 
   @spec register_new_types(MapSet.t(Type.t()), Term.term_id()) :: MapSet.t(Type.t())
@@ -769,27 +753,33 @@ defmodule ShotTx.Prover.Branch do
         new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
         new_eq_only = %{ol => MapSet.new([or_])}
 
-        Enum.reduce(branch.literals, %{branch | equations: new_equations}, fn lit, b ->
-          all_ps =
-            (Paramodulation.paramodulants(lit, new_eq_only) ++
-               Paramodulation.unifying_paramodulants(
-                 lit,
-                 new_eq_only,
-                 params.unification_depth,
-                 params.paramodulation_mode
-               ))
-            |> Enum.uniq()
+        updated_branch = %{branch | equations: new_equations}
 
-          case all_ps do
-            [] ->
-              b
+        if params.paramodulation do
+          Enum.reduce(branch.literals, updated_branch, fn lit, b ->
+            all_ps =
+              (Paramodulation.paramodulants(lit, new_eq_only) ++
+                 Paramodulation.unifying_paramodulants(
+                   lit,
+                   new_eq_only,
+                   params.unification_depth,
+                   params.paramodulation_mode
+                 ))
+              |> Enum.uniq()
 
-            paramodulants ->
-              paramodulants
-              |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
-              |> record(lit, :paramodulation, paramodulants)
-          end
-        end)
+            case all_ps do
+              [] ->
+                b
+
+              paramodulants ->
+                paramodulants
+                |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
+                |> record(lit, :paramodulation, paramodulants)
+            end
+          end)
+        else
+          updated_branch
+        end
 
       _ ->
         branch
@@ -805,31 +795,48 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  defp maybe_orient(term_id, %Parameters{orient: false}), do: term_id
+  defp maybe_orient(term_id, %Parameters{orient: :none}), do: term_id
 
-  defp maybe_orient(term_id, %Parameters{orient: true, term_order: order}) do
+  defp maybe_orient(term_id, %Parameters{orient: :shallow, term_order: order}),
+    do: orient_top(term_id, order)
+
+  defp maybe_orient(term_id, %Parameters{orient: :deep, term_order: order}),
+    do: orient_recursive(term_id, order)
+
+  defp orient_top(term_id, order) do
     case TF.get_term!(term_id) do
-      disjunction(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q ||| p, else: term_id
-
-      conjunction(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q &&& p, else: term_id
-
-      equivalence(p, q) ->
-        if TermOrder.gt?(q, p, order), do: q <~> p, else: term_id
-
-      equality(p, q) ->
-        if TermOrder.gt?(q, p, order), do: eq(q, p), else: term_id
-
-      _ ->
-        term_id
+      disjunction(p, q) -> if TermOrder.gt?(q, p, order), do: q ||| p, else: term_id
+      conjunction(p, q) -> if TermOrder.gt?(q, p, order), do: q &&& p, else: term_id
+      equivalence(p, q) -> if TermOrder.gt?(q, p, order), do: q <~> p, else: term_id
+      equality(p, q) -> if TermOrder.gt?(q, p, order), do: eq(q, p), else: term_id
+      _ -> term_id
     end
+  end
+
+  # Bottom-up: orient args first, rebuild if any changed, then orient the top level.
+  defp orient_recursive(term_id, order) do
+    %Term{head: head, args: args, bvars: bvars} = TF.get_term!(term_id)
+    oriented_args = Enum.map(args, &orient_recursive(&1, order))
+
+    rebuilt =
+      if oriented_args == args do
+        term_id
+      else
+        head_id = TF.make_term(head)
+        body_id = TF.fold_apply!(head_id, oriented_args)
+        List.foldr(bvars, body_id, &TF.make_abstr_term!(&2, &1))
+      end
+
+    orient_top(rebuilt, order)
   end
 
   defp contains?(outer_id, inner_id) do
     outer_id != inner_id and
       inner_id in (Paramodulation.subterms(outer_id) |> MapSet.delete(outer_id))
   end
+
+  defp paramodulate_literal_with_equations(branch, _term_id, %Parameters{paramodulation: false}),
+    do: branch
 
   defp paramodulate_literal_with_equations(branch, term_id, params) do
     all_ps =

@@ -80,10 +80,6 @@ defmodule ShotTx.Prover.Manager do
       priority_key = {byte_size(root_branch.id), root_branch.id}
       :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
 
-      ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :ca}}}
-      GenServer.call(ca_via, :set_ets_tables, :infinity)
-      GenServer.call(ca_via, {:branch_active, @root_name}, :infinity)
-
       spawn_workers(state)
 
       Process.send_after(self(), :log_progress, @progress_interval_ms)
