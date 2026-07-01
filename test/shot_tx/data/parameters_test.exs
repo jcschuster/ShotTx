@@ -16,7 +16,7 @@ defmodule ShotTx.Data.ParametersTest do
     assert p.unfold_defs == :lazy
     assert p.beta_variant == true
     assert p.simplification == :deep
-    assert p.orient == false
+    assert p.orient == :none
     assert is_function(p.formula_cost, 1)
   end
 

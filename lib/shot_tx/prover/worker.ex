@@ -334,6 +334,12 @@ defmodule ShotTx.Prover.Worker do
     GenServer.cast(ca_via, message)
   end
 
+  defp bump_rule(tables, %{history: [{_src, {:gamma, _, _, prev, _} = rule, _} | _]}) do
+    Stats.incr(tables, rule_key(rule))
+    Stats.incr(tables, :"rule_gamma_c#{prev}")
+    Stats.record_max(tables, :rule_gamma_max_c, prev)
+  end
+
   defp bump_rule(tables, %{history: [{_src, rule, _} | _]}) do
     Stats.incr(tables, rule_key(rule))
   end
@@ -347,7 +353,7 @@ defmodule ShotTx.Prover.Worker do
   defp rule_key({:delta, _}), do: :rule_delta
   defp rule_key({:rename, _}), do: :rule_rename
   defp rule_key({:atomic, _}), do: :rule_atomic
-  defp rule_key({:gamma, _, _, _}), do: :rule_gamma
+  defp rule_key({:gamma, _, _, _, _}), do: :rule_gamma
   defp rule_key({:prim_subst, _, _, _, _}), do: :rule_prim_subst
   defp rule_key({:instantiate, _, _}), do: :rule_instantiate
   defp rule_key({:equality_expansion, _, _}), do: :rule_equality_expansion

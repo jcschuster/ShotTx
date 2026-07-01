@@ -20,8 +20,13 @@ defmodule ShotTx.Prover.RulesTest do
     end
 
     test "gamma grows with iteration count" do
-      assert Rules.rule_cost({:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0}) <
-               Rules.rule_cost({:gamma, 1, %ShotDs.Data.Type{goal: :i}, 5})
+      assert Rules.rule_cost({:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0, false}) <
+               Rules.rule_cost({:gamma, 1, %ShotDs.Data.Type{goal: :i}, 5, false})
+    end
+
+    test "ibg-derived gamma costs more than beta so beta interleaves" do
+      assert Rules.rule_cost({:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0, true}) >
+               Rules.rule_cost({:beta, {1, 2}})
     end
 
     test "prim_subst grows with depth and base_offset" do
@@ -45,7 +50,7 @@ defmodule ShotTx.Prover.RulesTest do
     end
 
     test "leibniz expansion is more expensive than gamma so paramodulation gets first crack" do
-      gamma = {:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0}
+      gamma = {:gamma, 1, %ShotDs.Data.Type{goal: :i}, 0, false}
       leib = {:equality_expansion, :leibniz, [1]}
       assert Rules.rule_cost(gamma) < Rules.rule_cost(leib)
     end
@@ -168,7 +173,7 @@ defmodule ShotTx.Prover.RulesTest do
     end
 
     test "universal over $i is a gamma rule" do
-      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :i}, 0} =
+      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :i}, 0, false} =
                Rules.classify_formula(~f"![X:$i]: X = X")
     end
 
@@ -178,12 +183,12 @@ defmodule ShotTx.Prover.RulesTest do
     end
 
     test "universal over $o falls back to gamma when finite_o_quantification is disabled" do
-      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0} =
+      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0, false} =
                Rules.classify_formula(~f"![P:$o]: P | ~P", false)
     end
 
     test "negated existential over $o falls back to gamma when finite_o_quantification is disabled" do
-      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0} =
+      assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0, false} =
                Rules.classify_formula(~f"~ ?[P:$o]: P & ~P", false)
     end
 

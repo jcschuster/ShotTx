@@ -28,7 +28,7 @@ defmodule ShotTx.Prover.Rules do
   accepting a fresh variable. The third field captures the type of the variable.
   The last field keeps track of the rule instantiations for that formula so far.
   """
-  @type gamma_t :: {:gamma, Term.term_id(), Type.t(), non_neg_integer()}
+  @type gamma_t :: {:gamma, Term.term_id(), Type.t(), non_neg_integer(), boolean()}
 
   @typedoc "Rule for consuming a gamma-formula when the domain is finite."
   @type gamma_finite_t :: {:gamma_finite, Term.term_id(), Type.t()}
@@ -139,7 +139,8 @@ defmodule ShotTx.Prover.Rules do
       :tautology -> 1
       {:alpha, _} -> 2
       {:beta, _} -> 4
-      {:gamma, _, _, c} -> 5 + 2 * c
+      {:gamma, _, _, c, false} -> 3 + 2 * c
+      {:gamma, _, _, c, true} -> 5 + 2 * c
       {:gamma_finite, _, _} -> 3
       {:delta, _} -> 2
       {:prim_subst, _, _, d, %{base_offset: c}} -> 20 + 5 * d + 2 * c
@@ -229,7 +230,7 @@ defmodule ShotTx.Prover.Rules do
         if finite_o_quantification and pure_o_type?(t) do
           {:gamma_finite, lambda(t, fn x -> app(pred, x) end), t}
         else
-          {:gamma, lambda(t, fn x -> app(pred, x) end), t, 0}
+          {:gamma, lambda(t, fn x -> app(pred, x) end), t, 0, false}
         end
 
       typed_existential_quantification(pred, t) ->
@@ -309,7 +310,7 @@ defmodule ShotTx.Prover.Rules do
         if finite_o_quantification and pure_o_type?(t) do
           {:gamma_finite, lambda(t, fn x -> neg(app(pred, x)) end), t}
         else
-          {:gamma, lambda(t, fn x -> neg(app(pred, x)) end), t, 0}
+          {:gamma, lambda(t, fn x -> neg(app(pred, x)) end), t, 0, false}
         end
 
       atomic ->

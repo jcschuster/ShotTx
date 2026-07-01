@@ -315,7 +315,14 @@ defmodule ShotTx.Prover.Branch do
 
   # --- Gamma (fresh variable instantiation) -----------------------------------
 
-  defp apply_rule({:gamma, recipe, type, prev} = rule, source, branch, params, gamma_limit, _p) do
+  defp apply_rule(
+         {:gamma, recipe, type, prev, ibg?} = rule,
+         source,
+         branch,
+         params,
+         gamma_limit,
+         _p
+       ) do
     if prev >= gamma_limit do
       updated =
         %{
@@ -333,6 +340,7 @@ defmodule ShotTx.Prover.Branch do
         if prev == 0 and params.instance_based_gamma do
           branch.ground_terms
           |> Map.get(type, MapSet.new())
+          |> cap_ground_terms(params.instance_based_gamma_limit)
           |> Enum.map(&app(recipe, &1))
         else
           []
@@ -340,12 +348,14 @@ defmodule ShotTx.Prover.Branch do
 
       all_insts = [fresh_inst | ground_insts]
 
+      branch_with_fresh = insert_formula(branch, fresh_inst, branch.defs, params, ibg?)
+
       branch_with_insts =
-        Enum.reduce(all_insts, branch, fn inst, b ->
-          insert_formula(b, inst, b.defs, params)
+        Enum.reduce(ground_insts, branch_with_fresh, fn inst, b ->
+          insert_formula(b, inst, b.defs, params, true)
         end)
 
-      updated_gamma = {:gamma, recipe, type, prev + 1}
+      updated_gamma = {:gamma, recipe, type, prev + 1, ibg?}
 
       queue =
         reinsert_rule(branch_with_insts.queue, source, updated_gamma, params.formula_cost)
@@ -681,6 +691,17 @@ defmodule ShotTx.Prover.Branch do
     %{branch | ground_terms: updated}
   end
 
+  # Truncates the per-fire IBG fan-out so a γ-rule with many candidate
+  # constants does not multiply branch instances combinatorially. `:infinity`
+  # preserves the unbounded behavior.
+  defp cap_ground_terms(terms, :infinity), do: terms
+  defp cap_ground_terms(terms, limit) when is_integer(limit), do: Enum.take(terms, limit)
+
+  # Promotes a freshly-classified γ-rule to its IBG-derived variant so the cost
+  # function can deprioritize it below β. Non-γ rules pass through unchanged.
+  defp mark_ibg({:gamma, recipe, type, prev, _}, true), do: {:gamma, recipe, type, prev, true}
+  defp mark_ibg(rule, _), do: rule
+
   @spec register_new_types(MapSet.t(Type.t()), Term.term_id()) :: MapSet.t(Type.t())
   defp register_new_types(universe, term_id) do
     %Term{head: head, args: args} = TF.get_term!(term_id)
@@ -697,14 +718,17 @@ defmodule ShotTx.Prover.Branch do
     Enum.reduce(args, universe, &register_new_types(&2, &1))
   end
 
-  defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params) do
+  defp insert_formula(branch, formula, defs, params, ibg? \\ false)
+
+  defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params, ibg?) do
     effective = formula |> maybe_unfold(defs, params) |> maybe_orient(params)
     cf =
-      Rules.classify_formula(
-        effective,
+      effective
+      |> Rules.classify_formula(
         params.finite_o_quantification,
         params.equivalence_processing
       )
+      |> mark_ibg(ibg?)
 
     pending =
       case branch.pending_closure do

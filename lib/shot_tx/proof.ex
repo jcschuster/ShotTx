@@ -354,9 +354,9 @@ defmodule ShotTx.Proof do
     {[{:branch, src, :instantiate, chosen} | evs], rest}
   end
 
-  defp interior_event({_src, {:gamma, _, _, _}, []}, state), do: state
+  defp interior_event({_src, {:gamma, _, _, _, _}, []}, state), do: state
 
-  defp interior_event({src, {:gamma, _, _, _}, [_ | _] = instances}, {evs, segs}) do
+  defp interior_event({src, {:gamma, _, _, _, _}, [_ | _] = instances}, {evs, segs}) do
     {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
   end
 

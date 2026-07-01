@@ -20,6 +20,7 @@ defmodule ShotTx.Data.Parameters do
   | `paramodulation_mode` | `:unification` | Strategy used to align an equation LHS with a literal position. `:unification` runs full higher-order pre-unification (Huet 1975). `:pattern` runs Miller pattern unification — decidable, unitary, restricted to the higher-order pattern fragment (every flex variable applied to distinct bound variables); positions outside the fragment are skipped. `:matching` runs Huet second-order matching — decidable, terminating, but requires the literal position to be ground and every type to be at most second-order; positions outside the fragment are skipped. |
   | `equivalence_processing` | `:same_polarity` | How `↔` is expanded. `:same_polarity` keeps the current β-split into `{p∧q, ¬p∧¬q}` (and dually for negation). `:bidirectional_imp` rewrites `p↔q` as `(p→q) ∧ (q→p)`, producing an α on the positive side. `:dual` does both: emits an α with both implications and the same-polarity disjunction so the prover can exploit either path. |
   | `instance_based_gamma` | `true` | When `true`, the first firing of a γ-rule is also instantiated with every closed term of the matching type currently known on the branch, and prim-subst unit-set bindings (`λy. H(y) = c`) are generated for branch constants. Ground terms discovered later are picked up the next time the same γ-rule fires under iterative deepening. When `false`, only the fresh-variable instantiation is performed and no instance-driven steps are added. |
+  | `instance_based_gamma_limit` | `0` | Caps the number of ground instances emitted by a single γ-firing when `instance_based_gamma` is enabled. `0` disables the fan-out (only the fresh-variable instance is added), `:infinity` keeps the historical unbounded behavior, and a positive integer truncates the per-fire fan-out to that many closed terms. The default is `0` because nested quantifiers multiply branch constants combinatorially, and the cheaper first-γ cost (see `Rules.rule_cost/2`) makes each new IBG-derived γ-rule fire ahead of β, cascading the explosion. |
   | `paramodulation` | `true` | When `true`, paramodulation rules fire whenever a new equation or literal enters the branch. When `false`, the paramodulation step is skipped entirely; equality reasoning falls back to Leibniz/extensionality. |
   | `atom_decomposition` | `true` | When `true`, the `:rename` and `:instantiate` rules fire for atomic formulas with complex or o-type arguments. When `false`, all atoms are sent directly to the atomic clash rule without decomposition. |
   """
@@ -42,6 +43,7 @@ defmodule ShotTx.Data.Parameters do
             paramodulation_mode: :unification,
             equivalence_processing: :bidirectional_imp,
             instance_based_gamma: true,
+            instance_based_gamma_limit: 0,
             paramodulation: true,
             atom_decomposition: true
 
@@ -62,6 +64,7 @@ defmodule ShotTx.Data.Parameters do
           paramodulation_mode: :unification | :pattern | :matching,
           equivalence_processing: :same_polarity | :bidirectional_imp | :dual,
           instance_based_gamma: boolean(),
+          instance_based_gamma_limit: :infinity | non_neg_integer(),
           paramodulation: boolean(),
           atom_decomposition: boolean()
         }
