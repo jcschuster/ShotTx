@@ -1,4 +1,4 @@
-# OpennessAgent — Design Sketch
+# ModelAgent — Design Sketch
 
 Scope: a proposed new component that uses a model finder (Nitpick, via
 `isabelle_elixir` or `AtpClient`) to detect that a branch has a satisfying
@@ -6,7 +6,7 @@ model, letting the prover abandon that branch — and, in the strongest case,
 terminate the session with a global SAT verdict — long before saturation.
 
 Companion to `reports/SUGGESTION_AGENT.md`: SuggestionAgent accelerates
-closure of provable branches; OpennessAgent prunes unprovable ones. Together
+closure of provable branches; ModelAgent prunes unprovable ones. Together
 they are symmetric pruning around the tableau search.
 
 ---
@@ -34,11 +34,11 @@ tomb the branch early.
 
 ```
 SessionSupervisor
-├─ EtsKeeper                 (adds :openness_verdicts table)
+├─ EtsKeeper                 (adds :model_verdicts table)
 ├─ Manager
 ├─ ContradictionAgent
 ├─ SuggestionAgent           (proposed — see SUGGESTION_AGENT.md)
-├─ OpennessAgent             (proposed, this document)
+├─ ModelAgent             (proposed, this document)
 └─ DynamicSupervisor → Worker × N
 ```
 
@@ -46,7 +46,7 @@ Sibling to `ContradictionAgent` with the mirror-image job: rather than
 searching for a global unifier that closes all branches, it searches for a
 model that satisfies *any single* open branch.
 
-New PubSub topic `openness_<session>` — `OpennessAgent` → `Manager` /
+New PubSub topic `model_verdicts_<session>` — `ModelAgent` → `Manager` /
 `ContradictionAgent` / `SuggestionAgent`. Carries witness verdicts and cache
 invalidations.
 
@@ -65,8 +65,8 @@ invalidations.
    type, wall-time timeout, at most one call in flight per session.
 4. **Interpret** the verdict:
    - `Model M found` → branch is definitively open. Cast
-     `{:openness_witness, branch_id, M}` to `Manager` → tomb the branch,
-     cancel pending prim-subst work for it, publish on `openness_<session>`
+     `{:model_witness, branch_id, M}` to `Manager` → tomb the branch,
+     cancel pending prim-subst work for it, publish on `model_verdicts_<session>`
      so `SuggestionAgent` invalidates candidates sourced from that branch.
    - `No model up to bound k` → inconclusive; do not tomb. Optionally
      annotate the ETS entry so the same branch is not re-queried until its
@@ -74,7 +74,7 @@ invalidations.
    - `Genuine (unbounded) countermodel` → **global SAT verdict**. Cast to
      `Manager`, terminate the session with `{:sat, M}` and skip the current
      saturation-based SAT path entirely.
-5. **Cache** the verdict in an ETS `:openness_verdicts` table keyed by a hash
+5. **Cache** the verdict in an ETS `:model_verdicts` table keyed by a hash
    of the branch's formula multiset, so β-siblings and re-visits are cheap.
    The multiset hash also makes cache invalidation automatic when
    SuggestionAgent applies a hint (see *Interaction* below).
@@ -96,7 +96,7 @@ Recommendation: start with `isabelle_elixir` for the Nitpick fast path
 so `AtpClient` can be added later without rewiring the agent.
 
 ```elixir
-defmodule ShotTx.Prover.Openness.Backend do
+defmodule ShotTx.Prover.Model.Backend do
   @callback check(term :: Term.t(), budget :: keyword()) ::
               {:model, model_term()}
               | {:no_model_up_to, non_neg_integer()}
@@ -116,8 +116,8 @@ end
 | **What to send** | All formulas / ground-only / include sleeping γ | Ground literals + reinserted γ-universals + unfolded defs. **Not** sleeping γ rules — those are pending commitments; including them defeats early detection. |
 | **Handling metavariables** | Skolemise vs. existentially close | **Skolemise.** Existential closure asks "does there exist any instantiation making the branch open?"; the CSP is simultaneously searching for one making it closed. Skolemising asks the sharper question: "given current commitments, is this branch open?" |
 | **Concurrency** | Fire-and-forget per branch vs. singleton in-flight | Singleton per session with a bounded queue of pending targets. Nitpick calls are expensive; parallelism wastes JVM. |
-| **Trust level** | Treat verdict as authoritative vs. as hint | `Model found` is sound and authoritative. `No model` is not sound — treat as inconclusive. Never override `ContradictionAgent`'s closure with an openness verdict; if they disagree, trust closure. |
-| **Cost gating** | Always-on vs. `Parameters` flag | Add `openness_check :: :off \| %{interval_ms, timeout_ms, max_cardinality, backend}`. Default `:off` — this is a research feature. |
+| **Trust level** | Treat verdict as authoritative vs. as hint | `Model found` is sound and authoritative. `No model` is not sound — treat as inconclusive. Never override `ContradictionAgent`'s closure with an model verdict; if they disagree, trust closure. |
+| **Cost gating** | Always-on vs. `Parameters` flag | Add `model_check :: :off \| %{interval_ms, timeout_ms, max_cardinality, backend}`. Default `:off` — this is a research feature. |
 
 ---
 
@@ -128,12 +128,12 @@ the same provenance data. Build both once, reuse.
 
 Interlocks:
 
-- If `OpennessAgent` tombs branch B, `SuggestionAgent` must drop pending
+- If `ModelAgent` tombs branch B, `SuggestionAgent` must drop pending
   suggestions whose evidence came from unifiers involving B. A hint derived
   from a false clash is worse than no hint. Handled by subscribing
-  `SuggestionAgent` to `openness_<session>`.
+  `SuggestionAgent` to `model_verdicts_<session>`.
 - If `SuggestionAgent` applies a hint on branch B, B's formula multiset
-  changes and its cached openness verdict is invalidated automatically —
+  changes and its cached model verdict is invalidated automatically —
   the multiset-hash key no longer matches.
 
 ---
@@ -153,13 +153,13 @@ Interlocks:
   the branch's formulas inside the Elixir side before acting on it.
 - **JVM startup cost.** Even with a persistent Isabelle session, the first
   call has a large cost. Warm the backend at `SessionSupervisor` start when
-  `openness_check` is enabled.
+  `model_check` is enabled.
 - **Cardinality bounds.** Nitpick's default bounds may be too small for the
   branches this prover generates. Expose per-type bounds in the config and
   tune per corpus.
-- **Determinism.** Enabling openness detection changes when the session
+- **Determinism.** Enabling model detection changes when the session
   terminates. Regression tests must allow either "closed by saturation" or
-  "closed by early openness witness" as valid SAT outcomes.
+  "closed by early model witness" as valid SAT outcomes.
 - **Definitions and unfolding.** `Parameters.unfold_defs` affects what the
   branch actually contains. The serialiser must respect the current unfold
   mode so the formula sent to Nitpick matches what the branch is really
@@ -173,15 +173,15 @@ Interlocks:
    test on the `examples/` corpus: parse it back, check α-equivalence with
    the source. No agent yet.
 2. **Backend behaviour + `isabelle_elixir` adapter.** Implement
-   `ShotTx.Prover.Openness.Backend` and one implementation. Exercise it in a
+   `ShotTx.Prover.Model.Backend` and one implementation. Exercise it in a
    Livebook with a hand-picked branch that has an obvious 2-element model.
-3. **Stub `OpennessAgent`.** GenServer subscribed to `branch_events_<session>`,
-   with cache in `:openness_verdicts`, singleton in-flight, no consumer
+3. **Stub `ModelAgent`.** GenServer subscribed to `branch_events_<session>`,
+   with cache in `:model_verdicts`, singleton in-flight, no consumer
    downstream — just log verdicts. Verify on saturating examples that
    `Model found` fires before saturation.
 4. **Wire consumers.** Cast to `Manager` for tombing / global SAT; publish
-   on `openness_<session>` for `SuggestionAgent` cache invalidation.
-5. **Gate + defaults.** `Parameters.openness_check` default `:off`. Add an
+   on `model_verdicts_<session>` for `SuggestionAgent` cache invalidation.
+5. **Gate + defaults.** `Parameters.model_check` default `:off`. Add an
    A/B pass over the `examples/` corpus at each of the two settings.
 
 Step 1 is the risky one — a bad serialiser produces silent unsoundness under
@@ -191,9 +191,9 @@ step 4. Steps 2–3 are mechanical adapter work.
 
 ## Success criteria
 
-- With `openness_check: :off`, no behavioural change vs. current prover on
+- With `model_check: :off`, no behavioural change vs. current prover on
   the `examples/` corpus.
-- With `openness_check` enabled, previously-saturating examples terminate
+- With `model_check` enabled, previously-saturating examples terminate
   with `{:sat, M}` strictly earlier (wall time and rule count).
 - No previously-closing example is spuriously marked SAT.
 - The `Model found` verdict passes a second-opinion check on the Elixir side
