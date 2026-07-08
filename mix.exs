@@ -24,11 +24,17 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, "~> 1.2.5"},
+      {:shot_ds, github: "jcschuster/ShotDs", override: true},
       # Unification algorithm
       {:shot_un, "~> 0.1.10"},
       # NCPO Term Ordering
       {:shot_to, "~> 0.1"},
+      # Isabelle client — powers `ShotTx.Prover.ModelAgent.Backend.Nitpick`.
+      # Optional: absence leaves the ModelAgent stubbed. Enable with
+      # `config :shot_tx, isabelle_backend: :nitpick` after installing.
+      {:isabelle_elixir, "~> 0.4", optional: true},
+      # Standard observability events for ModelAgent + IsabelleBridge.
+      {:telemetry, "~> 1.2"},
       # Code analyzer, duplication checker and security analyzer
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       # Code analyzer and type checker

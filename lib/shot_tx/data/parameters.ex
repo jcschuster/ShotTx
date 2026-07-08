@@ -23,6 +23,12 @@ defmodule ShotTx.Data.Parameters do
   | `instance_based_gamma_limit` | `0` | Caps the number of ground instances emitted by a single γ-firing when `instance_based_gamma` is enabled. `0` disables the fan-out (only the fresh-variable instance is added), `:infinity` keeps the historical unbounded behavior, and a positive integer truncates the per-fire fan-out to that many closed terms. The default is `0` because nested quantifiers multiply branch constants combinatorially, and the cheaper first-γ cost (see `Rules.rule_cost/2`) makes each new IBG-derived γ-rule fire ahead of β, cascading the explosion. |
   | `paramodulation` | `true` | When `true`, paramodulation rules fire whenever a new equation or literal enters the branch. When `false`, the paramodulation step is skipped entirely; equality reasoning falls back to Leibniz/extensionality. |
   | `atom_decomposition` | `true` | When `true`, the `:rename` and `:instantiate` rules fire for atomic formulas with complex or o-type arguments. When `false`, all atoms are sent directly to the atomic clash rule without decomposition. |
+  | `model_agent_backend` | `:none` | Selects the external model-finding backend used by `ShotTx.Prover.ModelAgent`. `:none` disables the agent entirely (default; matches historical behavior). `:stub` runs a no-op backend that always returns `:unknown` — useful for tests. `{:custom, module}` plugs in any module implementing `ShotTx.Prover.ModelAgent.Backend`. |
+  | `model_agent_budget_ms` | `5_000` | Time budget for a single external probe. |
+  | `model_agent_max_in_flight` | `2` | Cap on concurrent probes dispatched by the agent. Isabelle serializes model-finding on one server anyway, so setting this above the number of servers wastes queue slots. |
+  | `model_agent_max_frontier` | `100` | Skip branches whose frontier is larger than this — model finders scale poorly on vocabulary. |
+  | `model_agent_min_delta_ms` | `200` | Tick interval for the agent's periodic scan of live branches. |
+  | `model_agent_min_frontier` | `3` | Skip branches with frontiers below this size; trivially satisfiable frontiers are noise (a single atom `P(a)` is always SAT and tells us nothing). |
   """
 
   alias ShotTx.Prover.Rules
@@ -45,7 +51,13 @@ defmodule ShotTx.Data.Parameters do
             instance_based_gamma: true,
             instance_based_gamma_limit: 0,
             paramodulation: true,
-            atom_decomposition: true
+            atom_decomposition: true,
+            model_agent_backend: :none,
+            model_agent_budget_ms: 5_000,
+            model_agent_max_in_flight: 2,
+            model_agent_max_frontier: 100,
+            model_agent_min_delta_ms: 200,
+            model_agent_min_frontier: 3
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -66,6 +78,12 @@ defmodule ShotTx.Data.Parameters do
           instance_based_gamma: boolean(),
           instance_based_gamma_limit: :infinity | non_neg_integer(),
           paramodulation: boolean(),
-          atom_decomposition: boolean()
+          atom_decomposition: boolean(),
+          model_agent_backend: :none | :stub | :nitpick | {:custom, module()},
+          model_agent_budget_ms: pos_integer(),
+          model_agent_max_in_flight: pos_integer(),
+          model_agent_max_frontier: pos_integer(),
+          model_agent_min_delta_ms: pos_integer(),
+          model_agent_min_frontier: non_neg_integer()
         }
 end

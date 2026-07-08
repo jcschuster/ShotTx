@@ -1,0 +1,120 @@
+# ModelAgent — external SAT witness via Nitpick[satisfy]
+
+```elixir
+Mix.install([
+  {:shot_tx, path: Path.join(__DIR__, "..")},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+## What this notebook shows
+
+`ShotTx.Prover.ModelAgent` is the dual of `ContradictionAgent`:
+
+* CA aggregates clash information across every open branch and asks
+  `ShotUn` for one substitution that closes them all at once. Positive
+  verdict → `:unsat` for the input formula set.
+* MA takes a single branch's **frontier** (the minimal semantic view of
+  what the branch commits to — parents of decomposed formulas are
+  dropped, γ / prim-subst sources are retained), hands it to an external
+  HOL model finder, and asks *"is this jointly satisfiable, and if so,
+  produce a model."* Positive verdict → `:sat` for the whole tableau.
+
+Both agents run concurrently. Whichever finishes first ends the session.
+
+The default backend is `:none` — MA stays completely passive and the
+prover behaves exactly like before. The `:stub` backend exercises the
+plumbing without any external service. The `:nitpick` backend fires
+`nitpick[satisfy]` against a warm Isabelle server via
+`ShotTx.IsabelleBridge`.
+
+## Setup
+
+```elixir
+import ShotDs.Hol.Sigils
+alias ShotTx.Prover
+```
+
+## 1. Default behavior — CSA path unchanged
+
+Without MA the prover uses its optimistic in-process CSA path: when a
+branch saturates locally, the accumulated atoms are shipped as the
+countermodel without external validation.
+
+```elixir
+Prover.prove_string(~p"""
+thf(p_t, type, p: $o).
+thf(c, conjecture, p).
+""")
+```
+
+## 2. `:stub` backend — MA runs but stays silent
+
+The stub returns `:unknown` for every probe, so the search is unaffected.
+This is the layer we use in CI to verify that MA's plumbing (ticking,
+frontier scanning, ETS traversal, backpressure) doesn't disturb any
+existing behavior.
+
+```elixir
+Prover.prove_string(
+  ~p"""
+  thf(p_t, type, p: $o).
+  thf(c, conjecture, p).
+  """,
+  model_agent_backend: :stub,
+  model_agent_min_delta_ms: 100
+)
+```
+
+## 3. `:nitpick` backend — real model finder
+
+To activate the real path:
+
+1. Install Isabelle locally (2024 or newer). Set `ISABELLE_TOOL` if
+   `isabelle` isn't on `$PATH`.
+2. Configure ShotTx to keep a warm connection:
+
+   ```elixir
+   # config/config.exs
+   config :shot_tx, isabelle_backend: :nitpick
+   ```
+
+3. Restart the application. `ShotTx.IsabelleBridge` will spawn one
+   Isabelle server at boot and hold it for the app's lifetime — every
+   subsequent proof pays no startup lag.
+
+Once configured, the following would run MA against a live Nitpick:
+
+```elixir
+# Prover.prove_string(
+#   ~p"""
+#   thf(p_t, type, p: $o).
+#   thf(q_t, type, q: $o).
+#   thf(ax, axiom, p & q).
+#   thf(c, conjecture, p & ~q).
+#   """,
+#   model_agent_backend: :nitpick,
+#   model_agent_min_delta_ms: 100,
+#   model_agent_budget_ms: 10_000
+# )
+```
+
+The output includes `external model finder` in the model string when
+Nitpick — rather than the built-in CSA path — produced the verdict.
+
+## 4. Knobs
+
+All MA parameters live on `ShotTx.Data.Parameters`:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `model_agent_backend` | `:none` | `:none \| :stub \| :nitpick \| {:custom, module}` |
+| `model_agent_budget_ms` | 5000 | per-probe timeout |
+| `model_agent_max_in_flight` | 2 | concurrent probes cap |
+| `model_agent_max_frontier` | 100 | skip probes on huge frontiers |
+| `model_agent_min_delta_ms` | 200 | tick interval |
+| `model_agent_min_frontier` | 3 | skip trivially small frontiers |
+
+The `:custom` backend expects a module implementing
+`ShotTx.Prover.ModelAgent.Backend` — useful for wiring in
+CVC5 / Z3 / Nunchaku or a mock in tests.

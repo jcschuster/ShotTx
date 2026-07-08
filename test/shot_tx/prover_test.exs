@@ -90,12 +90,21 @@ defmodule ShotTx.ProverTest do
       """)
     end
 
+    @tag timeout: 300_000
     test "transitivity of equality" do
-      assert_thm(~p"""
-      thf(c, conjecture,
-        ![X:$i, Y:$i, Z:$i]: ( ((X = Y) & (Y = Z)) => (X = Z) )
-      ).
-      """)
+      # Leibniz expansion here is genuinely heavy. In isolation the prover
+      # closes this in ~0.8s, but under full-suite contention — where many
+      # provers share BEAM schedulers with the CSP CPU-bound retries — it
+      # can stretch into tens of seconds. Give it generous headroom both at
+      # the prover clock and at the ExUnit test-timeout wrapper.
+      assert_thm(
+        ~p"""
+        thf(c, conjecture,
+          ![X:$i, Y:$i, Z:$i]: ( ((X = Y) & (Y = Z)) => (X = Z) )
+        ).
+        """,
+        timeout: 120_000
+      )
     end
 
     test "congruence under endomorphisms" do

@@ -71,7 +71,11 @@ defmodule ShotTx.Prover.Branch do
             last_clash: nil,
             processed_rules: MapSet.new(),
             term_ids: MapSet.new(),
-            pending_closure: nil
+            pending_closure: nil,
+            frontier: MapSet.new(),
+            frontier_version: 0
+
+  @type t :: %__MODULE__{}
 
   @type history_entry ::
           {Term.term_id() | nil, Rules.rule_t(), [Term.term_id()]}
@@ -107,7 +111,9 @@ defmodule ShotTx.Prover.Branch do
       literals: MapSet.new([true_term(), neg(false_term())]),
       term_ids: MapSet.new([true_term(), neg(false_term())]),
       type_universe: TypeUniverse.from_formulas(expanded_formulas),
-      history: lift_history
+      history: lift_history,
+      frontier: MapSet.new(expanded_formulas),
+      frontier_version: 0
     }
 
     expanded_formulas
@@ -200,7 +206,12 @@ defmodule ShotTx.Prover.Branch do
   end
 
   defp apply_rule(:tautology, source, branch, _params, _g_limit, _p_limit) do
-    {:continue, record(branch, source, :tautology, []), :no_effects}
+    updated =
+      branch
+      |> record(source, :tautology, [])
+      |> bump_frontier([source], [])
+
+    {:continue, updated, :no_effects}
   end
 
   # --- Linear decompositions --------------------------------------------------
@@ -211,6 +222,7 @@ defmodule ShotTx.Prover.Branch do
       |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))
       |> ingest_formulas(formulas, params)
       |> record(source, rule, formulas)
+      |> bump_frontier([source], formulas)
 
     {:continue, updated, :no_effects}
   end
@@ -228,6 +240,7 @@ defmodule ShotTx.Prover.Branch do
       |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))
       |> ingest_formulas(formulas, params)
       |> record(source, rule, formulas)
+      |> bump_frontier([source], formulas)
 
     {:continue, updated, :no_effects}
   end
@@ -238,6 +251,7 @@ defmodule ShotTx.Prover.Branch do
       |> insert_formula(sk_term_id, branch.defs, params)
       |> ingest_formula(sk_term_id, params)
       |> record(source, rule, [sk_term_id])
+      |> bump_frontier([source], [sk_term_id])
 
     {:continue, updated, :no_effects}
   end
@@ -257,6 +271,7 @@ defmodule ShotTx.Prover.Branch do
       |> insert_formula(t2, branch.defs, params)
       |> ingest_formulas([t1, t2], params)
       |> record(source, rule, [t1, t2])
+      |> bump_frontier([source], [t1, t2])
 
     {:continue, updated, :no_effects}
   end
@@ -270,11 +285,13 @@ defmodule ShotTx.Prover.Branch do
       %{recorded | id: recorded.id <> "_A"}
       |> insert_formula(b1, recorded.defs, params)
       |> ingest_formula(b1, params)
+      |> bump_frontier([source], [b1])
 
     sib_branch =
       %{recorded | id: recorded.id <> "_B"}
       |> insert_formula(b2, recorded.defs, params)
       |> ingest_formula(b2, params)
+      |> bump_frontier([source], [b2])
 
     if not params.beta_variant do
       {:split, my_branch, sib_branch}
@@ -286,6 +303,7 @@ defmodule ShotTx.Prover.Branch do
         |> insert_formula(additional, recorded.defs, params)
         |> ingest_formula(additional, params)
         |> record(source, :beta_variant, [additional])
+        |> bump_frontier([], [additional])
 
       {:split, my_branch, variant_sib_branch}
     end
@@ -389,6 +407,7 @@ defmodule ShotTx.Prover.Branch do
       |> Enum.reduce(branch, fn inst, b -> insert_formula(b, inst, branch.defs, params) end)
       |> ingest_formulas(instances, params)
       |> record(source, rule, instances)
+      |> bump_frontier([source], instances)
 
     {:continue, updated, :no_effects}
   end
@@ -543,6 +562,7 @@ defmodule ShotTx.Prover.Branch do
           |> insert_formula(unfolded_source, branch.defs, params)
           |> ingest_formula(unfolded_source, params)
           |> record(source, rule, [unfolded_source])
+          |> bump_frontier([source], [unfolded_source])
 
         {:continue, updated, :no_effects}
     end
@@ -572,6 +592,7 @@ defmodule ShotTx.Prover.Branch do
         branch
         |> then(&%{&1 | term_ids: MapSet.put(&1.term_ids, simplified)})
         |> record(source, :bdd_oracle, [simplified])
+        |> bump_frontier([source], [simplified])
 
       {simplified, simplified_cf, branch_with_simp}
     end
@@ -596,6 +617,7 @@ defmodule ShotTx.Prover.Branch do
           |> unfold_literals(recorded.literals, defs, params)
           |> insert_formula(b_term, defs, params)
           |> ingest_formula(b_term, params)
+          |> bump_frontier([], [b_term])
 
         [c_branch | acc_branches]
       end)
@@ -886,6 +908,26 @@ defmodule ShotTx.Prover.Branch do
 
   defp record(branch, source, rule, produced) do
     %{branch | history: [{source, rule, produced} | branch.history]}
+  end
+
+  # Frontier is the coarse "what does this branch commit to for a model finder"
+  # view. Updated whenever a rule consumes its source (α/β/δ/…) or replaces it
+  # with a semantically stronger form (atomic-unfold). γ/prim_subst leave the
+  # frontier untouched because their sources remain the true constraint —
+  # fresh instances are hints, not new commitments. Paramodulants and γ-fresh
+  # atoms flow through `insert_formula` and land in `literals` without ever
+  # entering the frontier, which is exactly what we want for a Nitpick probe.
+  defp bump_frontier(%__MODULE__{} = branch, remove, add) do
+    new_frontier =
+      branch.frontier
+      |> MapSet.difference(MapSet.new(remove))
+      |> MapSet.union(MapSet.new(add))
+
+    if new_frontier == branch.frontier do
+      branch
+    else
+      %{branch | frontier: new_frontier, frontier_version: branch.frontier_version + 1}
+    end
   end
 
   defp unfold_if_possible(term_id, defs) do

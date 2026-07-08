@@ -80,6 +80,16 @@ defmodule ShotTx.Prover do
         proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, mt, {atoms, ds})
         {:csa, format_model(atoms, ds), proof}
 
+      {:sat,
+       %{
+         model_branch_id: bid,
+         model_source: :model_agent,
+         model_witness: witness,
+         closed_traces: ct
+       }} ->
+        proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, [], {[], %{}})
+        {:csa, format_agent_witness(witness), proof}
+
       {:unsat, global_subst, flex_pairs, traces} ->
         proof = ShotTx.Proof.from_refutation(traces, formulas, global_subst, flex_pairs)
         {:thm, proof}
@@ -201,6 +211,15 @@ defmodule ShotTx.Prover do
       |> then(&app(forall_term(t), &1))
     end)
   end
+
+  defp format_agent_witness(witness) when is_map(witness) do
+    case Map.get(witness, :nitpick_output) do
+      nil -> "external model finder"
+      output when is_binary(output) -> "external model finder\n" <> output
+    end
+  end
+
+  defp format_agent_witness(_), do: "external model finder"
 
   defp format_model(model_atoms, model_defs) do
     defs_string =
