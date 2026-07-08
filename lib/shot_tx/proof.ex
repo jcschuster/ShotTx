@@ -42,6 +42,7 @@ defmodule ShotTx.Proof do
 
   alias ShotDs.Data.{Term, Type}
   alias ShotDs.Stt.TermFactory, as: TF
+  alias ShotDs.Util.LatexFormatter
   import ShotDs.Hol.Dsl, only: [neg: 1]
   import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0]
   import ShotDs.Util.Formatter
@@ -185,6 +186,48 @@ defmodule ShotTx.Proof do
     |> assign(uniq(acc.tv), ~w(α β γ δ ε ζ η θ), "α")
     |> assign(uniq(acc.fv), ~w(X Y Z U V W), "X")
     |> assign(uniq(acc.co), ~w(c d e f g h), "c")
+  end
+
+  @doc """
+  Like `auto_aliases/1` but emits raw LaTeX names (`\\alpha`, `X`,
+  `c`, …). Used by `to_mermaid/2` via `LatexFormatter.with_latex_aliases/2`
+  so fresh metas render as proper math identifiers instead of the
+  default `V_{short_ref}` fallback.
+  """
+  @spec latex_aliases(t()) :: %{reference() => String.t()}
+  def latex_aliases(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
+    empty = %{tv: [], fv: [], co: []}
+
+    acc = collect_step_refs(empty, root)
+
+    acc =
+      Enum.reduce(sub, acc, fn {k, v}, a ->
+        a |> collect_key_refs(k) |> collect_term_refs(v)
+      end)
+
+    acc =
+      Enum.reduce(flex, acc, fn {l, r}, a ->
+        a |> collect_term_refs(l) |> collect_term_refs(r)
+      end)
+
+    %{}
+    |> assign_latex(
+      uniq(acc.tv),
+      ~w(\\alpha \\beta \\gamma \\delta \\varepsilon \\zeta \\eta \\theta)
+    )
+    |> assign_latex(uniq(acc.fv), ~w(X Y Z U V W))
+    |> assign_latex(uniq(acc.co), ~w(c d e f g h))
+  end
+
+  defp assign_latex(map, refs, [head | _] = letters) do
+    n = length(letters)
+
+    refs
+    |> Enum.with_index(1)
+    |> Enum.reduce(map, fn {ref, i}, m ->
+      name = if i <= n, do: Enum.at(letters, i - 1), else: "#{head}^{#{i}}"
+      Map.put(m, ref, name)
+    end)
   end
 
   defp collect_step_refs(acc, nil), do: acc
@@ -579,7 +622,7 @@ defmodule ShotTx.Proof do
   defp closure_rule(:ground), do: :atomic
   defp closure_rule(:unification), do: :atomic
 
-  defp resolve_aliases(p, opts) do
+  defp resolve_text_aliases(p, opts) do
     case Keyword.get(opts, :aliases, :auto) do
       :auto -> auto_aliases(p)
       :none -> %{}
@@ -587,12 +630,56 @@ defmodule ShotTx.Proof do
     end
   end
 
+  defp resolve_latex_aliases(p, opts) do
+    case Keyword.get(opts, :aliases, :auto) do
+      :auto -> latex_aliases(p)
+      :none -> %{}
+      %{} = m -> m
+    end
+  end
+
   ##############################################################################
   # MERMAID RENDERING
+  #
+  # Formulas are rendered as LaTeX via `ShotDs.Util.LatexFormatter` and
+  # embedded inside a single `$$…$$` math block per label. Multi-line
+  # labels use `\begin{aligned}…\end{aligned}` with an empty `&` at the
+  # head of each row for left alignment; prose (`(1)`, `(β on 3)`) lives
+  # inside `\text{…}`.
+  #
+  # Two Mermaid/KaTeX renderer quirks are worked around here (same as
+  # `ShotUn.Trace.Mermaid`):
+  #
+  #   * `\\` row separators are halved by Mermaid's quoted-label parser
+  #     (`\\` → `\`). Emitting four backslashes in the label source (i.e.
+  #     `"\\\\\\\\"` in Elixir) survives that halving and lets KaTeX see
+  #     the `\\` it needs.
+  #
+  #   * `~` and `\ ` produce `&nbsp;` in the KaTeX HTML, which is
+  #     undefined in SVG's XML DTD and breaks "Save as SVG" downloads.
+  #     Both are rewritten to `\,` (thin space).
+  #
+  # `<br/>` is not used — Mermaid drops HTML line breaks once the label
+  # parser hits `$$…$$`. Everything lives inside the single math env.
   ##############################################################################
 
+  @mermaid_header """
+  %%{init: {'theme': 'base', 'themeVariables': { 'lineColor': '#999999', 'edgeLabelBackground': '#ffffff', 'fontFamily': 'sans-serif'}}}%%
+  graph TD;
+    classDef given fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1,rx:8px,ry:8px;
+    classDef rule fill:#eeeeee,stroke:#999999,stroke-width:2px,color:#333333,rx:8px,ry:8px;
+    classDef closure fill:#fff3e0,stroke:#cc5500,stroke-width:2px,color:#000000,rx:8px,ry:8px;
+    classDef model fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
+    classDef subst fill:#f9fbe7,stroke:#827717,stroke-width:2px,color:#000000,rx:8px,ry:8px,stroke-dasharray: 5 5;
+    classDef bdd_oracle fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#880e4f,rx:8px,ry:8px,stroke-dasharray: 3 3;
+  """
+
+  @bot "\\bot"
+  @bullet "\\bullet"
+
   @doc """
-  Render the proof tree as a Mermaid `graph TD` diagram.
+  Render the proof tree as a Mermaid `graph TD` diagram with LaTeX
+  formula labels (rendered via KaTeX in Livebook / Mermaid).
 
   Branch points (β / `instantiate`) emit solid arrows; linear derivations
   emit dotted arrows. Each rule node carries its label, the derived formula
@@ -604,27 +691,16 @@ defmodule ShotTx.Proof do
   def to_mermaid(%__MODULE__{root: nil}, _), do: ""
 
   def to_mermaid(%__MODULE__{} = p, opts) do
-    aliases = resolve_aliases(p, opts)
-    ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_mermaid(p) end)
+    aliases = resolve_latex_aliases(p, opts)
+    LatexFormatter.with_latex_aliases(aliases, fn -> do_to_mermaid(p) end)
   end
 
   defp do_to_mermaid(%__MODULE__{root: root, substitution: sub, flex_pairs: flex}) do
     {nodes, edges, _} = collect(root, 0)
 
-    header = """
-    %%{init: {'theme': 'base', 'themeVariables': { 'lineColor': '#999999', 'edgeLabelBackground': '#ffffff', 'fontFamily': 'sans-serif'}}}%%
-    graph TD;
-      classDef given fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1,rx:8px,ry:8px;
-      classDef rule fill:#eeeeee,stroke:#999999,stroke-width:2px,color:#333333,rx:8px,ry:8px;
-      classDef closure fill:#fff3e0,stroke:#cc5500,stroke-width:2px,color:#000000,rx:8px,ry:8px;
-      classDef model fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
-      classDef subst fill:#f9fbe7,stroke:#827717,stroke-width:2px,color:#000000,rx:8px,ry:8px,stroke-dasharray: 5 5;
-      classDef bdd_oracle fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#880e4f,rx:8px,ry:8px,stroke-dasharray: 3 3;
-    """
-
     node_lines =
       Enum.map_join(nodes, "\n", fn {id, label, class} ->
-        "  N#{id}[\"#{escape(label)}\"]:::#{class};"
+        "  N#{id}[\"#{label}\"]:::#{class};"
       end)
 
     edge_lines =
@@ -633,25 +709,8 @@ defmodule ShotTx.Proof do
         {from, to, :linear} -> "  N#{from} -.-> N#{to};"
       end)
 
-    subst_node =
-      if map_size(sub) > 0 do
-        mappings = Enum.map_join(sub, "<br/>", fn {k, v} -> "● #{format!(v)} / #{format!(k)}" end)
-        "\n  Sub[\"<b>Global Substitution:</b><br/>#{escape(mappings)}\"]:::subst;"
-      else
-        ""
-      end
-
-    flex_node =
-      if not Enum.empty?(flex) do
-        constrs =
-          Enum.map_join(flex, "<br/>", fn {t1, t2} -> "● #{format!(t1)} = #{format!(t2)}" end)
-
-        "\n Constraints[\"<b>Global Flex-Flex Constraints:</b><br/>#{escape(constrs)}\"]"
-      else
-        ""
-      end
-
-    header <> node_lines <> "\n" <> edge_lines <> subst_node <> flex_node <> "\n"
+    @mermaid_header <>
+      node_lines <> "\n" <> edge_lines <> subst_node(sub) <> flex_node(flex) <> "\n"
   end
 
   defp collect(%Step{} = step, counter) do
@@ -670,30 +729,62 @@ defmodule ShotTx.Proof do
   end
 
   defp mermaid_label(%Step{kind: :given, label: l, formula: f}) do
-    "(#{l})  #{format!(f)}"
+    wrap_math([tex_text("(#{l}) given") <> "\\;" <> tex_formula(f)])
   end
 
   defp mermaid_label(%Step{kind: :rule, label: l, formula: f, rule: r, sources: srcs}) do
-    "(#{l})  #{format!(f)}<br/><small>(#{rule_symbol(r)} on #{Enum.join(srcs, ", ")})</small>"
+    head = tex_text("(#{l})") <> "\\;" <> tex_formula(f)
+    footer = tex_text("(#{rule_symbol(r)} on #{Enum.join(srcs, ", ")})")
+    wrap_math([head, footer])
   end
 
-  defp mermaid_label(%Step{kind: :closure, sources: []}), do: "⊥"
+  defp mermaid_label(%Step{kind: :closure, sources: []}) do
+    wrap_math([@bot])
+  end
 
   defp mermaid_label(%Step{kind: :closure, sources: srcs}) do
-    "⊥<br/><small>(#{Enum.join(srcs, ", ")})</small>"
+    wrap_math([@bot, tex_text("(#{Enum.join(srcs, ", ")})")])
   end
 
   defp mermaid_label(%Step{kind: :model, label: l, model: {atoms, defs}}) do
     meaningful = Enum.reject(atoms, &(&1 in [true_term(), neg(false_term())]))
-    atom_str = Enum.map_join(meaningful, "<br/>", &("● " <> format!(&1)))
+    head = tex_text("(#{l}) ★ open")
 
-    defs_str =
-      Enum.map_join(defs, "<br/>", fn {h, t} ->
-        "● #{format!(h)} ← #{format!(t)}"
+    atom_lines =
+      Enum.map(meaningful, fn a -> @bullet <> "\\;" <> tex_formula(a) end)
+
+    def_lines =
+      Enum.map(defs, fn {h, t} ->
+        @bullet <> "\\;" <> tex_formula(h) <> "\\;\\leftarrow\\;" <> tex_formula(t)
       end)
 
-    body = [atom_str, defs_str] |> Enum.reject(&(&1 == "")) |> Enum.join("<br/>")
-    "(#{l}) ★ open<br/><small>#{body}</small>"
+    wrap_math([head | atom_lines ++ def_lines])
+  end
+
+  defp subst_node(sub) when map_size(sub) == 0, do: ""
+
+  defp subst_node(sub) do
+    header = tex_text("Global Substitution:")
+
+    lines =
+      Enum.map(sub, fn {k, v} ->
+        @bullet <> "\\;" <> tex_formula(v) <> "\\;/\\;" <> tex_formula(k)
+      end)
+
+    "\n  Sub[\"" <> wrap_math([header | lines]) <> "\"]:::subst;"
+  end
+
+  defp flex_node([]), do: ""
+
+  defp flex_node(flex) do
+    header = tex_text("Global Flex-Flex Constraints:")
+
+    lines =
+      Enum.map(flex, fn {t1, t2} ->
+        @bullet <> "\\;" <> tex_formula(t1) <> "\\;=\\;" <> tex_formula(t2)
+      end)
+
+    "\n  Constraints[\"" <> wrap_math([header | lines]) <> "\"];"
   end
 
   defp node_class(%Step{kind: :given}), do: "given"
@@ -701,6 +792,62 @@ defmodule ShotTx.Proof do
   defp node_class(%Step{kind: :rule}), do: "rule"
   defp node_class(%Step{kind: :closure}), do: "closure"
   defp node_class(%Step{kind: :model}), do: "model"
+
+  ##############################################################################
+  # LATEX-IN-MERMAID HELPERS (mirroring `ShotUn.Trace.Mermaid`).
+  ##############################################################################
+
+  defp tex_formula(f), do: sanitize(LatexFormatter.format!(f, hide_types: true))
+
+  # Single-line labels close as `$${…}$$`; multi-line labels ride an
+  # `aligned` env with `&`-prefixed rows and a `\\` row separator. The
+  # separator is emitted as *four* backslashes in the label source:
+  # Mermaid's quoted-label parser halves each `\\` pair back to `\`,
+  # yielding the `\\` KaTeX needs.
+  defp wrap_math([single]), do: "$${" <> single <> "}$$"
+
+  defp wrap_math(lines) do
+    body = Enum.map_join(lines, "\\\\\\\\", &("&" <> &1))
+    "$$\\begin{aligned}" <> body <> "\\end{aligned}$$"
+  end
+
+  # Prose rendered as one `\text{…}` run per word, joined by `\;`.
+  # A single `\text{a b}` makes KaTeX emit `<mtext>a&nbsp;b</mtext>` —
+  # `&nbsp;` is undefined in SVG's XML DTD and breaks "Save as SVG".
+  defp tex_text(s) do
+    case s |> to_string() |> String.split(" ", trim: true) do
+      [] -> "\\text{}"
+      words -> Enum.map_join(words, "\\;", &("\\text{" <> escape_text(&1) <> "}"))
+    end
+  end
+
+  defp escape_text(s) do
+    s
+    |> to_string()
+    |> String.replace("\\", "\\textbackslash{}")
+    |> String.replace("{", "\\{")
+    |> String.replace("}", "\\}")
+    |> String.replace("$", "\\$")
+    |> String.replace("#", "\\#")
+    |> String.replace("&", "\\&")
+    |> String.replace("_", "\\_")
+    |> String.replace("%", "\\%")
+  end
+
+  # Sanitize LaTeX on its way into a Mermaid label:
+  #   * `"` and newlines break the Mermaid label parser (labels are
+  #     already inside `"…"`).
+  #   * `~` and `\ ` both make KaTeX emit `&nbsp;`, which is undefined
+  #     in SVG's XML DTD. Rewrite both to `\,` (thin space, no HTML
+  #     entity in the DOM).
+  defp sanitize(text) do
+    text
+    |> to_string()
+    |> String.replace("\"", "&quot;")
+    |> String.replace("\n", " ")
+    |> String.replace("~", "\\,")
+    |> String.replace("\\ ", "\\,")
+  end
 
   ##############################################################################
   # PLAIN-TEXT RENDERING
@@ -729,7 +876,7 @@ defmodule ShotTx.Proof do
   def to_text(%__MODULE__{root: nil}, _), do: "(no proof)\n"
 
   def to_text(%__MODULE__{} = p, opts) do
-    aliases = resolve_aliases(p, opts)
+    aliases = resolve_text_aliases(p, opts)
     ShotDs.Util.Formatter.with_aliases(aliases, fn -> do_to_text(p) end)
   end
 
@@ -874,10 +1021,4 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:atomic), do: "atomic"
   defp rule_symbol(:contradiction), do: "⊥"
   defp rule_symbol(other), do: to_string(other)
-
-  defp escape(text) do
-    text
-    |> to_string()
-    |> String.replace("\"", "\\\"")
-  end
 end
