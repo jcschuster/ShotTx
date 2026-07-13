@@ -12,6 +12,12 @@ defmodule ShotTx.Prover.EtsKeeper do
   - `:work_queue` — ordered set of `{priority_key, Branch.t()}` entries.
   - `:idle_queue` — branches parked waiting for iterative deepening.
   - `:traces` — per-branch rule application history for proof reconstruction.
+  - `:provenance` — per-fresh-variable annotation (γ / prim-subst origin);
+    see `ShotTx.Prover.Provenance`.
+  - `:suggestions` — instantiation hints published by `SuggestionAgent`,
+    consumed by workers on splice; see `ShotTx.Prover.Suggestion`. Rows
+    are `{{prefix, recipe, term}, applied_count, %Suggestion{}}` so that
+    `:ets.update_counter/3` can enforce the cascade cap at position 2.
   """
 
   use GenServer
@@ -43,7 +49,11 @@ defmodule ShotTx.Prover.EtsKeeper do
       idle_queue:
         :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true]),
       traces:
-        :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true])
+        :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true]),
+      provenance:
+        :ets.new(:provenance, [:set, :public, read_concurrency: true, write_concurrency: true]),
+      suggestions:
+        :ets.new(:suggestions, [:set, :public, read_concurrency: true, write_concurrency: true])
     }
 
     :ets.insert(tables.stats, {:proof_started_at_us, System.monotonic_time(:microsecond)})

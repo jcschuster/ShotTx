@@ -90,25 +90,31 @@ defmodule ShotTx.Generation.GeneralBindings do
 
   @doc """
   Constructs a binding term from argument types and a head specification.
+  Returns `{binding, h_terms}` where `h_terms` are the fresh $H$ hole
+  variables minted for this binding — callers need them to record
+  provenance so a later unifier can be traced back to this rule.
 
-  Fresh $H$ variables (holes) and temporary $y$ variables (binders) are
-  created; the binders are abstracted away while the holes remain free for
-  subsequent unification. Wrapped in `with_scratchpad!/1` so that the
-  temporary binder terms are garbage-collected.
+  The $H$ holes are minted *outside* the scratchpad because they must
+  survive as global term ids for provenance lookup. The scratchpad's job
+  is limited to GCing the temporary $y$ binder terms once the abstraction
+  has folded them into de Bruijn indices.
   """
-  @spec build_binding([Type.t()], head_spec()) :: Term.term_id()
+  @spec build_binding([Type.t()], head_spec()) :: {Term.term_id(), [Term.term_id()]}
   def build_binding(arg_types, {matrix_fn, h_types}) do
-    TF.with_scratchpad!(fn ->
-      y_decls = Enum.map(arg_types, &Declaration.fresh_var/1)
-      y_terms = Enum.map(y_decls, &TF.make_term/1)
+    h_terms = Enum.map(h_types, &TF.make_fresh_var_term/1)
 
-      h_terms = Enum.map(h_types, &TF.make_fresh_var_term/1)
-      h_applied = Enum.map(h_terms, &TF.fold_apply!(&1, y_terms))
+    binding =
+      TF.with_scratchpad!(fn ->
+        y_decls = Enum.map(arg_types, &Declaration.fresh_var/1)
+        y_terms = Enum.map(y_decls, &TF.make_term/1)
+        h_applied = Enum.map(h_terms, &TF.fold_apply!(&1, y_terms))
 
-      matrix = matrix_fn.(h_applied)
+        matrix = matrix_fn.(h_applied)
 
-      List.foldr(y_decls, matrix, &TF.make_abstr_term!(&2, &1))
-    end)
+        List.foldr(y_decls, matrix, &TF.make_abstr_term!(&2, &1))
+      end)
+
+    {binding, h_terms}
   end
 
   ##############################################################################

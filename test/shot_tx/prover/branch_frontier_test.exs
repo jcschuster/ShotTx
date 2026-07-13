@@ -102,7 +102,7 @@ defmodule ShotTx.Prover.BranchFrontierTest do
         all = ~f"![X: $i]: (p @ X)"
 
         branch = Branch.new("root", [all], @minimal)
-        {:continue, next, :no_effects} = Branch.step(branch, @minimal, 2, 1)
+        {:continue, next, {:record_provenance, [{_, _}]}} = Branch.step(branch, @minimal, 2, 1)
 
         assert MapSet.member?(next.frontier, all)
         assert MapSet.equal?(next.frontier, MapSet.new([all]))

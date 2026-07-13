@@ -444,6 +444,10 @@ defmodule ShotTx.Proof do
   defp interior_event({_src, {:close_pair, _, _}, _}, state), do: state
   defp interior_event({_src, {:clash_candidates, _, _}, _}, state), do: state
 
+  defp interior_event({src, {:suggested_instantiate, _recipe, _term}, [produced]}, {evs, segs}) do
+    {[{:rule, src, :suggested_instantiate, produced} | evs], segs}
+  end
+
   defp interior_event(unhandled, _state) do
     raise "ShotTx.Proof.interior_event/2: unhandled trace entry #{inspect(unhandled)}"
   end
@@ -1016,6 +1020,7 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:paramodulation), do: "para"
   defp rule_symbol(:rename), do: "ren"
   defp rule_symbol(:instantiate), do: "inst"
+  defp rule_symbol(:suggested_instantiate), do: "sug-inst"
   defp rule_symbol(:unfold), do: "unfold"
   defp rule_symbol(:lambda_lift), do: "λ↑"
   defp rule_symbol(:atomic), do: "atomic"

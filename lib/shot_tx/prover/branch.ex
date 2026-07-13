@@ -41,7 +41,7 @@ defmodule ShotTx.Prover.Branch do
   alias ShotTx.Generation
   alias ShotTx.Generation.{GeneralBindings, TypeUniverse}
   alias ShotTx.Data.Parameters
-  alias ShotTx.Prover.{LambdaLift, Paramodulation, Rules, TermOrder}
+  alias ShotTx.Prover.{LambdaLift, Paramodulation, Provenance, Rules, TermOrder}
   alias ShotTx.Util.PropSimplify
   alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Data.{Declaration, Term, Type}
@@ -80,7 +80,10 @@ defmodule ShotTx.Prover.Branch do
   @type history_entry ::
           {Term.term_id() | nil, Rules.rule_t(), [Term.term_id()]}
 
-  @type effect :: :no_effects | {:notify_ca, MapSet.t()}
+  @type effect ::
+          :no_effects
+          | {:notify_ca, MapSet.t()}
+          | {:record_provenance, [{Term.term_id(), Provenance.t()}]}
   @type step_result ::
           {:continue, %__MODULE__{}, effect()}
           | {:split, my_branch :: %__MODULE__{}, sibling :: %__MODULE__{}}
@@ -146,6 +149,25 @@ defmodule ShotTx.Prover.Branch do
   ##############################################################################
   # STEP / EXECUTION LOGIC
   ##############################################################################
+
+  @doc """
+  Splices a synthetic `{:suggested_instantiate, recipe, term}` rule onto
+  the branch's priority queue. Called by `Worker` when it consumes a
+  suggestion from the `:suggestions` ETS table — the rule enters the
+  ordinary popping loop and fires via the dedicated `apply_rule/6` clause,
+  which adds `app(recipe, term)` to the branch without spawning a child.
+  """
+  @spec splice_suggested_instantiate(
+          t(),
+          Term.term_id(),
+          Term.term_id(),
+          Term.term_id() | nil,
+          Parameters.t()
+        ) :: t()
+  def splice_suggested_instantiate(%__MODULE__{} = branch, recipe, term, source, params) do
+    rule = {:suggested_instantiate, recipe, term}
+    %{branch | queue: reinsert_rule(branch.queue, source, rule, params.formula_cost)}
+  end
 
   @doc """
   Pops the next formula/rule from the queue and applies it. Returns a tuple
@@ -352,7 +374,8 @@ defmodule ShotTx.Prover.Branch do
 
       {:continue, updated, :no_effects}
     else
-      fresh_inst = app(recipe, TF.make_fresh_var_term(type))
+      fresh_var = TF.make_fresh_var_term(type)
+      fresh_inst = app(recipe, fresh_var)
 
       ground_insts =
         if prev == 0 and params.instance_based_gamma do
@@ -395,7 +418,15 @@ defmodule ShotTx.Prover.Branch do
         |> ingest_formulas(all_insts, params)
         |> record(source, rule, all_insts)
 
-      {:continue, updated, :no_effects}
+      provenance = %Provenance{
+        recipe: recipe,
+        source: source,
+        birth_branch: branch.id,
+        gamma_iteration: prev,
+        origin: :gamma
+      }
+
+      {:continue, updated, {:record_provenance, [{fresh_var, provenance}]}}
     end
   end
 
@@ -431,10 +462,11 @@ defmodule ShotTx.Prover.Branch do
     # front-loads the bindings most likely to close Leibniz-style goals without
     # waiting for propositional heads to exhaust the batch budget.
     if progress == @fresh_progress and MapSet.size(new_constants) > 0 and params.instance_based_gamma do
-      unit_set =
+      {unit_set, unit_set_h_terms} =
         args
         |> GeneralBindings.unit_set_heads(new_constants)
         |> Enum.map(&GeneralBindings.build_binding(args, &1))
+        |> Enum.unzip()
 
       instances = Enum.map(unit_set, &app(recipe, &1))
 
@@ -453,34 +485,39 @@ defmodule ShotTx.Prover.Branch do
         |> ingest_formulas(instances, params)
         |> record(source, rule, instances)
 
-      {:continue, updated, :no_effects}
+      records = prim_subst_provenance(unit_set_h_terms, recipe, source, branch.id, depth)
+
+      {:continue, updated, {:record_provenance, records}}
     else
       batch = params.prim_subst_batch_size
       new_types = MapSet.difference(branch.type_universe, progress.covered_types)
 
-      base =
+      {base, base_h_terms} =
         args
         |> GeneralBindings.base_heads(depth)
         |> Enum.drop(progress.base_offset)
         |> Enum.take(batch)
         |> Enum.map(&GeneralBindings.build_binding(args, &1))
+        |> Enum.unzip()
 
-      unit_set =
+      {unit_set, unit_set_h_terms} =
         if MapSet.size(new_constants) > 0 and params.instance_based_gamma do
           args
           |> GeneralBindings.unit_set_heads(new_constants)
           |> Enum.map(&GeneralBindings.build_binding(args, &1))
+          |> Enum.unzip()
         else
-          []
+          {[], []}
         end
 
-      poly =
+      {poly, poly_h_terms} =
         if MapSet.size(new_types) > 0 do
           args
           |> GeneralBindings.polymorphic_heads(depth, new_types)
           |> Enum.map(&GeneralBindings.build_binding(args, &1))
+          |> Enum.unzip()
         else
-          []
+          {[], []}
         end
 
       bindings = base ++ unit_set ++ poly
@@ -511,7 +548,16 @@ defmodule ShotTx.Prover.Branch do
           |> ingest_formulas(instances, params)
           |> record(source, rule, instances)
 
-        {:continue, updated, :no_effects}
+        records =
+          prim_subst_provenance(
+            base_h_terms ++ unit_set_h_terms ++ poly_h_terms,
+            recipe,
+            source,
+            branch.id,
+            depth
+          )
+
+        {:continue, updated, {:record_provenance, records}}
       end
     end
   end
@@ -566,6 +612,37 @@ defmodule ShotTx.Prover.Branch do
 
         {:continue, updated, :no_effects}
     end
+  end
+
+  # --- Suggested instantiate (spliced by SuggestionAgent) --------------------
+
+  defp apply_rule({:suggested_instantiate, recipe, term} = rule, source, branch, params, _g, _p) do
+    formula = app(recipe, term)
+
+    updated =
+      branch
+      |> insert_formula(formula, branch.defs, params)
+      |> ingest_formula(formula, params)
+      |> record(source, rule, [formula])
+      |> bump_frontier([], [formula])
+
+    {:continue, updated, :no_effects}
+  end
+
+  # Flattens a list-of-lists of hole ids (one inner list per general binding)
+  # into a flat list of `{h_id, %Provenance{}}` records ready for ETS.
+  defp prim_subst_provenance(h_term_lists, recipe, source, branch_id, depth) do
+    template = %Provenance{
+      recipe: recipe,
+      source: source,
+      birth_branch: branch_id,
+      gamma_iteration: depth,
+      origin: :prim_subst
+    }
+
+    Enum.flat_map(h_term_lists, fn h_terms ->
+      Enum.map(h_terms, fn h -> {h, template} end)
+    end)
   end
 
   ##############################################################################

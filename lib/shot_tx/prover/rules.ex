@@ -95,6 +95,14 @@ defmodule ShotTx.Prover.Rules do
   @type equality_expansion_t ::
           {:equality_expansion, equality_kind(), nonempty_list(Term.term_id())}
 
+  @typedoc """
+  Synthetic rule spliced by `SuggestionAgent`: apply `recipe` to `term` and
+  insert the result on the current branch. Unlike `:instantiate`, this does
+  not spawn a child branch — it is a hint, not a decomposition.
+  """
+  @type suggested_instantiate_t ::
+          {:suggested_instantiate, recipe :: Term.term_id(), term :: Term.term_id()}
+
   @type rule_t() ::
           alpha_t()
           | beta_t()
@@ -108,6 +116,7 @@ defmodule ShotTx.Prover.Rules do
           | instantiate_t()
           | atomic_t()
           | equality_expansion_t()
+          | suggested_instantiate_t()
 
   @typedoc """
   Partial override map for `rule_cost/2`. Any kind absent from the map keeps
@@ -148,6 +157,10 @@ defmodule ShotTx.Prover.Rules do
       {:instantiate, _, c} -> 2 + c
       {:atomic, _} -> 1
       {:equality_expansion, kind, _} -> Map.get(overrides, kind, default_equality_cost(kind))
+      # Suggestions are cheaper than γ (3+) and prim-subst (20+) but not
+      # free — they should not preempt α / :atomic decomposition, and the
+      # cascade cap already bounds their runaway growth.
+      {:suggested_instantiate, _, _} -> 2
     end
   end
 

@@ -124,6 +124,7 @@ defmodule ShotTx.Prover.Stats do
   @rule_keys ~w(
     rule_alpha rule_beta rule_gamma rule_gamma_finite rule_delta
     rule_rename rule_atomic rule_instantiate rule_prim_subst
+    rule_suggested_instantiate
     rule_contradiction rule_tautology rule_other
   )a
 

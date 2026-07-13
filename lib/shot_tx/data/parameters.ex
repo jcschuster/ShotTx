@@ -29,6 +29,8 @@ defmodule ShotTx.Data.Parameters do
   | `model_agent_max_frontier` | `100` | Skip branches whose frontier is larger than this — model finders scale poorly on vocabulary. |
   | `model_agent_min_delta_ms` | `200` | Tick interval for the agent's periodic scan of live branches. |
   | `model_agent_min_frontier` | `3` | Skip branches with frontiers below this size; trivially satisfiable frontiers are noise (a single atom `P(a)` is always SAT and tells us nothing). |
+  | `suggestions_enabled` | `false` | Feature flag for `ShotTx.Prover.SuggestionAgent`. When `false` (default), SA subscribes to nothing and stays a no-op, so the prover's behaviour is bit-for-bit unchanged. When `true`, SA runs pair-level unification on local clashes and emits instantiation hints. |
+  | `suggestion_cascade_ceiling` | `3` | Cap on how many times any single suggestion (keyed by `{branch_prefix, recipe, term}`) may be spliced across all descendants of its `birth_branch`. Bounds the feedback loop where an applied suggestion produces fresh clashes → new unifiers → new suggestions. Enforced via `:ets.update_counter/3` at the splice site. |
   """
 
   alias ShotTx.Prover.Rules
@@ -57,7 +59,9 @@ defmodule ShotTx.Data.Parameters do
             model_agent_max_in_flight: 2,
             model_agent_max_frontier: 100,
             model_agent_min_delta_ms: 200,
-            model_agent_min_frontier: 3
+            model_agent_min_frontier: 3,
+            suggestions_enabled: false,
+            suggestion_cascade_ceiling: 3
 
   @type t :: %__MODULE__{
           timeout: pos_integer(),
@@ -84,6 +88,8 @@ defmodule ShotTx.Data.Parameters do
           model_agent_max_in_flight: pos_integer(),
           model_agent_max_frontier: pos_integer(),
           model_agent_min_delta_ms: pos_integer(),
-          model_agent_min_frontier: non_neg_integer()
+          model_agent_min_frontier: non_neg_integer(),
+          suggestions_enabled: boolean(),
+          suggestion_cascade_ceiling: non_neg_integer()
         }
 end
