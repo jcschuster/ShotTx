@@ -2,8 +2,15 @@ defmodule ShotTx.Prover.ContradictionAgent do
   @moduledoc """
   GenServer that detects global closure and extracts countermodels.
 
-  Subscribes to `local_closures_<session>` and `branch_events_<session>` PubSub
-  channels and maintains two stores:
+  Subscribes as a *peer of `SuggestionAgent`* to the shared
+  `branch_evidence_<session>` PubSub topic. Workers publish every branch
+  lifecycle event (`:branch_split`, `:branch_closed`, `:branch_saturated`,
+  `:local_clashes`) once; both agents receive them independently. Manager
+  commands (`:settle`, `:verify_all_closed`, `:verify_csa`) still arrive
+  as direct `GenServer.call`/`cast` since they are coordination, not
+  evidence.
+
+  Two stores are maintained:
 
     * `branch_closures` — branches discharged by ground contradiction. A closed
       branch is dropped from `active_branches` immediately and its closure is
@@ -27,6 +34,16 @@ defmodule ShotTx.Prover.ContradictionAgent do
   Closures and clashes are kept disjoint by construction: once a branch is in
   `branch_closures` it is no longer in `active_branches`, so the CSP only sees
   open branches' rigid-unification options.
+
+  ## Out-of-order tolerance
+
+  Losing the sync worker→CA edge means BEAM's cross-sender ordering
+  guarantee no longer serializes lifecycle events. In particular, a
+  `:branch_closed` for a child may arrive before its parent's
+  `:branch_split`. The split handler defensively excludes any child
+  already present in `branch_closures`; the closure handler tolerates
+  branches it has never seen as active (they get recorded as closures
+  and are then filtered out if the split arrives later).
   """
 
   use GenServer
@@ -67,8 +84,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   @impl true
   def init({session_id, params}) do
-    Registry.register(ShotTx.Prover.PubSub, "local_closures_#{session_id}", [])
-    Registry.register(ShotTx.Prover.PubSub, "branch_events_#{session_id}", [])
+    Registry.register(ShotTx.Prover.PubSub, "branch_evidence_#{session_id}", [])
 
     ets_tables = EtsKeeper.get_tables(session_id)
     active_branches = MapSet.new(["root"])
@@ -111,15 +127,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  @impl true
-  def handle_call(event, from, state) do
-    if aborted?(state) do
-      {:reply, :aborted, cancel_pending_search(state)}
-    else
-      do_handle_call(event, from, state)
-    end
-  end
-
   defp aborted?(state) do
     case Map.get(state.ets_tables, :stats) do
       nil -> true
@@ -145,38 +152,68 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, %{state | settle_waiter: from}}
   end
 
-  defp do_handle_call({:closed, branch_id}, _from, state) do
-    new_state = record_branch_closure(state, branch_id)
-    {:reply, :ok, react_to_closure(new_state)}
-  end
+  # --- INFO CALLBACKS ---------------------------------------------------------
+  #
+  # Worker lifecycle events arrive here via the `branch_evidence_<session>`
+  # topic. They used to be `handle_call`/`handle_cast` on a direct CA edge;
+  # after the peer-architecture refactor the topic is authoritative.
 
-  defp do_handle_call(req, _from, state)
-       when elem(req, 0) in [:branch_closed, :branch_split] do
-    do_handle_sync(req, state)
-  end
+  defp do_handle_info({:branch_split, parent_id, child_ids}, state) do
+    # Cross-sender ordering isn't guaranteed on BEAM, so a child may already
+    # sit in `branch_closures` (its `:branch_closed` overtook this split).
+    # Excluding it here preserves the invariant that closed branches never
+    # re-enter `active_branches`.
+    live_children = Enum.reject(child_ids, &Map.has_key?(state.branch_closures, &1))
 
-  # --- Synchronous Callbacks --------------------------------------------------
-
-  defp do_handle_sync({:branch_split, parent_id, child_ids}, state) do
     new_active =
       state.active_branches
       |> MapSet.delete(parent_id)
-      |> MapSet.union(MapSet.new(child_ids))
+      |> MapSet.union(MapSet.new(live_children))
 
     Stats.record_max(state.ets_tables, :active_branches_max, MapSet.size(new_active))
-    Stats.incr(state.ets_tables, :branches_activated_total, length(child_ids))
+    Stats.incr(state.ets_tables, :branches_activated_total, length(live_children))
 
-    new_state = %{state | active_branches: new_active}
-    {:noreply, after_check} = check_global_closure(new_state)
-    {:reply, :ok, after_check}
+    check_global_closure(%{state | active_branches: new_active})
   end
 
-  defp do_handle_sync({:branch_closed, branch_id}, state) do
-    new_state = record_branch_closure(state, branch_id)
-    {:reply, :ok, react_to_closure(new_state)}
+  defp do_handle_info({:branch_closed, branch_id}, state) do
+    state
+    |> record_branch_closure(branch_id)
+    |> react_to_closure()
+    |> then(&{:noreply, &1})
   end
 
-  # --- INFO CALLBACKS ---------------------------------------------------------
+  defp do_handle_info({:branch_saturated, branch_id, {model_defs, model_atoms}}, state) do
+    new_active = MapSet.delete(state.active_branches, branch_id)
+    traces = read_traces(state)
+
+    results = %{
+      model_branch_id: branch_id,
+      model_atoms: model_atoms,
+      model_defs: model_defs,
+      model_trace: Map.get(traces, branch_id, []),
+      closed_traces: Map.delete(traces, branch_id)
+    }
+
+    send_proof_result({:sat, results}, state)
+    {:noreply, %{state | active_branches: new_active}}
+  end
+
+  defp do_handle_info({:local_clashes, branch_id, new_candidates}, state) do
+    Logger.debug(
+      "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
+    )
+
+    updated_local_clashes =
+      Map.update(
+        state.clashing_local_pairs,
+        branch_id,
+        new_candidates,
+        &MapSet.union(&1, new_candidates)
+      )
+
+    check_global_closure(%{state | clashing_local_pairs: updated_local_clashes})
+  end
 
   defp do_handle_info(
          {ref, {:closure, solution}},
@@ -255,40 +292,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
     else
       check_global_closure(state)
     end
-  end
-
-  defp do_handle_cast({:branch_saturated, branch_id, {model_defs, model_atoms}}, state) do
-    new_active = MapSet.delete(state.active_branches, branch_id)
-    traces = read_traces(state)
-
-    results = %{
-      model_branch_id: branch_id,
-      model_atoms: model_atoms,
-      model_defs: model_defs,
-      model_trace: Map.get(traces, branch_id, []),
-      closed_traces: Map.delete(traces, branch_id)
-    }
-
-    send_proof_result({:sat, results}, state)
-    {:noreply, %{state | active_branches: new_active}}
-  end
-
-  defp do_handle_cast({:local_clashes, branch_id, new_candidates}, %__MODULE__{} = state) do
-    Logger.debug(
-      "Agent received #{MapSet.size(new_candidates)} new candidates for local closure from #{branch_id}"
-    )
-
-    updated_local_clashes =
-      Map.update(
-        state.clashing_local_pairs,
-        branch_id,
-        new_candidates,
-        &MapSet.union(&1, new_candidates)
-      )
-
-    new_state = %{state | clashing_local_pairs: updated_local_clashes}
-
-    check_global_closure(new_state)
   end
 
   defp do_handle_cast(_event, state) do

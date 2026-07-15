@@ -39,9 +39,10 @@ theorem with the flag on and confirms the pipeline still returns
 | Feature flag + cascade cap | `lib/shot_tx/data/parameters.ex` — `suggestions_enabled`, `suggestion_cascade_ceiling` |
 | Stats counter | `Stats.@rule_keys` — new `:rule_suggested_instantiate` |
 
-Two deviations from the sketch below turned up during implementation.
-Both are called out inline in the sections they affect, and summarised
-in the [§Deviations](#deviations-from-original-design) section at the
+One deviation from the sketch below remains after the CA-migration
+follow-up: the splice mechanism uses a dedicated
+`:suggested_instantiate` rule tag rather than reusing `:instantiate`.
+See the [§Deviations](#deviations-from-original-design) section at the
 bottom.
 
 ---
@@ -175,14 +176,12 @@ deliberate: it is the price paid for the "no CA ↔ SA edge" constraint.
 Memory cost is negligible (branches and pairs are shared ETS-refs), and
 divergence is bounded — both agents drop the same message stream.
 
-> **Note (Step 1 deviation).** The plan called for CA to also subscribe
-> to `branch_evidence_<session>` in the same PR that lands the fan-out.
-> That did not happen. CA still receives worker events over its
-> pre-existing direct `GenServer.call/cast` edges, and the topic
-> currently has only SA as a subscriber. Reason: subscribing CA to the
-> topic *while* the direct edges still exist would double-deliver every
-> event, and removing the direct edges requires refactoring several of
-> CA's synchronous handlers. Deferred to a future clean-up PR.
+CA and SA are now genuine peers: both subscribe to
+`branch_evidence_<session>`, and workers publish every lifecycle event
+exactly once. The former synchronous CA edge is gone. See
+[§Ordering without the sync CA edge](#ordering-without-the-sync-ca-edge)
+for how the invariants that the sync used to enforce are now preserved
+defensively.
 
 ---
 
@@ -442,11 +441,13 @@ early — the queue swallows both.
 Status snapshot: all six steps landed. Each entry below is annotated
 with the as-built delta.
 
-1. **Evidence broadcast.** ✅ Landed. `Worker.notify_ca` /
-   `notify_ca_call` are wrapped by `broadcast_evidence/2`, which keeps
-   the sync CA edge and adds `Registry.dispatch` on
-   `branch_evidence_<session>` via `fanout_evidence/2`. CA is *not* yet
-   subscribed to the topic — see the note in [SA's own state](#sas-own-state).
+1. **Evidence broadcast.** ✅ Landed. All lifecycle events go through
+   `Worker.broadcast_evidence/2`, which fans out on
+   `branch_evidence_<session>` via `Registry.dispatch`. Both CA and SA
+   subscribe to the topic; the former direct `Worker → CA` edges
+   (`notify_ca`, `notify_ca_call`) have been removed. See
+   [§Ordering without the sync CA edge](#ordering-without-the-sync-ca-edge)
+   for the defensive handling that replaces the sync-based invariant.
 2. **Provenance plumbing.** ✅ Landed. `:provenance` ETS table in
    `EtsKeeper`; `%Provenance{}` struct in `ShotTx.Prover.Provenance`.
    Writes emitted from `branch.ex` as an outbox effect
@@ -512,19 +513,40 @@ anything. That is the A/B step's job.
 
 ---
 
+## Ordering without the sync CA edge
+
+Historically CA received `:branch_split` and `:branch_closed` as
+synchronous `GenServer.call`s, which blocked the emitting worker until
+CA had updated `active_branches`. That serialization made the invariant
+"a closed branch never re-enters `active_branches`" a natural
+consequence of same-sender FIFO delivery, since any subsequent
+lifecycle event from any worker was necessarily sent after CA had
+processed the split.
+
+With CA on the topic, cross-sender ordering isn't guaranteed. The
+race we care about is a `:branch_closed` for `root_A` arriving before
+the `:branch_split` that created `root_A`. The mitigations:
+
+* CA's `:branch_split` handler filters out any child already present
+  in `branch_closures`, so a late split cannot re-activate a
+  closed branch.
+* CA's `:branch_closed` handler tolerates unknown branches — the
+  closure gets recorded, `MapSet.delete/2` on `active_branches` is a
+  no-op, and the filter above cleans up when the split arrives.
+
+The dual race (`:local_clashes` for a child arriving before its
+split) is benign: CA's CSP runs over whatever it currently thinks are
+the active branches, and clashes are prefix-inherited, so a σ closing
+the parent also closes the not-yet-known children.
+
 ## Deviations from original design
 
-Summary of the two deviations noted inline above.
+The former Deviation 1 (CA not subscribed to the topic) has been
+retired — CA now subscribes to `branch_evidence_<session>` and the
+direct `GenServer.call/cast` edges from Worker have been removed. Only
+Deviation 2 remains.
 
-### 1. CA not subscribed to `branch_evidence_<session>`
-
-The topic exists and workers publish to it. CA still receives its
-events through the pre-existing direct `GenServer.call/cast` edges.
-Migrating CA onto the topic is a mechanical change but touches several
-of its synchronous handlers; deferred to keep this PR focused on SA.
-See [§SA's own state](#sas-own-state).
-
-### 2. `:suggested_instantiate` is a new rule tag, not a reuse of `:instantiate`
+### `:suggested_instantiate` is a new rule tag, not a reuse of `:instantiate`
 
 `instantiate_children/5` unconditionally spawns a child branch and
 mutates `defs` — semantics we do not want for a hint. A dedicated rule
@@ -561,5 +583,4 @@ pass. All are enhancements, not correctness fixes.
   spliced formula still enters the ordinary tableau flow and either
   closes or leaves the branch open for the fallback γ / prim-subst
   enumeration.
-- **CA migration to `branch_evidence_<session>`.** See Deviation 1.
 - **A/B measurement on `examples/`.** See Success criteria.

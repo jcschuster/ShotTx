@@ -374,36 +374,12 @@ defmodule ShotTx.Prover.Worker do
     GenServer.cast(manager_via, message)
   end
 
-  defp notify_ca_call(session_id, message) do
-    ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
-    GenServer.call(ca_via, message, :infinity)
-  end
-
-  defp notify_ca(session_id, message) do
-    ca_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :ca}}}
-    GenServer.cast(ca_via, message)
-  end
-
-  # Fans a branch-lifecycle event out to CA (as today) and to every subscriber
-  # on `branch_evidence_<session>`. Split/closed keep the synchronous CA edge
-  # because CA needs backpressure to maintain its `active_branches` invariant
-  # before the worker races ahead.
-  defp broadcast_evidence(session_id, {:branch_split, _, _} = msg) do
-    notify_ca_call(session_id, msg)
-    fanout_evidence(session_id, msg)
-  end
-
-  defp broadcast_evidence(session_id, {:branch_closed, branch_id}) do
-    notify_ca_call(session_id, {:closed, branch_id})
-    fanout_evidence(session_id, {:branch_closed, branch_id})
-  end
-
+  # Every branch-lifecycle event is delivered as an asynchronous fanout on
+  # `branch_evidence_<session>`. Both CA and SA subscribe; neither knows
+  # about the other. Cross-sender ordering is handled by CA's defensive
+  # split/closed logic — see the "Out-of-order tolerance" note on
+  # `ContradictionAgent`.
   defp broadcast_evidence(session_id, msg) do
-    notify_ca(session_id, msg)
-    fanout_evidence(session_id, msg)
-  end
-
-  defp fanout_evidence(session_id, msg) do
     Registry.dispatch(ShotTx.Prover.PubSub, "branch_evidence_#{session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, msg)
     end)
