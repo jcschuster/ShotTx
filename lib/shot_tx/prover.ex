@@ -150,7 +150,8 @@ defmodule ShotTx.Prover do
 
   def sat(formulas, defs, opts) when is_list(formulas) do
     {return_stats?, param_kws} = Keyword.pop(opts, :stats, false)
-    params = struct!(Parameters, param_kws)
+    merged_kws = Keyword.merge(ShotTx.Config.get(), param_kws)
+    params = struct!(Parameters, merged_kws)
     session_id = make_ref() |> inspect()
 
     {:ok, session_pid} =
