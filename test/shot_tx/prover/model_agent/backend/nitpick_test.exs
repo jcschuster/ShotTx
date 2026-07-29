@@ -32,7 +32,7 @@ defmodule ShotTx.Prover.ModelAgent.Backend.NitpickTest do
   alias ShotTx.Prover.ModelAgent.Backend.Nitpick
   alias ShotTx.Prover.ModelAgent.Frontier
 
-  @minimal %Parameters{simplification: :none, paramodulation: false}
+  @minimal %Parameters{simplification: :none, demodulation: false}
 
   setup_all do
     unless System.get_env("ISABELLE_TOOL") do

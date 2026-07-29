@@ -48,8 +48,7 @@ defmodule ShotTx.Prover.EtsKeeper do
         ]),
       idle_queue:
         :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true]),
-      traces:
-        :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true]),
+      traces: :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true]),
       provenance:
         :ets.new(:provenance, [:set, :public, read_concurrency: true, write_concurrency: true]),
       suggestions:

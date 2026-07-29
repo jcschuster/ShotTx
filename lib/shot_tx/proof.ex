@@ -49,7 +49,23 @@ defmodule ShotTx.Proof do
   use ShotDs.Hol.Patterns
 
   defmodule Step do
-    @moduledoc false
+    @moduledoc """
+    A single node in a `ShotTx.Proof` derivation tree.
+
+    * `label`    — the derivation's line number in textbook style;
+                   unique within a proof.
+    * `formula`  — the derived (or `:given`) formula, as a term id.
+    * `rule`     — atom symbol of the applied tableau rule
+                   (`:alpha`, `:beta`, `:gamma`, …), or `nil` for `:given`
+                   and `:closure` nodes.
+    * `sources`  — labels of premise steps this step was derived from.
+    * `kind`     — one of `:given` (initial formula), `:rule`
+                   (derived), `:closure` (branch-closing ⊥ leaf),
+                   or `:model` (countermodel witness leaf).
+    * `children` — subordinate steps (siblings under a β-split share
+                   the same parent).
+    * `model`    — `{atoms, defs}` when `kind == :model`, otherwise `nil`.
+    """
     defstruct label: nil,
               formula: nil,
               rule: nil,

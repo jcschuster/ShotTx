@@ -22,12 +22,18 @@ rules currently implemented.
 | 22b Powerset of null | passes | timeout | timeout | timeout |
 | Inj Cantor (Ex 21) | — | — | — | timeout |
 
-## TL;DR — six gaps
+> **Status (2026-07-28).** G7 has since been fixed upstream — `unfold_defs/2`
+> in `shot_ds` now iterates to a fixpoint via `unfold_defs_fixpoint/2`. Gaps
+> G1, G4, G6, G9, G10, G11′ remain open at the thesis cutoff. Absolute
+> line numbers in the sections below are from the survey; the referenced
+> functions still exist but may have moved.
+
+## TL;DR — six gaps (G7 now resolved)
 
 | Gap | Short description | Unlocks |
 |---|---|---|
 | **G4** | Head-conflict α-rule (same-head positive/negative atoms → argument disequality) | Ex 13, 14, 20c/d-Leibniz/Andrews, 22 variants |
-| **G7** | Fixpoint definition unfolding (today `unfold_defs!` is one-pass) | Ex 22a plain + all 22 variants |
+| ~~G7~~ | ~~Fixpoint definition unfolding~~ — resolved in `shot_ds` | Ex 22a plain + all 22 variants |
 | **G1** | Heads of applied terms registered as ground subterms | Ex 6c-Leibniz/Andrews |
 | **G6** | Data-driven γ vs prim-subst priority | Ex 6c-extensional, 20c-extensional, 22 |
 | **G9** | bool_ext — dual unit encoding of `s =_o t` | Inj Cantor's left-inverse construction |
@@ -35,8 +41,8 @@ rules currently implemented.
 | **G11′** | Worker-side equational-saturation submode | Inj Cantor closure (no external solver) |
 
 G1 and G4 together account for most of the Leibniz/Andrews/extensional family
-of failures. G7 is a small implementation change in `shot_ds`. G6, G9, G10
-and G11′ stack to unlock the Cantor / set-theoretic cases.
+of failures. G6, G9, G10 and G11′ stack to unlock the Cantor / set-theoretic
+cases.
 
 ---
 
@@ -204,34 +210,26 @@ chains trigger prim-subst at every nested γ).
 
 ---
 
-## G7 — Fixpoint definition unfolding
+## G7 — Fixpoint definition unfolding — ✅ **RESOLVED**
 
-**Where.** `deps/shot_ds/lib/shot_ds/stt/semantics.ex` `unfold_defs/2`
-at line 548.
+**Where.** `deps/shot_ds/lib/shot_ds/stt/semantics.ex` `unfold_defs/2`.
 
-**The bug.** `unfold_defs/2` does a single bottom-up `map_term/4` pass.
-Children are inlined before their parent, so `inter @ b @ c` is expanded
-before `union @ a @ (…)`. **But** the RHS of `union` and `inter` introduces
-new references to `elem`, and those new references are not in the original
-term tree — the bottom-up pass has already left them by the time they
-appear. So `elem` survives one unfolding round.
+**Original bug.** `unfold_defs/2` used to do a single bottom-up `map_term/4`
+pass. Children were inlined before their parent, so `inter @ b @ c` was
+expanded before `union @ a @ (…)`. But the RHS of `union` and `inter`
+introduces new references to `elem`, and those new references were not in
+the original term tree — the bottom-up pass had already left them by the
+time they appeared. So `elem` survived one unfolding round.
 
-For Ex 22a (`union @ a @ (inter @ b @ c) = inter @ (union @ a @ b) @ (union @ a @ c)`),
-full propositional shape requires `O(definition-depth)` re-firings of the
-`:atomic` rule's `unfold_if_possible/2` (`branch.ex:822`). Each re-firing
-spends a queue cycle, and each intermediate form is α/β-decomposed before
-the next round of unfolding — so β-splits compound on partially-unfolded
-terms.
+**Fix that landed.** `unfold_defs/2` now delegates to
+`unfold_defs_fixpoint/2`, which re-runs the transform until
+`term.consts ∩ defs.keys == ∅`. One rule firing replaces the entire
+definition chain; structural sharing in the term factory deduplicates the
+intermediate terms.
 
-**Fix.** Make `unfold_defs/2` iterate to a fixpoint on `by_name`
-references — keep re-running the transform until
-`term.consts ∩ defs.keys == ∅`. One rule firing then replaces the entire
-definition chain. Structural sharing in the term factory deduplicates
-intermediate terms, so the cost is `O(defs.depth × term.size)` once,
-not `O(defs.depth)` queue cycles each generating `O(term.size)` work.
-
-**Unlocks.** Ex 22a plain `=` (with G6 contributing). With G4 layered on
-top, all of Ex 22's Leibniz/Andrews/extensional variants follow.
+**Unlocks (retained for context).** Ex 22a plain `=` (with G6 contributing).
+With G4 layered on top, all of Ex 22's Leibniz/Andrews/extensional variants
+should follow.
 
 ---
 

@@ -136,6 +136,16 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   # --- CALL CALLBACKS ---------------------------------------------------------
 
+  # When `params.contradiction_agent` is `false`, global unification-based
+  # closure is disabled: the agent still tracks branch lifecycle for SAT/
+  # unsat coordination via ground closures, but never invokes the CSP. Settle
+  # calls reply `:open` immediately so the manager either deepens or reports
+  # `:unknown`.
+  defp do_settle(_from, %{params: %Parameters{contradiction_agent: false}} = state) do
+    Stats.incr(state.ets_tables, :csp_calls_skipped)
+    {:reply, :open, state}
+  end
+
   defp do_settle(from, %{pending_search: nil} = state) do
     option_lists = option_lists_for(state.active_branches, state)
 
@@ -264,15 +274,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
     saturated = Map.keys(saturated_branch_map)
     all_saturated? = Enum.all?(state.active_branches, &(&1 in saturated))
 
-    branches_to_check =
-      state.active_branches
-      |> MapSet.to_list()
-      |> Kernel.++(saturated)
-      |> Enum.uniq()
+    global_closure_result =
+      if state.params.contradiction_agent do
+        branches_to_check =
+          state.active_branches
+          |> MapSet.to_list()
+          |> Kernel.++(saturated)
+          |> Enum.uniq()
 
-    option_lists = option_lists_for(branches_to_check, state)
+        try_close_sync(option_lists_for(branches_to_check, state), state)
+      else
+        :error
+      end
 
-    case try_close_sync(option_lists, state) do
+    case global_closure_result do
       {:ok, solution} ->
         broadcast_unsat(solution, state)
 
@@ -287,10 +302,18 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp do_handle_cast(:verify_all_closed, state) do
-    if MapSet.size(state.active_branches) == 0 do
-      broadcast_unsat(%UnifSolution{}, state)
-    else
-      check_global_closure(state)
+    cond do
+      MapSet.size(state.active_branches) == 0 ->
+        broadcast_unsat(%UnifSolution{}, state)
+
+      not state.params.contradiction_agent ->
+        # Local ground closures did not clear all branches and global closure
+        # is disabled — the proof is undecidable at this configuration.
+        send_proof_result({:unknown, :contradiction_agent_disabled}, state)
+        {:noreply, state}
+
+      true ->
+        check_global_closure(state)
     end
   end
 
@@ -331,29 +354,34 @@ defmodule ShotTx.Prover.ContradictionAgent do
     {:noreply, state}
   end
 
+  defp check_global_closure(%__MODULE__{params: %Parameters{contradiction_agent: false}} = state) do
+    # Ablation: never dispatch a CSP; local ground closures still route through
+    # `record_branch_closure` / `react_to_closure`, so a purely ground-closable
+    # proof still succeeds without the agent.
+    {:noreply, state}
+  end
+
   defp check_global_closure(%__MODULE__{} = state) do
-    cond do
-      # Empty `active_branches` is a transient eager-path event — the last open
-      # branch just closed, but other workers may still be mid-step. The
-      # manager's `:verify_all_closed` cast is the authoritative settle point;
-      # let it confirm closure rather than racing it from here.
-      MapSet.size(state.active_branches) == 0 ->
+    # Empty `active_branches` is a transient eager-path event — the last open
+    # branch just closed, but other workers may still be mid-step. The
+    # manager's `:verify_all_closed` cast is the authoritative settle point;
+    # let it confirm closure rather than racing it from here.
+    if MapSet.size(state.active_branches) == 0 do
+      {:noreply, state}
+    else
+      option_lists = option_lists_for(state.active_branches, state)
+
+      if insufficient_options?(option_lists) do
+        Stats.incr(state.ets_tables, :csp_calls_skipped)
         {:noreply, state}
+      else
+        Logger.warning(
+          "Dispatching CSP. Branches: #{inspect(MapSet.to_list(state.active_branches))}. " <>
+            "Candidates: #{inspect(Enum.map(option_lists, &length/1))}"
+        )
 
-      true ->
-        option_lists = option_lists_for(state.active_branches, state)
-
-        if insufficient_options?(option_lists) do
-          Stats.incr(state.ets_tables, :csp_calls_skipped)
-          {:noreply, state}
-        else
-          Logger.warning(
-            "Dispatching CSP. Branches: #{inspect(MapSet.to_list(state.active_branches))}. " <>
-              "Candidates: #{inspect(Enum.map(option_lists, &length/1))}"
-          )
-
-          dispatch_csp(state, option_lists)
-        end
+        dispatch_csp(state, option_lists)
+      end
     end
   end
 
@@ -444,7 +472,12 @@ defmodule ShotTx.Prover.ContradictionAgent do
             :error
         end
 
-      Stats.record_sample(state.ets_tables, :csp_duration_us, System.monotonic_time(:microsecond) - t0)
+      Stats.record_sample(
+        state.ets_tables,
+        :csp_duration_us,
+        System.monotonic_time(:microsecond) - t0
+      )
+
       result
     end
   end

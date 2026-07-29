@@ -41,7 +41,7 @@ defmodule ShotTx.Prover.Branch do
   alias ShotTx.Generation
   alias ShotTx.Generation.{GeneralBindings, TypeUniverse}
   alias ShotTx.Data.Parameters
-  alias ShotTx.Prover.{LambdaLift, Paramodulation, Provenance, Rules, TermOrder}
+  alias ShotTx.Prover.{Demodulation, LambdaLift, Paramodulation, Provenance, Rules, TermOrder}
   alias ShotTx.Util.PropSimplify
   alias ShotTx.Prover.FormulaPqueue, as: FPQ
   alias ShotDs.Data.{Declaration, Term, Type}
@@ -174,7 +174,7 @@ defmodule ShotTx.Prover.Branch do
   instructing the Worker on how to proceed. History is recorded inside
   `apply_rule/6`.
   """
-  @spec step(%__MODULE__{}, %Parameters{}, non_neg_integer(), non_neg_integer()) :: step_result()
+  @spec step(%__MODULE__{}, Parameters.t(), non_neg_integer(), non_neg_integer()) :: step_result()
   def step(%__MODULE__{} = branch, params, gamma_limit, prim_limit) do
     cond do
       branch.pending_closure != nil ->
@@ -278,11 +278,25 @@ defmodule ShotTx.Prover.Branch do
     {:continue, updated, :no_effects}
   end
 
-  defp apply_rule({:rename, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
-    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+  defp apply_rule(
+         {:rename, _},
+         source,
+         branch,
+         %Parameters{atom_decomposition: false} = params,
+         g,
+         p
+       ),
+       do: apply_rule({:atomic, source}, source, branch, params, g, p)
 
-  defp apply_rule({:instantiate, _, _}, source, branch, %Parameters{atom_decomposition: false} = params, g, p),
-    do: apply_rule({:atomic, source}, source, branch, params, g, p)
+  defp apply_rule(
+         {:instantiate, _, _},
+         source,
+         branch,
+         %Parameters{atom_decomposition: false} = params,
+         g,
+         p
+       ),
+       do: apply_rule({:atomic, source}, source, branch, params, g, p)
 
   defp apply_rule({:rename, {t1, t2}} = rule, source, branch, params, _g_limit, _p_limit) do
     universe = branch.type_universe |> register_new_types(t1) |> register_new_types(t2)
@@ -315,9 +329,7 @@ defmodule ShotTx.Prover.Branch do
       |> ingest_formula(b2, params)
       |> bump_frontier([source], [b2])
 
-    if not params.beta_variant do
-      {:split, my_branch, sib_branch}
-    else
+    if params.beta_variant do
       additional = neg(b1)
 
       variant_sib_branch =
@@ -328,6 +340,8 @@ defmodule ShotTx.Prover.Branch do
         |> bump_frontier([], [additional])
 
       {:split, my_branch, variant_sib_branch}
+    else
+      {:split, my_branch, sib_branch}
     end
   end
 
@@ -402,7 +416,8 @@ defmodule ShotTx.Prover.Branch do
         reinsert_rule(branch_with_insts.queue, source, updated_gamma, params.formula_cost)
 
       queue =
-        if prev == params.prim_subst_after and type.goal == :o do
+        if params.primitive_substitution and prev == params.prim_subst_after and
+             type.goal == :o do
           reinsert_rule(
             queue,
             source,
@@ -461,7 +476,8 @@ defmodule ShotTx.Prover.Branch do
     # already in the branch, bypassing base/poly heads and the batch cap. This
     # front-loads the bindings most likely to close Leibniz-style goals without
     # waiting for propositional heads to exhaust the batch budget.
-    if progress == @fresh_progress and MapSet.size(new_constants) > 0 and params.instance_based_gamma do
+    if progress == @fresh_progress and MapSet.size(new_constants) > 0 and
+         params.instance_based_gamma do
       {unit_set, unit_set_h_terms} =
         args
         |> GeneralBindings.unit_set_heads(new_constants)
@@ -475,7 +491,9 @@ defmodule ShotTx.Prover.Branch do
           insert_formula(b, inst, branch.defs, params)
         end)
 
-      new_rule = {:prim_subst, recipe, type, depth, %{@fresh_progress | covered_constants: current_constants}}
+      new_rule =
+        {:prim_subst, recipe, type, depth,
+         %{@fresh_progress | covered_constants: current_constants}}
 
       updated =
         %{
@@ -588,7 +606,6 @@ defmodule ShotTx.Prover.Branch do
                 | literals: MapSet.put(branch.literals, term_id),
                   last_clash: {:unification, term_id, matchings}
               }
-              |> paramodulate_literal_with_equations(term_id, params)
               |> record(source, rule, [])
 
             {:continue, updated, {:notify_ca, new_clashes}}
@@ -596,7 +613,6 @@ defmodule ShotTx.Prover.Branch do
           :ok ->
             updated =
               %{branch | literals: MapSet.put(branch.literals, term_id)}
-              |> paramodulate_literal_with_equations(term_id, params)
               |> record(source, rule, [])
 
             {:continue, updated, :no_effects}
@@ -708,10 +724,7 @@ defmodule ShotTx.Prover.Branch do
         {:ground_closure, %{branch | literals: MapSet.put(branch.literals, term_id)}}
 
       _ ->
-        updated =
-          %{branch | literals: MapSet.put(branch.literals, term_id)}
-          |> paramodulate_literal_with_equations(term_id, params)
-
+        updated = %{branch | literals: MapSet.put(branch.literals, term_id)}
         {:continue, updated}
     end
   end
@@ -820,7 +833,12 @@ defmodule ShotTx.Prover.Branch do
   defp insert_formula(branch, formula, defs, params, ibg? \\ false)
 
   defp insert_formula(%__MODULE__{} = branch, formula, defs, %Parameters{} = params, ibg?) do
-    effective = formula |> maybe_unfold(defs, params) |> maybe_orient(params)
+    effective =
+      formula
+      |> maybe_unfold(defs, params)
+      |> maybe_orient(params)
+      |> maybe_demodulate(branch.equations, params)
+
     cf =
       effective
       |> Rules.classify_formula(
@@ -859,6 +877,16 @@ defmodule ShotTx.Prover.Branch do
 
   defp maybe_unfold(term_id, _defs, _params), do: term_id
 
+  # Forward demodulation. Reduces `term_id` to its normal form under the
+  # branch's current equations before it enters the priority queue.
+  # Cheap when equations is empty (early-branch or `paramodulation: false`)
+  # — `Demodulation.normalize/3` short-circuits to identity.
+  defp maybe_demodulate(term_id, _equations, %Parameters{demodulation: false}), do: term_id
+
+  defp maybe_demodulate(term_id, equations, %Parameters{term_order: order}) do
+    Demodulation.normalize(term_id, equations, order)
+  end
+
   ##############################################################################
   # EQUATION INGESTION & PARAMODULATION
   ##############################################################################
@@ -872,47 +900,71 @@ defmodule ShotTx.Prover.Branch do
 
     case TF.get_term!(effective_id) do
       equality(lhs, rhs) when lhs != rhs ->
-        {ol, or_} = orient_pair(lhs, rhs, params.term_order)
-        new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
-        new_eq_only = %{ol => MapSet.new([or_])}
-
-        updated_branch = %{branch | equations: new_equations}
-
-        if params.paramodulation do
-          Enum.reduce(branch.literals, updated_branch, fn lit, b ->
-            all_ps =
-              (Paramodulation.paramodulants(lit, new_eq_only) ++
-                 Paramodulation.unifying_paramodulants(
-                   lit,
-                   new_eq_only,
-                   params.unification_depth,
-                   params.paramodulation_mode
-                 ))
-              |> Enum.uniq()
-
-            case all_ps do
-              [] ->
-                b
-
-              paramodulants ->
-                paramodulants
-                |> Enum.reduce(b, fn p, b2 -> insert_formula(b2, p, b2.defs, params) end)
-                |> record(lit, :paramodulation, paramodulants)
-            end
-          end)
-        else
-          updated_branch
-        end
+        ingest_equation(branch, lhs, rhs, params)
 
       _ ->
         branch
     end
   end
 
+  defp ingest_equation(branch, lhs, rhs, params) do
+    {ol, or_} = orient_pair(lhs, rhs, params.term_order)
+    new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
+
+    %{branch | equations: new_equations}
+    |> backward_demodulate(%{ol => MapSet.new([or_])}, params)
+  end
+
+  # Backward demodulation: when a new equation lands, sweep existing
+  # branch literals and re-normalize them under the enlarged equation
+  # set. A literal that reduces is *replaced* — the old form is removed
+  # from `branch.literals` and the new form re-enters via
+  # `insert_formula` (which will run its own forward-demodulation pass
+  # and pick up the classification / queue entry).
+  #
+  # We only bother rewriting under the *new* equation on this pass: any
+  # literal not touched by it was already in normal form under the
+  # previous equation set (invariant maintained inductively by forward
+  # demodulation at ingest time).
+  defp backward_demodulate(branch, _new_eq_only, %Parameters{demodulation: false}), do: branch
+
+  defp backward_demodulate(branch, new_eq_only, params) do
+    Enum.reduce(branch.literals, branch, fn lit, acc ->
+      normal = Demodulation.normalize(lit, new_eq_only, params.term_order)
+
+      cond do
+        normal == lit ->
+          acc
+
+        MapSet.member?(acc.literals, normal) ->
+          # Already present in canonical form; just drop the redundant
+          # non-normal duplicate.
+          %{acc | literals: MapSet.delete(acc.literals, lit)}
+
+        true ->
+          # Replace: drop the un-normalized literal, re-enqueue the
+          # normal form through the standard insertion path so it gets
+          # classified and paramodulated correctly.
+          acc
+          |> Map.update!(:literals, &(&1 |> MapSet.delete(lit) |> MapSet.put(normal)))
+          |> insert_formula(normal, acc.defs, params)
+          |> record(lit, :demodulation, [normal])
+      end
+    end)
+  end
+
+  # Pick a storage direction for `lhs = rhs`. When NCPO-LNF strictly orients
+  # the pair, that direction is used and downstream demodulation will fire
+  # (see `Demodulation.normalize/3`). When the pair is incomparable under
+  # NCPO-LNF, we still store *some* direction so equational reasoning is
+  # not lost — the demodulation gate silently drops it from rewriting, and
+  # the Leibniz/extensional α-expansion becomes the completeness fallback.
+  # The final `gt?` branch uses the total heuristic extension solely to
+  # make the storage direction deterministic.
   defp orient_pair(lhs, rhs, order_params) do
     cond do
-      contains?(lhs, rhs) -> {lhs, rhs}
-      contains?(rhs, lhs) -> {rhs, lhs}
+      TermOrder.strict_gt?(lhs, rhs, order_params) -> {lhs, rhs}
+      TermOrder.strict_gt?(rhs, lhs, order_params) -> {rhs, lhs}
       TermOrder.gt?(lhs, rhs, order_params) -> {lhs, rhs}
       true -> {rhs, lhs}
     end
@@ -951,36 +1003,6 @@ defmodule ShotTx.Prover.Branch do
       end
 
     orient_top(rebuilt, order)
-  end
-
-  defp contains?(outer_id, inner_id) do
-    outer_id != inner_id and
-      inner_id in (Paramodulation.subterms(outer_id) |> MapSet.delete(outer_id))
-  end
-
-  defp paramodulate_literal_with_equations(branch, _term_id, %Parameters{paramodulation: false}),
-    do: branch
-
-  defp paramodulate_literal_with_equations(branch, term_id, params) do
-    all_ps =
-      (Paramodulation.paramodulants(term_id, branch.equations) ++
-         Paramodulation.unifying_paramodulants(
-           term_id,
-           branch.equations,
-           params.unification_depth,
-           params.paramodulation_mode
-         ))
-      |> Enum.uniq()
-
-    case all_ps do
-      [] ->
-        branch
-
-      paramodulants ->
-        paramodulants
-        |> Enum.reduce(branch, fn p, b -> insert_formula(b, p, b.defs, params) end)
-        |> record(term_id, :paramodulation, paramodulants)
-    end
   end
 
   defp record(branch, source, rule, produced) do

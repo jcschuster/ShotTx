@@ -116,9 +116,7 @@ defmodule ShotTx.Prover.ModelAgent do
 
       {branch_id, in_flight} ->
         if reason not in [:normal, :shutdown] do
-          Logger.warning(
-            "ModelAgent probe crashed for branch #{branch_id}: #{inspect(reason)}"
-          )
+          Logger.warning("ModelAgent probe crashed for branch #{branch_id}: #{inspect(reason)}")
         end
 
         {:noreply, %{state | in_flight: in_flight}}

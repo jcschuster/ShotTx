@@ -21,6 +21,7 @@ defmodule ShotTx.IsabelleBridgeTest do
       assert IsabelleBridge.status() == :inactive
     else
       {:ok, pid} = IsabelleBridge.start_link([])
+
       on_exit(fn ->
         if Process.alive?(pid) do
           try do
@@ -30,6 +31,7 @@ defmodule ShotTx.IsabelleBridgeTest do
           end
         end
       end)
+
       assert IsabelleBridge.status() == :inactive
     end
   end
@@ -37,6 +39,7 @@ defmodule ShotTx.IsabelleBridgeTest do
   test "probe/await returns :unknown while the bridge is inactive" do
     unless Process.whereis(IsabelleBridge) do
       {:ok, pid} = IsabelleBridge.start_link([])
+
       on_exit(fn ->
         if Process.alive?(pid) do
           try do

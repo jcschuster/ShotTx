@@ -16,7 +16,7 @@ defmodule ShotTx.Prover.ProvenanceTest do
   @minimal %Parameters{
     simplification: :none,
     beta_variant: false,
-    paramodulation: false,
+    demodulation: false,
     orient: :none,
     instance_based_gamma: false
   }
@@ -66,7 +66,7 @@ defmodule ShotTx.Prover.ProvenanceTest do
     @primsubst %Parameters{
       simplification: :none,
       beta_variant: false,
-      paramodulation: false,
+      demodulation: false,
       orient: :none,
       instance_based_gamma: false,
       prim_subst_after: 0,

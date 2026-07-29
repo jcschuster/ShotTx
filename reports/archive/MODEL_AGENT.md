@@ -1,4 +1,19 @@
-# ModelAgent — Design Sketch
+# ModelAgent — Design Sketch (ARCHIVED)
+
+> **Archived 2026-07-28.** This is the pre-implementation design sketch. The
+> ModelAgent has since been built (`lib/shot_tx/prover/model_agent.ex`,
+> backends under `lib/shot_tx/prover/model_agent/backend/`), and every
+> concrete API/config name has drifted from the proposal below — the config
+> lives in six flat `model_agent_*` fields on `%Parameters{}` rather than the
+> nested `model_check` map proposed here; the behaviour is
+> `ShotTx.Prover.ModelAgent.Backend` with `probe/2` + `await/2`, not
+> `ShotTx.Prover.Model.Backend.check/2`; and the PubSub topic /
+> `:model_verdicts` ETS table proposed below never materialised.
+>
+> For the current living hand-off, see `reports/TODO_MA.md`. This file is
+> retained for historical design context only.
+
+---
 
 Scope: a proposed new component that uses a model finder (Nitpick, via
 `isabelle_elixir` or `AtpClient`) to detect that a branch has a satisfying

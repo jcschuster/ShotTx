@@ -31,7 +31,6 @@ defmodule ShotTx.Prover.Manager do
             parked_count: 0
 
   @root_name "root"
-  @progress_interval_ms 2_000
 
   ##############################################################################
   # PUBLIC API
@@ -51,7 +50,7 @@ defmodule ShotTx.Prover.Manager do
   @impl true
   def init({session_id, formulas, defs, params}) do
     ets_tables = ShotTx.Prover.EtsKeeper.get_tables(session_id)
-    worker_count = Map.get(params, :worker_pool_size, System.schedulers_online())
+    worker_count = resolve_worker_count(params.worker_pool_size)
 
     state = %__MODULE__{
       session_id: session_id,
@@ -82,7 +81,7 @@ defmodule ShotTx.Prover.Manager do
 
       spawn_workers(state)
 
-      Process.send_after(self(), :log_progress, @progress_interval_ms)
+      schedule_progress_log(state.params.progress_interval_ms)
       timer = Process.send_after(self(), :timeout, state.params.timeout)
 
       {:noreply,
@@ -138,7 +137,7 @@ defmodule ShotTx.Prover.Manager do
         " sat=#{Map.get(stats, :branches_saturated, 0)}"
     )
 
-    Process.send_after(self(), :log_progress, @progress_interval_ms)
+    schedule_progress_log(state.params.progress_interval_ms)
     {:noreply, state}
   end
 
@@ -146,6 +145,15 @@ defmodule ShotTx.Prover.Manager do
   def handle_info(_, state) do
     {:noreply, state}
   end
+
+  defp schedule_progress_log(interval) when is_integer(interval) and interval > 0 do
+    Process.send_after(self(), :log_progress, interval)
+  end
+
+  defp schedule_progress_log(_), do: :ok
+
+  defp resolve_worker_count(:auto), do: System.schedulers_online()
+  defp resolve_worker_count(n) when is_integer(n) and n > 0, do: n
 
   # --- Worker Tracking & Deepening --------------------------------------------
 
@@ -266,32 +274,43 @@ defmodule ShotTx.Prover.Manager do
         {:noreply, state}
 
       :open ->
-        new_state =
-          transfer_idle_to_work_queue(state, state.ets_tables, state.params.formula_cost)
-
-        new_gamma = state.current_gamma_limit + 1
-        new_prim = state.current_prim_depth_limit + 1
-
-        Logger.debug(
-          "Iterative deepening triggered. Gamma: #{new_gamma}, Prim depth: #{new_prim}"
-        )
-
-        Registry.dispatch(
-          ShotTx.Prover.PubSub,
-          "branch_control_#{state.session_id}",
-          fn entries ->
-            for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
-          end
-        )
-
-        {:noreply,
-         %{
-           new_state
-           | current_gamma_limit: new_gamma,
-             current_prim_depth_limit: new_prim,
-             idle_workers: MapSet.new()
-         }}
+        deepen_or_report_unknown(state)
     end
+  end
+
+  defp deepen_or_report_unknown(%{params: %{iterative_deepening: false}} = state) do
+    Logger.debug(
+      "Iterative deepening disabled. Reporting :unknown at gamma=#{state.current_gamma_limit} prim=#{state.current_prim_depth_limit}."
+    )
+
+    GenServer.cast(self(), {:proof_result, {:unknown, :deepening_disabled}})
+    {:noreply, state}
+  end
+
+  defp deepen_or_report_unknown(state) do
+    new_state =
+      transfer_idle_to_work_queue(state, state.ets_tables, state.params.formula_cost)
+
+    new_gamma = state.current_gamma_limit + 1
+    new_prim = state.current_prim_depth_limit + 1
+
+    Logger.debug("Iterative deepening triggered. Gamma: #{new_gamma}, Prim depth: #{new_prim}")
+
+    Registry.dispatch(
+      ShotTx.Prover.PubSub,
+      "branch_control_#{state.session_id}",
+      fn entries ->
+        for {pid, _} <- entries, do: send(pid, {:wake_up, new_gamma, new_prim})
+      end
+    )
+
+    {:noreply,
+     %{
+       new_state
+       | current_gamma_limit: new_gamma,
+         current_prim_depth_limit: new_prim,
+         idle_workers: MapSet.new()
+     }}
   end
 
   defp transfer_idle_to_work_queue(state, ets_tables, cost_fn) do

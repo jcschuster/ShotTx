@@ -33,6 +33,7 @@ defmodule ShotTx.Prover.RulesTest do
       progress = %{base_offset: 0, covered_types: MapSet.new()}
       progress2 = %{base_offset: 7, covered_types: MapSet.new()}
       t = %ShotDs.Data.Type{goal: :o}
+
       assert Rules.rule_cost({:prim_subst, 1, t, 1, progress}) <
                Rules.rule_cost({:prim_subst, 1, t, 1, progress2})
 

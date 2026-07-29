@@ -1,5 +1,14 @@
 # ShotTx Code-Quality Assessment
 
+> **Status (2026-07-28).** This is a snapshot audit; the codebase has moved
+> since. Issues **#4, #6, #8, #10** have been fully resolved (mainly by the
+> CA peer-architecture refactor and the ablation-parameters commit). Issue
+> **#11** is partially resolved (only the `worker_pool_size` bullet).
+> Remaining findings — liveness (#1), races (#2, #3), crash recovery (#5,
+> #7), lockstep deepening (#12), and the ETS / message-fanout items in the
+> "smaller things" list — have not been addressed and remain accurate as
+> known technical debt at the thesis cutoff.
+
 Scope: the prover core (`Manager`, `Worker`, `ContradictionAgent`, `EtsKeeper`,
 `SessionSupervisor`, `Branch`, `Rules`, `Stats`, `FormulaPqueue`). Proof
 rendering and term generation modules were not reviewed in depth.
@@ -67,16 +76,20 @@ timeout, may simply fail to close.
 
 ---
 
-### 4. Per-split synchronous round-trip through the ContradictionAgent
+### 4. Per-split synchronous round-trip through the ContradictionAgent — ✅ **RESOLVED**
+*Fixed by the CA-refactor commit (`2859bb6`).* Workers now `broadcast_evidence/2`
+to a shared `branch_evidence_<session>` PubSub topic (`worker.ex:187, 203, 223,
+247, 253`); CA and SuggestionAgent subscribe as peers. No more synchronous
+per-split funnel through a single GenServer.
+
+<details><summary>Original finding</summary>
+
 Every β-split, every `:instantiate`, every `:closed`, and every `:atomic` that
-produces clashes goes through `notify_ca_sync`
-(`worker.ex:183, 199, 220, 252`). That's a `GenServer.call(:infinity)` per
-branching step, serialised through a single CA process. The actor-based
-parallelism described in `CLAUDE.md` is largely fictional — the prover funnels
-through CA on every interesting step. This is the single biggest scalability
-ceiling. The rationale (preserve happens-before for `active_branches`
-updates) could likely be solved with a generation counter or by piggybacking
-the events onto the same message the worker already sends.
+produces clashes went through `notify_ca_sync`
+(`worker.ex:183, 199, 220, 252`). That was a `GenServer.call(:infinity)` per
+branching step, serialised through a single CA process.
+
+</details>
 
 ---
 
@@ -96,17 +109,11 @@ decrement `worker_count` on failure.
 
 ---
 
-### 6. `worker_pool_size` is silently un-configurable
-File: `manager.ex:54`.
-
-```elixir
-worker_count = Map.get(params, :worker_pool_size, System.schedulers_online())
-```
-
-The `%Parameters{}` struct has no `:worker_pool_size` field. `Map.get` on a
-struct returns the default if the key is absent. So the lookup always falls
-through to `schedulers_online`. Either add the field to `Parameters` or drop
-the misleading lookup.
+### 6. `worker_pool_size` is silently un-configurable — ✅ **RESOLVED**
+*Fixed as part of the ablation-parameters commit.* `Parameters` now has
+`worker_pool_size :: :auto | pos_integer()` (default `:auto`); Manager resolves
+it via `resolve_worker_count/1` (`manager.ex:53`). Setting it to `1` is the
+canonical serial baseline for the ablation matrix.
 
 ---
 
@@ -126,18 +133,11 @@ abnormal.
 
 ## Logic / model issues
 
-### 8. Two-stage CA initialization is structural debt
-`contradiction_agent.ex:99` (`aborted?`) returns **`true` when `:stats` is
-unset** — i.e. before `set_ets_tables` has been called. So a freshly started
-CA silently drops every event until the Manager hand-feeds it the ETS table
-refs via a synchronous call (`manager.ex:84`).
-
-This couples the lifecycle to an implicit ordering between sibling
-supervisor children — exactly the kind of dependency that proper
-supervision is meant to make impossible. Worse, the `aborted?` check returns
-spurious `:closed`/`:aborted` replies to anyone calling the CA in that
-window. The fix is for `CA.init/1` to fetch tables from `EtsKeeper` directly
-(it already has `session_id`).
+### 8. Two-stage CA initialization is structural debt — ✅ **RESOLVED**
+*Fixed by the CA-refactor commit.* `CA.init/1` (`contradiction_agent.ex:86`)
+now calls `EtsKeeper.get_tables(session_id)` directly and subscribes to the
+PubSub topic in the same step. No more `set_ets_tables` handshake; no more
+dropped-event window.
 
 ### 9. The `:aborted` flag is dual-purposed
 `send_proof_result` sets `:aborted := true` *as part of reporting success*
@@ -147,24 +147,18 @@ conflates "proof finished successfully" with "abort all work in progress",
 which obscures intent — e.g. a late reply path returns `:aborted` to a
 worker even though the proof completed normally.
 
-### 10. Dead code in the CA message protocol
-`contradiction_agent.ex:127, 328`. Three handlers exist for "branch reports
-clashes":
+### 10. Dead code in the CA message protocol — ✅ **RESOLVED**
+*Fixed by the CA-refactor commit.* Only one handler remains — the topic-driven
+`do_handle_info({:local_clashes, ...})` at `contradiction_agent.ex:212`.
+The `_sync` and cast variants are gone.
 
-- `do_handle_call({:local_clashes, ...})`
-- `do_handle_cast({:local_clashes, ...})`
-- `do_handle_sync({:local_clashes_sync, ...})`
-
-Only the sync `_sync` variant has callers in the worker. The cast and call
-variants are unreachable. Pick one.
-
-### 11. `Map.get` used to access fields with a known schema
-- `Map.get(params, :worker_pool_size, ...)` — see #6.
-- `Map.get(state.ets_tables, :stats)` — runs on every CA message (see #20).
-- `Map.get(state, :current_branch)` in `worker.ex:58` — defensive against a
-  field the author guarantees is present.
-
-These hide mistakes of the kind shown in #6. Pattern-match the struct.
+### 11. `Map.get` used to access fields with a known schema — ⚠️ **PARTIAL**
+- ~~`Map.get(params, :worker_pool_size, ...)`~~ — resolved with #6.
+- `Map.get(state.ets_tables, :stats)` — **still present** in `worker.ex:100`,
+  `contradiction_agent.ex:131, 596`, `model_agent.ex:278, 295, 337`. Runs on
+  every message. See #20.
+- `Map.get(state, :current_branch)` in `worker.ex:60` — **still present**;
+  defensive against a field the author guarantees is present.
 
 ### 12. Gamma and prim-subst limits increment together
 `manager.ex:276`:

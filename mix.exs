@@ -8,7 +8,80 @@ defmodule ShotTx.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_ignore_filters: ["test/prover_case.exs"],
-      deps: deps()
+      deps: deps(),
+      escript: escript(),
+      docs: docs(),
+      name: "ShotTx",
+      description:
+        "Tableau component of Shot, a parallel Church Simple Type Theory theorem prover.",
+      source_url: "https://github.com/jcschuster/ShotTx"
+    ]
+  end
+
+  defp escript do
+    [
+      main_module: ShotTx.CLI,
+      name: "shot_tx",
+      app: :shot_tx,
+      # Force UTF-8 filename encoding so the script runs cleanly regardless
+      # of the caller's locale — otherwise the BEAM prints a runtime warning
+      # about latin1 encoding on every invocation.
+      emu_args: "+fnu"
+    ]
+  end
+
+  defp docs do
+    [
+      main: "ShotTx",
+      extras: ["README.md"],
+      groups_for_modules: [
+        "Public API": [
+          ShotTx,
+          ShotTx.CLI,
+          ShotTx.Prover,
+          ShotTx.Config,
+          ShotTx.Data.Parameters,
+          ShotTx.Proof
+        ],
+        "Proof search core": [
+          ShotTx.Prover.Branch,
+          ShotTx.Prover.Rules,
+          ShotTx.Prover.Paramodulation,
+          ShotTx.Prover.Demodulation,
+          ShotTx.Prover.TermOrder,
+          ShotTx.Prover.LambdaLift,
+          ShotTx.Prover.FormulaPqueue,
+          ShotTx.Util.PropSimplify
+        ],
+        "OTP / concurrency": [
+          ShotTx.Prover.SessionSupervisor,
+          ShotTx.Prover.Manager,
+          ShotTx.Prover.Worker,
+          ShotTx.Prover.EtsKeeper,
+          ShotTx.Prover.Stats
+        ],
+        Agents: [
+          ShotTx.Prover.ContradictionAgent,
+          ShotTx.Prover.SuggestionAgent,
+          ShotTx.Prover.Suggestion,
+          ShotTx.Prover.ModelAgent,
+          ShotTx.Prover.ModelAgent.Backend,
+          ShotTx.Prover.ModelAgent.Backend.Nitpick,
+          ShotTx.Prover.ModelAgent.Backend.Stub,
+          ShotTx.Prover.ModelAgent.Frontier,
+          ShotTx.IsabelleBridge
+        ],
+        Generation: [
+          ShotTx.Generation,
+          ShotTx.Generation.GeneralBindings,
+          ShotTx.Generation.TypeUniverse,
+          ShotTx.Prover.Provenance
+        ],
+        Benchmarking: [
+          ShotTx.Benchmark.Ablation,
+          ShotTx.Benchmark.TptpRunner
+        ]
+      ]
     ]
   end
 

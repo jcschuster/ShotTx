@@ -1,4 +1,26 @@
 defmodule ShotTx.Prover.Rules do
+  @moduledoc """
+  Tableau rule classification and priority costs.
+
+  `classify_formula/3` inspects a term-id and dispatches it to one of the
+  tableau rule variants (α, β, γ, γ-finite, δ, prim-subst, equality
+  expansion, rename, instantiate, atomic, tautology, contradiction). The
+  classifier is polarity-aware — negated formulas are routed through
+  `classify_neg_formula/3` — and honours two `Parameters` knobs:
+
+    * `finite_o_quantification` — when `true`, `∀x^o. …` is handled by the
+      finite γ-rule (full enumeration of the propositional domain) instead of
+      the ordinary γ-rule.
+    * `equivalence_processing` — chooses between same-polarity β-split, α-form
+      via bidirectional implication, or a hybrid `:dual` form.
+
+  `rule_cost/1,2` maps a classified rule to a priority in the `FormulaPqueue`
+  (lower = higher priority). `resolve_cost_strategy/1` converts a named
+  strategy (`:default`, `:uniform`, `:depth_first`, `{:custom, fun}`) into a
+  concrete cost function — used by the ablation sweep so parameter files
+  stay self-describing.
+  """
+
   alias ShotDs.Data.{Type, Declaration, Term}
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
@@ -168,6 +190,51 @@ defmodule ShotTx.Prover.Rules do
   defp default_equality_cost(:iff_o), do: 2
   defp default_equality_cost(:extensional), do: 10
   defp default_equality_cost(:leibniz), do: 15
+
+  @doc """
+  Resolves a `formula_cost_strategy` value from `Parameters` into the cost
+  function used by `FormulaPqueue`. Used by ablation sweeps to select a named
+  cost function without threading a lambda through the config.
+
+    * `:default`       — `rule_cost/1` (the historical default).
+    * `:uniform`       — every rule has cost `1`; the queue degenerates to FIFO
+      insertion order, giving a breadth-first-ish enumeration.
+    * `:depth_first`   — cheap linear decompositions (`:alpha`, `:atomic`,
+      `:tautology`, `:contradiction`) stay small; branching rules (`:beta`,
+      `:prim_subst`, `:gamma`, `:instantiate`) are pushed to the back so a
+      single branch is developed as deep as possible before splitting.
+    * `{:custom, fun}` — use `fun` directly.
+  """
+  @spec resolve_cost_strategy(
+          :default
+          | :uniform
+          | :depth_first
+          | {:custom, (rule_t() -> non_neg_integer())}
+        ) :: (rule_t() -> non_neg_integer())
+  def resolve_cost_strategy(:default), do: &rule_cost/1
+  def resolve_cost_strategy(:uniform), do: fn _rule -> 1 end
+  def resolve_cost_strategy(:depth_first), do: &depth_first_cost/1
+  def resolve_cost_strategy({:custom, fun}) when is_function(fun, 1), do: fun
+
+  @spec depth_first_cost(rule_t()) :: non_neg_integer()
+  defp depth_first_cost(:contradiction), do: 0
+  defp depth_first_cost({:atomic, _}), do: 1
+  defp depth_first_cost({:alpha, _}), do: 2
+  defp depth_first_cost({:delta, _}), do: 2
+  defp depth_first_cost(:tautology), do: 3
+
+  defp depth_first_cost({:equality_expansion, kind, _}),
+    do: 3 + default_equality_cost(kind)
+
+  defp depth_first_cost({:rename, _}), do: 6
+  defp depth_first_cost({:instantiate, _, c}), do: 6 + c
+  # Branching rules: pushed far back so linear decomposition runs first.
+  defp depth_first_cost({:beta, _}), do: 100
+  defp depth_first_cost({:gamma, _, _, c, false}), do: 200 + 5 * c
+  defp depth_first_cost({:gamma, _, _, c, true}), do: 210 + 5 * c
+  defp depth_first_cost({:gamma_finite, _, _}), do: 220
+  defp depth_first_cost({:prim_subst, _, _, d, %{base_offset: c}}), do: 400 + 10 * d + 5 * c
+  defp depth_first_cost({:suggested_instantiate, _, _}), do: 50
 
   ##############################################################################
   # CLASSIFICATION
@@ -406,7 +473,9 @@ defmodule ShotTx.Prover.Rules do
 
             inst_term_id =
               TF.with_scratchpad!(fn ->
-                {id, _cache} = TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+                {id, _cache} =
+                  TermTraversal.map_term!(term.id, nil, fn _, env -> env end, transform)
+
                 id
               end)
 

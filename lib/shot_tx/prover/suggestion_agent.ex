@@ -34,6 +34,7 @@ defmodule ShotTx.Prover.SuggestionAgent do
   # PUBLIC API
   ##############################################################################
 
+  @doc "Starts the SuggestionAgent for the given session."
   @spec start_link({String.t(), Parameters.t()}) :: GenServer.on_start()
   def start_link({session_id, params}) do
     name = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :sa}}}

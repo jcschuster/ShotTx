@@ -1,4 +1,15 @@
 defmodule ShotTx.Generation do
+  @moduledoc """
+  Enumerates the closed HOL terms needed for γ-finite instantiation and
+  primitive substitution.
+
+  `gen_o/1` produces every ground term of a given propositional type — truth
+  values at `o`, the four unary connectives at `o → o`, the sixteen binary
+  connectives at `o → o → o`, and higher-arity Boolean functions via
+  if-then-else expansion. Results are memoised per-process; the same lookup
+  from a worker is a cache hit.
+  """
+
   alias ShotDs.Data.{Type, Term}
   alias ShotDs.Stt.TermFactory, as: TF
   import ShotDs.Hol.{Definitions, Dsl, Patterns}

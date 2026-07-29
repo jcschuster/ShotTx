@@ -25,7 +25,9 @@ defmodule ShotTx.Util.PropSimplify do
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
   use ShotDs.Hol.Patterns
-  import ShotDs.Hol.Definitions, only: [true_term: 0, false_term: 0, neg_term: 0, or_term: 0, and_term: 0]
+
+  import ShotDs.Hol.Definitions,
+    only: [true_term: 0, false_term: 0, neg_term: 0, or_term: 0, and_term: 0]
 
   @typedoc "Simplification depth."
   @type mode() :: :shallow | :deep
@@ -70,17 +72,31 @@ defmodule ShotTx.Util.PropSimplify do
 
   defp term_to_bdd(term_id) do
     case TF.get_term!(term_id) do
-      truth() -> :bdd_top
-      falsity() -> :bdd_bot
-      negated(p) -> bdd_neg(term_to_bdd(p))
-      disjunction(p, q) -> bdd_or(term_to_bdd(p), term_to_bdd(q))
-      conjunction(p, q) -> bdd_and(term_to_bdd(p), term_to_bdd(q))
-      implication(p, q) -> bdd_or(bdd_neg(term_to_bdd(p)), term_to_bdd(q))
+      truth() ->
+        :bdd_top
+
+      falsity() ->
+        :bdd_bot
+
+      negated(p) ->
+        bdd_neg(term_to_bdd(p))
+
+      disjunction(p, q) ->
+        bdd_or(term_to_bdd(p), term_to_bdd(q))
+
+      conjunction(p, q) ->
+        bdd_and(term_to_bdd(p), term_to_bdd(q))
+
+      implication(p, q) ->
+        bdd_or(bdd_neg(term_to_bdd(p)), term_to_bdd(q))
+
       equivalence(p, q) ->
         bp = term_to_bdd(p)
         bq = term_to_bdd(q)
         bdd_or(bdd_and(bp, bq), bdd_and(bdd_neg(bp), bdd_neg(bq)))
-      _atom -> atom_for(term_id)
+
+      _atom ->
+        atom_for(term_id)
     end
   end
 
@@ -100,7 +116,10 @@ defmodule ShotTx.Util.PropSimplify do
   defp bdd_or(:bdd_bot, b), do: b
   defp bdd_or(b, :bdd_bot), do: b
   defp bdd_or({a, h1, l1}, {a, h2, l2}), do: mk(a, bdd_or(h1, h2), bdd_or(l1, l2))
-  defp bdd_or({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2, do: mk(a1, bdd_or(h1, b2), bdd_or(l1, b2))
+
+  defp bdd_or({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2,
+    do: mk(a1, bdd_or(h1, b2), bdd_or(l1, b2))
+
   defp bdd_or(b1, {a2, h2, l2}), do: mk(a2, bdd_or(b1, h2), bdd_or(b1, l2))
 
   defp bdd_and(:bdd_bot, _), do: :bdd_bot
@@ -108,7 +127,10 @@ defmodule ShotTx.Util.PropSimplify do
   defp bdd_and(:bdd_top, b), do: b
   defp bdd_and(b, :bdd_top), do: b
   defp bdd_and({a, h1, l1}, {a, h2, l2}), do: mk(a, bdd_and(h1, h2), bdd_and(l1, l2))
-  defp bdd_and({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2, do: mk(a1, bdd_and(h1, b2), bdd_and(l1, b2))
+
+  defp bdd_and({a1, h1, l1}, {a2, _, _} = b2) when a1 < a2,
+    do: mk(a1, bdd_and(h1, b2), bdd_and(l1, b2))
+
   defp bdd_and(b1, {a2, h2, l2}), do: mk(a2, bdd_and(b1, h2), bdd_and(b1, l2))
 
   defp mk(_a, same, same), do: same
@@ -133,20 +155,25 @@ defmodule ShotTx.Util.PropSimplify do
   defp bdd_to_term(:bdd_bot), do: false_term()
   defp bdd_to_term({var, :bdd_top, :bdd_bot}), do: var
   defp bdd_to_term({var, :bdd_bot, :bdd_top}), do: TF.make_appl_term!(neg_term(), var)
+
   defp bdd_to_term({var, :bdd_top, low}) do
     or_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(low))
   end
+
   defp bdd_to_term({var, high, :bdd_bot}) do
     and_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(high))
   end
+
   defp bdd_to_term({var, :bdd_bot, low}) do
     neg_var = TF.make_appl_term!(neg_term(), var)
     and_term() |> TF.make_appl_term!(neg_var) |> TF.make_appl_term!(bdd_to_term(low))
   end
+
   defp bdd_to_term({var, high, :bdd_top}) do
     neg_var = TF.make_appl_term!(neg_term(), var)
     or_term() |> TF.make_appl_term!(neg_var) |> TF.make_appl_term!(bdd_to_term(high))
   end
+
   defp bdd_to_term({var, high, low}) do
     neg_var = TF.make_appl_term!(neg_term(), var)
     pos_branch = and_term() |> TF.make_appl_term!(var) |> TF.make_appl_term!(bdd_to_term(high))

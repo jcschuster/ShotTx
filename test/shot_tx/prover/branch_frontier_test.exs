@@ -19,7 +19,7 @@ defmodule ShotTx.Prover.BranchFrontierTest do
   @minimal %Parameters{
     simplification: :none,
     beta_variant: false,
-    paramodulation: false,
+    demodulation: false,
     orient: :none,
     instance_based_gamma: false
   }
@@ -153,7 +153,7 @@ defmodule ShotTx.Prover.BranchFrontierTest do
         pa = ~f"p @ a"
         ab = ~f"a = b"
 
-        params = %{@minimal | paramodulation: true}
+        params = %{@minimal | demodulation: true}
         branch = Branch.new("root", [pa, ab], params)
         {:continue, next, _effect} = Branch.step(branch, params, 1, 1)
 

@@ -1,5 +1,25 @@
 # Equality in Shot: A Roadmap Toward Superposition
 
+> **Status (2026-07-29):** §0 cost-split and §4's *demodulation* have
+> landed under the constraint of **no branch-level variable bindings**.
+> `ShotTx.Prover.Demodulation.normalize/3` runs forward on every
+> incoming formula and backward on `branch.literals` when a new
+> equation is ingested; it admits only rewrites with empty matcher σ
+> (structural identity of equation LHS with target subterm, or a
+> primitive η-expansion `λv̄. h(v̄)` matching an applied subterm's head
+> declaration). **Unifying paramodulation has been removed entirely** as
+> unsound under ShotTx's rigid-variable architecture — any local σ
+> commitment would conflict with the `ContradictionAgent`'s global
+> CSP-based reconciliation of γ-instantiation placeholders. The
+> paramodulation module now contains only term-DAG traversal helpers
+> (`subterms/1`, `applied_subterms/1`, `replace_subterm/3`) used by
+> demodulation. Termination follows from the paper's `(NCPO-LNF, CPO⁺)`
+> pair. §1, §2, §3 (maximal-literal + selection), §5 remain future
+> work. Equational reasoning requiring σ commitment is handled by
+> Leibniz/extensional α-expansion — its σ shows up in the
+> `check_local_clashes` unification test and is reported to CA for
+> global reconciliation.
+
 This document tracks ideas — beyond the first cost-splitting step that just
 landed — for making Shot's equality handling more competitive on the
 first-order fragment, drawing inspiration from superposition calculi.

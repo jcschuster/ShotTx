@@ -13,7 +13,7 @@ defmodule ShotTx.Prover.ModelAgent.FrontierTest do
   alias ShotTx.Prover.Branch
   alias ShotTx.Prover.ModelAgent.Frontier
 
-  @minimal %Parameters{simplification: :none, paramodulation: false, orient: :none}
+  @minimal %Parameters{simplification: :none, demodulation: false, orient: :none}
 
   test "to_problem/1 emits axioms for every frontier member" do
     ctx = ~e"p: $o, q: $o"

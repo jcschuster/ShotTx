@@ -1,6 +1,22 @@
 defmodule ShotTx.Prover do
   @moduledoc """
-  Main module that defines the public API.
+  Public entry point for the ShotTx tableau prover.
+
+  Three related APIs live here:
+
+    * `prove/1`, `prove/2`, `prove/3` — attempt to prove `conclusion` from
+      `assumptions` (or a `ShotDs.Data.Problem`). Returns a `t:proof_result/0`.
+    * `sat/1`, `sat/2`, `sat/3` — check a list of formulas for satisfiability
+      without negating a conclusion. Returns the raw `Manager` result.
+    * `prove_string/1`, `prove_string/2`, `prove_string/3` — thin convenience
+      wrapper that formats the outcome via `format_result/1`.
+
+  Every call spins up a fresh `ShotTx.Prover.SessionSupervisor` and blocks
+  synchronously on the `Manager` until the search terminates (theorem,
+  countermodel, timeout, or exhausted iterative deepening). Configuration
+  is threaded through as a keyword list that is merged into a
+  `ShotTx.Data.Parameters` struct — see that module for the full list of
+  knobs, and `ShotTx.Config` for session-wide defaults.
   """
 
   import ShotDs.Hol.Dsl
@@ -20,10 +36,22 @@ defmodule ShotTx.Prover do
           | {:timeout, ShotTx.Proof.t()}
           | {:error, term()}
 
+  @doc """
+  Shorthand delegating to the three-argument form.
+
+  Accepts either a `ShotDs.Data.Problem` (`prove(problem)` — no options), a
+  single `t:ShotDs.Data.Term.term_id/0` conclusion (`prove(conclusion)`), or a
+  conclusion plus either an assumption list or options list.
+
+  See `prove/3` for the primary interface and return type.
+  """
+  @spec prove(Problem.t() | Term.term_id()) :: proof_result()
   def prove(problem) when is_struct(problem, Problem), do: prove(problem, [])
 
   def prove(conclusion) when is_integer(conclusion), do: prove(conclusion, [], [])
 
+  @spec prove(Problem.t(), keyword()) :: proof_result()
+  @spec prove(Term.term_id(), [Term.term_id()] | keyword()) :: proof_result()
   def prove(conclusion, [{key, _} | _] = opts) when is_integer(conclusion) and is_atom(key),
     do: prove(conclusion, [], opts)
 
@@ -151,7 +179,9 @@ defmodule ShotTx.Prover do
   def sat(formulas, defs, opts) when is_list(formulas) do
     {return_stats?, param_kws} = Keyword.pop(opts, :stats, false)
     merged_kws = Keyword.merge(ShotTx.Config.get(), param_kws)
-    params = struct!(Parameters, merged_kws)
+    raw_params = struct!(Parameters, merged_kws)
+    params = resolve_formula_cost(raw_params)
+    :ok = validate_term_order!(formulas, params)
     session_id = make_ref() |> inspect()
 
     {:ok, session_pid} =
@@ -203,6 +233,51 @@ defmodule ShotTx.Prover do
   """
   @spec format_stats(map(), keyword()) :: String.t()
   defdelegate format_stats(stats, opts \\ []), to: ShotTx.Prover.Stats, as: :format
+
+  # NCPO-LNF soundness: paramodulation is always ordered, so the
+  # `accessible` and `basic_sorts` fields of `params.term_order` must
+  # satisfy the compatibility conditions of Definitions 5–6 of
+  # Niederhauser & Middeldorp, *NCPO goes Beta-Eta-Long Normal Form* (2025).
+  # The permissive defaults (`accessible: :all`, `basic_sorts: :all`)
+  # satisfy them vacuously; a user-supplied restriction is validated
+  # against the constants appearing in the input problem. Violations
+  # abort the proof — silently reducing under an unsound order would be
+  # worse than refusing to run.
+  defp validate_term_order!(formulas, %Parameters{term_order: %ShotTo.Parameters{} = to_params}) do
+    if to_params.accessible == :all and to_params.basic_sorts == :all do
+      :ok
+    else
+      const_types = collect_constant_types(formulas)
+
+      case ShotTo.Parameters.validate(to_params, const_types) do
+        :ok ->
+          :ok
+
+        {:error, violations} ->
+          raise ArgumentError,
+                "NCPO-LNF parameters violate accessibility/basicness compatibility " <>
+                  "(Definitions 5–6 of Niederhauser & Middeldorp 2025); paramodulation " <>
+                  "would derive rewrites outside the reduction order. Violations:\n" <>
+                  Enum.map_join(violations, "\n", &("  - " <> &1))
+      end
+    end
+  end
+
+  defp collect_constant_types(formulas) do
+    formulas
+    |> Enum.flat_map(fn tid -> TF.get_term!(tid).consts end)
+    |> Enum.into(%{}, fn %Declaration{name: name, type: type} -> {name, type} end)
+  end
+
+  # A `formula_cost_strategy` other than the historical `:default` overrides the
+  # `formula_cost` field. This keeps the raw function field as an escape hatch
+  # (Livebook users can still hand it a lambda) but ensures ablation sweeps get
+  # a self-describing enum in the CSV.
+  defp resolve_formula_cost(%Parameters{formula_cost_strategy: :default} = params), do: params
+
+  defp resolve_formula_cost(%Parameters{formula_cost_strategy: strategy} = params) do
+    %{params | formula_cost: ShotTx.Prover.Rules.resolve_cost_strategy(strategy)}
+  end
 
   defp close_formula(term_id) do
     %Term{fvars: fvars} = TF.get_term!(term_id)

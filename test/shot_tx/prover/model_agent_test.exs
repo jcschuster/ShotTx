@@ -53,5 +53,4 @@ defmodule ShotTx.Prover.ModelAgentTest do
       refute model =~ "external model finder"
     end
   end
-
 end

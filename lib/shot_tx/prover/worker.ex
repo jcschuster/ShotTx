@@ -27,6 +27,13 @@ defmodule ShotTx.Prover.Worker do
   # PUBLIC API
   ##############################################################################
 
+  @doc """
+  Starts a worker process.
+
+  `opts` must contain `:session_id` and `:worker_id`. Additional keys are
+  written straight into the `%__MODULE__{}` state; see `init/1` and the
+  struct default values above for the accepted fields.
+  """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end

@@ -104,7 +104,6 @@ defmodule ShotTx.Prover.SuggestionAgentTest do
     end
   end
 
-
   describe "integration with Prover" do
     import ShotDs.Hol.Sigils
 
