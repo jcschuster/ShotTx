@@ -50,8 +50,9 @@ defmodule ShotTx.Prover do
 
   def prove(conclusion) when is_integer(conclusion), do: prove(conclusion, [], [])
 
-  @spec prove(Problem.t(), keyword()) :: proof_result()
-  @spec prove(Term.term_id(), [Term.term_id()] | keyword()) :: proof_result()
+  @spec prove(Problem.t(), keyword()) :: proof_result() | {proof_result(), map()}
+  @spec prove(Term.term_id(), [Term.term_id()] | keyword()) ::
+          proof_result() | {proof_result(), map()}
   def prove(conclusion, [{key, _} | _] = opts) when is_integer(conclusion) and is_atom(key),
     do: prove(conclusion, [], opts)
 
@@ -79,7 +80,8 @@ defmodule ShotTx.Prover do
 
   Returns a `proof_result()`.
   """
-  @spec prove(Term.term_id(), [Term.term_id()], keyword()) :: proof_result()
+  @spec prove(Term.term_id(), [Term.term_id()], keyword()) ::
+          proof_result() | {proof_result(), map()}
   def prove(conclusion, assumptions, opts)
       when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
     {defs, params} = Keyword.pop(opts, :defs, %{})

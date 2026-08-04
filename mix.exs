@@ -1,26 +1,39 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
+  @version "0.0.1"
+  @source_url "https://github.com/jcschuster/ShotTx"
+
   def project do
     [
       app: :shot_tx,
-      version: "0.1.0",
-      elixir: "~> 1.19",
+      version: @version,
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       test_ignore_filters: ["test/prover_case.exs"],
       deps: deps(),
       escript: escript(),
       docs: docs(),
+      package: package(),
       name: "ShotTx",
       description:
         "Tableau component of Shot, a parallel Church Simple Type Theory theorem prover.",
-      source_url: "https://github.com/jcschuster/ShotTx"
+      source_url: @source_url
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => @source_url},
+      maintainers: ["Johannes Schuster"],
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 
   defp escript do
     [
-      main_module: ShotTx.CLI,
+      main_module: ShotTx.Cli,
       name: "shot_tx",
       app: :shot_tx,
       # Force UTF-8 filename encoding so the script runs cleanly regardless
@@ -37,7 +50,7 @@ defmodule ShotTx.MixProject do
       groups_for_modules: [
         "Public API": [
           ShotTx,
-          ShotTx.CLI,
+          ShotTx.Cli,
           ShotTx.Prover,
           ShotTx.Config,
           ShotTx.Data.Parameters,
@@ -97,9 +110,9 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, github: "jcschuster/ShotDs", override: true},
+      {:shot_ds, "~> 1.2"},
       # Unification algorithm
-      {:shot_un, "~> 0.1.10"},
+      {:shot_un, "~> 0.1"},
       # NCPO Term Ordering
       {:shot_to, "~> 0.1"},
       # Isabelle client — powers `ShotTx.Prover.ModelAgent.Backend.Nitpick`.

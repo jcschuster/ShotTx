@@ -1,4 +1,4 @@
-FROM docker.io/library/elixir:1.19-alpine
+FROM docker.io/library/elixir:1.12-alpine
 
 RUN apk add --no-cache \
     nodejs \

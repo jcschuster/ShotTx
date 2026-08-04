@@ -37,7 +37,7 @@ defmodule ShotTx do
     * `ShotTx.Data.Parameters` — the configuration struct.
     * `ShotTx.Proof`    — the reconstructed proof/countermodel tree with
       Mermaid and text renderers.
-    * `ShotTx.CLI`      — escript entry point with `--szs` SZS-ontology output.
+    * `ShotTx.Cli`      — escript entry point with `--szs` SZS-ontology output.
 
   See the `README.md` and the module docs above for details.
   """

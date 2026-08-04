@@ -84,9 +84,9 @@ defmodule ShotTx.Prover.Demodulation do
     * Termination is guaranteed by the paper's `(NCPO-LNF, CPO⁺)`
       reduction-order argument (see module docs).
 
-  Empty equation map short-circuits to identity — used from
-  `ShotTx.Prover.Branch.insert_formula/5` on the very first formulas
-  where no equations exist yet.
+  Empty equation map short-circuits to identity — used from the
+  `insert_formula` helper in `ShotTx.Prover.Branch` on the very first
+  formulas where no equations exist yet.
   """
   @spec normalize(Term.term_id(), equations(), ShotTo.Parameters.t()) :: Term.term_id()
   def normalize(term_id, equations, _order) when map_size(equations) == 0, do: term_id

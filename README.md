@@ -86,12 +86,12 @@ authoritative list run `./shot_tx --help` or see the
 ## Library usage
 
 ```elixir
-import ShotDs.Hol.Dsl
+import ShotDs.Hol.Sigils
 alias ShotDs.Tptp
 alias ShotTx.Prover
 
 # Prove a THF formula directly (no axioms).
-Prover.prove(forall(:o, fn p -> p ||| neg(p) end))
+Prover.prove(~f"![P : $o]: (P | ~P)")
 #=> {:thm, %ShotTx.Proof{...}}
 
 # Parse and prove a TPTP problem.

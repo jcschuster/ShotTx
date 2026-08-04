@@ -25,7 +25,9 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
   ### CSV columns
 
-      run_label, problem, language, expected_szs, result, correct, time_ms, details
+      run_label, problem, language, expected_szs, result, correct, time_ms,
+      steps, worker_yields, rules_total, active_branches_max,
+      branches_closed, branches_saturated, csp_calls, csp_succeeded, details
 
     * `run_label` — the label of the parameter configuration.
     * `problem` — path relative to `TPTP/Problems`, e.g. `SYO/SYO001^1.p`.
@@ -38,8 +40,16 @@ defmodule ShotTx.Benchmark.TptpRunner do
       status is one of `Theorem` / `CounterSatisfiable` and the prover
       terminated with a definite answer.
     * `time_ms` — wall-clock milliseconds for parse + prove.
+    * `steps`, `worker_yields` — proof-search counters (see
+      `ShotTx.Prover.Stats`).
+    * `rules_total` — total rule firings across all workers.
+    * `active_branches_max` — peak open-branch count.
+    * `branches_closed`, `branches_saturated` — branches closed locally vs.
+      saturated (SAT witnesses).
+    * `csp_calls`, `csp_succeeded` — CSP solver calls and successes.
     * `details` — free-form detail string, commas/semicolons replaced with
-      spaces for CSV safety.
+      spaces for CSV safety. Empty for cases that produced no stats
+      (`parser_error`, `no_conjecture`, catastrophic `prover_error`).
 
   ### Options
 
@@ -174,7 +184,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
     {expected, language} = read_headers(abs_path)
 
     if match_language?(language, ctx.language) do
-      {time_micro, {result_tag, details}} =
+      {time_micro, {result_tag, details, stats}} =
         :timer.tc(fn -> run_one(abs_path, ctx.params) end)
 
       time_ms = div(time_micro, 1000)
@@ -185,16 +195,18 @@ defmodule ShotTx.Benchmark.TptpRunner do
           "(expected #{expected}, #{time_ms}ms, correct=#{correct})"
       )
 
-      append_row(ctx.csv_path, [
-        ctx.label,
-        rel_path,
-        language,
-        expected,
-        Atom.to_string(result_tag),
-        Atom.to_string(correct),
-        Integer.to_string(time_ms),
-        details
-      ])
+      append_row(
+        ctx.csv_path,
+        [
+          ctx.label,
+          rel_path,
+          language,
+          expected,
+          Atom.to_string(result_tag),
+          Atom.to_string(correct),
+          Integer.to_string(time_ms)
+        ] ++ stats_cells(stats) ++ [details]
+      )
     else
       Logger.debug("[#{ctx.label}] skipping #{rel_path} (language filter)")
     end
@@ -202,39 +214,77 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
   defp run_one(abs_path, params) do
     try do
-      case Tptp.parse_tptp_file(abs_path) do
+      case Tptp.parse_tptp_file(abs_path, :custom) do
         {:ok, problem} -> prove_problem(problem, params)
-        {:error, reason} -> {:parser_error, to_string(reason)}
+        {:error, reason} -> {:parser_error, to_string(reason), %{}}
       end
     rescue
-      e -> {:parser_error, Exception.message(e)}
+      e -> {:parser_error, Exception.message(e), %{}}
     catch
-      :exit, reason -> {:prover_error, inspect(reason)}
+      :exit, reason -> {:prover_error, inspect(reason), %{}}
     end
   end
 
-  defp prove_problem(%{conjecture: nil}, _params), do: {:no_conjecture, ""}
+  defp prove_problem(%{conjecture: nil}, _params), do: {:no_conjecture, "", %{}}
 
   defp prove_problem(problem, params) do
     {_name, conclusion} = problem.conjecture
     axioms = Enum.map(problem.axioms, fn {_name, term} -> term end)
 
-    opts = Map.from_struct(params) |> Enum.into([]) |> Keyword.put(:defs, problem.definitions)
+    opts =
+      params
+      |> Map.from_struct()
+      |> Enum.into([])
+      |> Keyword.put(:defs, problem.definitions)
+      |> Keyword.put(:stats, true)
 
-    case Prover.prove(conclusion, axioms, opts) do
-      {:thm, _} -> {:thm, "Theorem"}
-      {:csa, model, _} -> {:csa, String.slice(model, 0, 200)}
-      :unknown -> {:unk, ""}
-      {:timeout, _} -> {:timeout, ""}
-      {:error, reason} -> {:prover_error, inspect(reason)}
+    {result, stats} = Prover.prove(conclusion, axioms, opts)
+    stats_map = extract_stats(stats)
+
+    case result do
+      {:thm, _} -> {:thm, "", stats_map}
+      {:csa, model, _} -> {:csa, String.slice(model, 0, 200), stats_map}
+      :unknown -> {:unk, "", stats_map}
+      {:timeout, _} -> {:timeout, "", stats_map}
+      {:error, reason} -> {:prover_error, inspect(reason), stats_map}
     end
   end
+
+  @stats_columns [
+    :steps,
+    :worker_yields,
+    :rules_total,
+    :active_branches_max,
+    :branches_closed,
+    :branches_saturated,
+    :csp_calls,
+    :csp_succeeded
+  ]
+
+  defp extract_stats(stats) do
+    report = Prover.compile_stats(stats)
+
+    %{
+      steps: report.search.steps_total,
+      worker_yields: report.search.worker_yields,
+      rules_total: report.rules.total,
+      active_branches_max: report.branches.active_max,
+      branches_closed: report.branches.closed_locally,
+      branches_saturated: report.branches.saturated,
+      csp_calls: report.csp.calls,
+      csp_succeeded: report.csp.succeeded
+    }
+  end
+
+  defp stats_cells(stats), do: Enum.map(@stats_columns, &to_string(Map.get(stats, &1, "")))
 
   ##############################################################################
   # CSV HELPERS
   ##############################################################################
 
-  @csv_header "run_label,problem,language,expected_szs,result,correct,time_ms,details\n"
+  @csv_header "run_label,problem,language,expected_szs,result,correct,time_ms," <>
+                "steps,worker_yields,rules_total,active_branches_max," <>
+                "branches_closed,branches_saturated,csp_calls,csp_succeeded,details\n"
 
   defp ensure_header(csv_path) do
     unless File.exists?(csv_path) and File.stat!(csv_path).size > 0 do

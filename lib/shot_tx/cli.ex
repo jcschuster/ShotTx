@@ -1,4 +1,4 @@
-defmodule ShotTx.CLI do
+defmodule ShotTx.Cli do
   @moduledoc """
   Command-line entry point for the **Shot** prover, packaged as an escript.
 
