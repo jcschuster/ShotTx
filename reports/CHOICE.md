@@ -57,7 +57,7 @@ paramodulate against.
 
 ### 1.3 Status in Henkin semantics
 
-A Henkin frame in the sense of `theory.md` §1 does **not** automatically
+A Henkin frame in the sense of `THEORY.md` §1 does **not** automatically
 validate (ε-ax). A frame closed under the definable operations of $\Sigma$
 may fail to contain a function picking witnesses uniformly. Adding ε
 therefore commits the calculus to a strict subclass of Henkin models:
@@ -77,10 +77,10 @@ This is a deliberate semantic strengthening:
     but verifying their consistency adds work.
 
 Most ATPs target Henkin-with-choice in practice (Leo-II, Leo-III,
-Satallax, Zipperposition). Shot's `theory.md` §1 is silent on choice,
+Satallax, Zipperposition). Shot's `THEORY.md` §1 is silent on choice,
 which is appropriate for a choice-free calculus. Adopting ε would
-require an additional sentence there and a corresponding revision of
-§6.
+require an additional sentence there, plus a soundness/completeness
+analysis against Henkin-with-choice.
 
 ## 2. How choice solves the injective Cantor theorem
 
@@ -241,13 +241,12 @@ primsub-under-primsub. The changes are wider but shallower.
 
 ### 4.1 Theory
 
-  * **`theory.md` §1** — add ε to the signature
+  * **`THEORY.md` §1** — add ε to the signature
     $\Sigma$. Note that the semantics is now Henkin-with-choice.
-  * **`theory.md` §2** — new rule statement for δ$_\varepsilon$.
-  * **`theory.md` §6** — soundness/completeness statements gain "with
-    choice"; (S2) is rewritten in terms of ε-terms; the model
-    construction (§6.3) must produce a choice function in the
-    constructed Henkin frame. Andrews §5.6 has the standard recipe.
+  * **`THEORY.md` §2** — new rule statement for δ$_\varepsilon$.
+  * A soundness/completeness analysis for the extended calculus against
+    Henkin-with-choice is required; Andrews §5.6 has the standard
+    recipe.
 
 ### 4.2 Signature constants
 
@@ -365,7 +364,7 @@ Three configurations are coherent end states:
 
   * **Henkin + ε + left-inverse synthesis**: the Leo-III configuration.
     Fast on injective Cantor and similar; broad applicability;
-    largest semantic departure from the current `theory.md`.
+    largest semantic departure from the current `THEORY.md`.
 
 The two-step landing — Option B first, then revisit whether ε is
 needed for problems Option B leaves on the table — keeps the

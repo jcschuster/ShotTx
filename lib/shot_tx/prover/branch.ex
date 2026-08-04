@@ -22,16 +22,25 @@ defmodule ShotTx.Prover.Branch do
 
   ## Equality handling
 
-  Every formula added to the branch is run through `ingest_formula/3`. This
+  Every formula added to the branch is run through `insert_formula/5`. This
   preserves the existing decomposition of equality via the
   `:equality_expansion` rule (Leibniz / extensional / o-type iff) and
-  additionally:
+  additionally invokes `ShotTx.Prover.Demodulation` at two points:
 
-    * If the formula is an equation `s = t`, it is recorded in
-      `branch.equations` and every existing literal is paramodulated against
-      the new equation, with the variants pushed onto the queue.
-    * When a new literal lands on the branch via the `:atomic` rule, it is
-      paramodulated against all currently known equations.
+    * **Forward demodulation** — `maybe_demodulate/3` inside
+      `insert_formula/5` reduces every incoming term to normal form under
+      the current `branch.equations` before it lands on the queue.
+    * **Backward demodulation** — when `ingest_equation/4` records a new
+      equation, `backward_demodulate/3` re-normalizes every existing
+      branch literal under the enlarged equation set and discards any that
+      changed.
+
+  Only rewrites whose matcher σ is the empty substitution are admitted (the
+  equation LHS must be structurally identical to the target subterm, or a
+  primitive η-expansion `λv̄. h(v̄)` matching an applied subterm's head
+  declaration). No variable is ever bound at the branch level; free-variable
+  commitments are reconciled globally by `ShotTx.Prover.ContradictionAgent`.
+  See `ShotTx.Prover.Paramodulation`'s moduledoc for the soundness argument.
 
   The `:instantiate` rule additionally performs *dual instantiation*: the
   source literal is treated as an atom on the branch in addition to the

@@ -8,7 +8,7 @@ term ordering (`ShotTo`) that the prover builds on.
 
 Shot performs automated theorem proving for higher-order logic (HOL) via
 a parallel, actor-based refutation search with iterative deepening,
-Skolemisation, primitive substitution, and paramodulation.
+Skolemisation, primitive substitution, and demodulation.
 
 - Written for a Master's thesis on parallel HOL tableau reasoning.
 - Reads TPTP TH0 / TH1 problem files or plain THF formulas.
@@ -139,7 +139,7 @@ ShotTx.Prover (public API)
   (universal instantiation with reinsertion), δ (Skolemisation),
   primitive substitution (iterative deepening on general bindings),
   atomic clash detection, equality expansion (o-type iff / extensional /
-  Leibniz), paramodulation.
+  Leibniz), demodulation (binding-free equational rewriting).
 - **Iterative deepening**: γ-limit and prim-subst depth start at 1 and
   grow whenever all workers stall.
 - **Global closure**: `ContradictionAgent` unifies clashes across every
@@ -157,20 +157,26 @@ component. Rendered docs are produced by `mix docs`.
 All proof-search knobs live in the `ShotTx.Data.Parameters` struct. The
 common ones:
 
-| Field                   | Default    | Purpose                                                 |
-| ----------------------- | ---------- | ------------------------------------------------------- |
-| `timeout`               | `5_000`    | Wall-clock ms before returning `:timeout`               |
-| `initial_gamma_limit`   | `1`        | Starting γ-rule instantiation depth                     |
-| `initial_prim_limit`    | `1`        | Starting primitive-substitution binding depth           |
-| `unfold_defs`           | `:lazy`    | `:eager` unfolds definitions immediately                |
-| `paramodulation`        | `true`     | Enable eager paramodulation                             |
-| `contradiction_agent`   | `true`     | Enable global CSP-based closure                         |
-| `worker_pool_size`      | `:auto`    | `System.schedulers_online()`                            |
-| `iterative_deepening`   | `true`     | Whether to bump limits when workers stall               |
-| `formula_cost_strategy` | `:default` | `:default`, `:uniform`, `:depth_first`, `{:custom, fn}` |
+| Field                    | Default              | Purpose                                                 |
+| ------------------------ | -------------------- | ------------------------------------------------------- |
+| `timeout`                | `5_000`              | Wall-clock ms before returning `:timeout`               |
+| `initial_gamma_limit`    | `1`                  | Starting γ-rule instantiation depth                     |
+| `initial_prim_limit`     | `1`                  | Starting primitive-substitution binding depth           |
+| `unfold_defs`            | `:lazy`              | `:eager` unfolds definitions immediately                |
+| `demodulation`           | `true`               | Binding-free equational rewriting (forward + backward)  |
+| `equivalence_processing` | `:bidirectional_imp` | `↔` expansion mode: `:same_polarity`, `:bidirectional_imp`, or `:dual` |
+| `contradiction_agent`    | `true`               | Enable global CSP-based closure                         |
+| `worker_pool_size`       | `:auto`              | `System.schedulers_online()`                            |
+| `iterative_deepening`    | `true`               | Whether to bump limits when workers stall               |
+| `formula_cost_strategy`  | `:default`           | `:default`, `:uniform`, `:depth_first`, `{:custom, fn}` |
 
 The full table (with all 33 fields) is in
-`ShotTx.Data.Parameters`'s moduledoc.
+`ShotTx.Data.Parameters`'s moduledoc. The soundness argument for why
+ShotTx does binding-free demodulation instead of classical paramodulation
+lives in `ShotTx.Prover.Paramodulation`'s moduledoc — the rigid-variable
+tableau architecture requires that free-variable commitments be
+reconciled globally by `ContradictionAgent`, not locally by a rewrite
+rule.
 
 ---
 

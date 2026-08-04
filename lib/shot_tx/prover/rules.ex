@@ -105,6 +105,13 @@ defmodule ShotTx.Prover.Rules do
       application form).
     * `:leibniz`     — equality at any remaining type expands via the
       Leibniz schema `∀P. P(a) ↔ P(b)`. The expensive one for FO.
+
+  The Leibniz expansion uses `ShotDs.Hol.Definitions.leibniz_equality/2`
+  at its default connective, `:equiv`. The two Andrews-style
+  one-directional variants (`:imp`, `:conv_imp`) exist upstream in
+  `shot_ds` but are not selected here; problem encodings called
+  "Leibniz 1/2/3" or "Andrews" in benchmark harnesses refer to the
+  *input encoding of a benchmark*, not to a prover mode.
   """
   @type equality_kind :: :iff_o | :extensional | :leibniz
 

@@ -3,16 +3,40 @@ defmodule ShotTx.Prover.SuggestionAgent do
   A *peer* of `ContradictionAgent`. Subscribes to the same raw evidence
   stream (`branch_evidence_<session>`) and runs strictly weaker unification
   than CA — pair-level only — turning σs into per-recipe instantiation
-  hints.
+  hints spliced into descendant branches of the recipe's `birth_branch`.
 
   Gated behind `params.suggestions_enabled` (default `false`). When
   disabled, `init/1` returns immediately without subscribing to the topic
   and no message handling runs, so the prover's behaviour is unchanged.
 
-  ## Current state (Step 3 of the SuggestionAgent plan)
+  ## Pipeline
 
-  This is the **stub** stage: SA logs suggestions but does not publish. The
-  `:suggestions` ETS table and the worker splice points land in Step 4.
+    * **Ingest.** `{:local_clashes, branch_id, MapSet<{a,b}>}` arrives
+      from `branch_evidence_<session>` and accumulates in
+      `clashing_local_pairs`.
+    * **Search.** Each freshly-added pair is unified with
+      `ShotUn.unify/2 |> Enum.take(1)`. Any multi-pair regime is CA's
+      job by construction.
+    * **Derive.** For every `X ↦ t` in the returned σ, `Provenance.fetch/2`
+      recovers `(recipe, source, birth_branch, origin)`; suggestions
+      whose composed term is not closed over `birth_branch` are dropped.
+    * **Publish.** `publish_suggestions/2` writes rows into the
+      `:suggestions` ETS table with `:ets.insert_new/2`. Keys are
+      `{branch_prefix, recipe, term}`; the `applied_count` counter at
+      tuple position 2 is incremented atomically at the splice site so
+      the cascade cap (`suggestion_cascade_ceiling`, default `3`) is
+      lock-free.
+    * **Splice.** `Worker.splice_suggestions/2` walks ancestor prefixes
+      of the checked-out branch, calls `:ets.update_counter/3` to reserve
+      a slot, and injects the synthetic
+      `{:suggested_instantiate, recipe, term}` rule via
+      `Branch.splice_suggested_instantiate/5`. The rule has cost `2`,
+      cheaper than γ (≥ 3) and prim-subst (≥ 20) but not free — atomic
+      (1) still preempts closure detection.
+
+  SA never declares closure. Pair-level search cannot witness a
+  multi-branch closure by construction, so `:unsat` remains CA's
+  responsibility.
   """
 
   use GenServer
