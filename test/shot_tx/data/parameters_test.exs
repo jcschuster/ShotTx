@@ -10,7 +10,7 @@ defmodule ShotTx.Data.ParametersTest do
     assert p.timeout == 5_000
     assert p.initial_gamma_limit == 1
     assert p.initial_prim_limit == 1
-    assert p.prim_subst_after == 0
+    assert p.prim_subst_after == 1
     assert p.prim_subst_batch_size == 8
     assert p.unification_depth == 8
     assert p.unfold_defs == :lazy
@@ -18,6 +18,18 @@ defmodule ShotTx.Data.ParametersTest do
     assert p.simplification == :deep
     assert p.orient == :none
     assert is_function(p.formula_cost, 1)
+  end
+
+  # These four decide how much search the prover does before it gives up, and
+  # each has changed at least once without the moduledoc table following. Pin
+  # them so a default that moves has to move here too.
+  test "search-shaping defaults are pinned" do
+    p = %Parameters{}
+
+    assert p.suggestions_enabled == true
+    assert p.instance_based_gamma == true
+    assert p.instance_based_gamma_limit == 0
+    assert p.demodulation == true
   end
 
   test "default formula_cost is Rules.rule_cost/1" do

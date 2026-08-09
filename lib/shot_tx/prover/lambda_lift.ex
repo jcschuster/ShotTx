@@ -19,9 +19,10 @@ defmodule ShotTx.Prover.LambdaLift do
   arrow type) are skipped: lifting them would be useless indirection.
   """
 
-  alias ShotDs.Data.{Declaration, Term}
+  alias ShotDs.Data.{Declaration, Term, Type}
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
+  alias ShotTx.Generation
   import ShotDs.Hol.Dsl, only: [eq: 2]
 
   @hol_connective_names ~w(⊤ ⊥ ¬ ∨ ∧ ⊃ ≡ = ∀ ∃)
@@ -74,9 +75,33 @@ defmodule ShotTx.Prover.LambdaLift do
       arg.bvars == [] -> {arg_id, cache}
       not closed_abstraction?(arg) -> {arg_id, cache}
       eta_expansion?(arg) -> {arg_id, cache}
+      domain_element?(arg_id, arg.type) -> {arg_id, cache}
       true -> introduce_lift(arg_id, arg, cache)
     end
   end
+
+  # A closed abstraction that *is* one of the finitely many inhabitants of a
+  # pure-`o` type — `λx. x`, `λx. ⊤`, `λx. ⊥` at `o → o`, and so on — is
+  # already canonical, and `ShotTx.Generation.gen_o/1` names exactly these.
+  #
+  # Lifting one buys nothing: the axiom it emits, `c = λx. ⊥`, only restates
+  # what the term already said. It costs the syntactic identity that
+  # finite-domain reasoning runs on. A branch holding `p (λx. ⊥)` and
+  # `¬(p (λx. ⊥))` closes on sight; once the hypothesis has been lifted to
+  # `p (λx. c x)` the two no longer clash, and recovering the connection needs
+  # the equality axiom to be expanded and paramodulated back — which is how
+  # Example 21 (finite domain of `o → o`) ends up unsolved despite every
+  # instance of its conclusion sitting on the branch.
+  #
+  # `Rules.non_signature_o_constant?/1` already applies the same exclusion when
+  # choosing `:rename` / `:instantiate` candidates; this keeps lifting in step
+  # with it.
+  defp domain_element?(term_id, type) do
+    pure_o_type?(type) and Enum.member?(Generation.gen_o(type), term_id)
+  end
+
+  defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
+  defp pure_o_type?(_type), do: false
 
   defp closed_abstraction?(%Term{bvars: bvars, max_num: m, fvars: fvars}) do
     MapSet.size(fvars) == 0 and m <= length(bvars)

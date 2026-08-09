@@ -42,7 +42,7 @@ defmodule ShotTx.Prover.SuggestionAgent do
   use GenServer
   require Logger
 
-  alias ShotDs.Data.Substitution
+  alias ShotDs.Data.{Substitution, Term, Type}
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover.{EtsKeeper, Provenance, Suggestion}
@@ -185,6 +185,7 @@ defmodule ShotTx.Prover.SuggestionAgent do
 
     with %Provenance{recipe: recipe, birth_branch: birth, source: source} <-
            Provenance.fetch(prov_table, var_id),
+         true <- applicable?(recipe, term_id),
          suggestion = build_suggestion(term_id, source),
          row = {{birth, recipe, term_id}, 0, suggestion},
          true <- :ets.insert_new(sug_table, row) do
@@ -192,6 +193,23 @@ defmodule ShotTx.Prover.SuggestionAgent do
       :inserted
     else
       _ -> :skipped
+    end
+  end
+
+  # A hint fires as `app(recipe, term)`, so the term must inhabit the recipe's
+  # argument type — which a well-typed σ does not guarantee. `Provenance` tags
+  # every hole of a general binding with the recipe that produced it, and those
+  # holes carry the binding's types, not the quantified variable's.
+  #
+  # Dropping the mismatch here costs nothing: a hint is a search shortcut, and
+  # this one names no formula the branch could hold. Publishing it would instead
+  # raise in `Branch.apply_rule/6`, on another branch, and cost it its verdict.
+  defp applicable?(recipe, term_id) do
+    with {:ok, %Term{type: %Type{args: [arg_type | _]}}} <- TF.get_term(recipe),
+         {:ok, %Term{type: ^arg_type}} <- TF.get_term(term_id) do
+      true
+    else
+      _ -> false
     end
   end
 

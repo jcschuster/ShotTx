@@ -161,11 +161,30 @@ defmodule ShotTx.Prover.Worker do
           handle_step_result(step_result, %{state | steps_since_yield: steps + 1})
         rescue
           e ->
+            # Dying here loses the branch outright: `checkout_work/1` already
+            # removed it from the shared queue, and the ContradictionAgent still
+            # counts it among `active_branches` — so the tableau can never be
+            # declared closed and the session can only run to timeout. A
+            # restarted worker does not help either; it comes back with the
+            # round's initial gamma/prim limits.
+            #
+            # A branch whose rule application raises is exactly a branch this
+            # calculus cannot decide, which is what `:branch_exhausted` means.
+            # Reporting it that way keeps the worker pool alive, lets the
+            # manager settle on an honest `:unknown`, and cannot turn into a
+            # wrong verdict — an exhausted branch never yields a countermodel.
             Logger.error(
-              "Worker #{state.id} crashed on branch #{branch.id}: #{Exception.format(:error, e, __STACKTRACE__)}"
+              "Worker #{state.id} could not apply a rule on branch #{branch.id}, " <>
+                "reporting it as undecidable: #{Exception.format(:error, e, __STACKTRACE__)}"
             )
 
-            reraise e, __STACKTRACE__
+            Stats.incr(state.ets_tables, :branches_errored)
+            publish_trace(state.ets_tables, branch)
+            notify_manager(state.session_id, {:branch_exhausted, branch.id})
+            broadcast_evidence(state.session_id, {:branch_exhausted, branch.id})
+
+            {:noreply, %{state | current_branch: nil, steps_since_yield: 0},
+             {:continue, :process_next}}
         end
     end
   end
@@ -250,6 +269,26 @@ defmodule ShotTx.Prover.Worker do
 
     msg = {:branch_saturated, state.current_branch.id, {defs, literals}}
 
+    notify_manager(state.session_id, msg)
+    broadcast_evidence(state.session_id, msg)
+    {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
+  end
+
+  # A branch with nothing left to fire whose literal set is *not* provably a
+  # model (see `ShotTx.Prover.Branch.model_certain?/2`). It cannot be closed by
+  # this calculus and cannot be reported as a countermodel either, so it is
+  # recorded and dropped: unlike `:idle` it has no sleeping rules, so waking it
+  # after a deepening round would only re-derive the same dead end.
+  defp handle_step_result({:exhausted, branch}, state) do
+    Stats.incr(state.ets_tables, :branches_exhausted)
+
+    publish_trace(state.ets_tables, branch)
+
+    Logger.info(
+      "Worker #{state.id} exhausted branch #{branch.id} without deciding satisfiability."
+    )
+
+    msg = {:branch_exhausted, branch.id}
     notify_manager(state.session_id, msg)
     broadcast_evidence(state.session_id, msg)
     {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}

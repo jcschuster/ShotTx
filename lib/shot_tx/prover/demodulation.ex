@@ -1,7 +1,36 @@
 defmodule ShotTx.Prover.Demodulation do
   @moduledoc """
-  Rewrite-to-normal-form under a set of NCPO-LNF-oriented equations,
-  restricted to rewrites that produce **no variable bindings**.
+  Rewrite-to-normal-form under a set of **ground** NCPO-LNF-oriented
+  equations, restricted to rewrites that produce **no variable bindings**.
+
+  ## The ground restriction
+
+  An equation is admitted as a rewrite rule only when neither side mentions a
+  free variable (`ground?/1`). Equations carrying rigid γ-variables are still
+  recorded on the branch — `ShotTx.Prover.Branch.model_certain?/2` consults
+  them, and the Leibniz/extensional α-expansion still fires — but they never
+  rewrite anything.
+
+  The reason is that rewriting with such an equation destroys the very literal
+  pair the branch needs in order to close. In a free-variable tableau a branch
+  closes when the `ContradictionAgent` finds one global substitution making
+  some literal pair complementary; both literals must therefore survive, and
+  stay syntactically distinct, until the CSP runs.
+
+  The surjective Cantor theorem is the sharp case. Its negation yields
+  `c (d Y) = Y` with `Y` rigid, whose left side is a primitive η-expansion, so
+  head rewriting turns every occurrence of `c (d Y) …` into `Y …`. The branch
+  that should hold the pair `{c (d Y) X, Y X}` collapses to `{Y X}` and there
+  is nothing left to close — the refutation needs those two to become
+  contradictory under `[λx. ¬(c x x) / Y]`, which is exactly what the rewrite
+  pre-empts. The rewrite is *sound*; it is simply backwards for a refutation,
+  because the equation is the hypothesis being contradicted rather than a fact
+  to normalise with. With the restriction in place the theorem closes in 16
+  steps and one CSP call.
+
+  Ground equations have the opposite effect: they *create* clashes. A branch
+  holding `a`, `¬b` and `b = a` closes only because `¬b` normalises to `¬a`.
+  That is the case this module exists to serve, and it is unaffected.
 
   ## The variable-binding restriction (rigid tableau architecture)
 
@@ -148,9 +177,25 @@ defmodule ShotTx.Prover.Demodulation do
   defp match_and_rewrite(term_id, sub_id, equations, order) do
     case Map.get(equations, sub_id) do
       nil -> nil
-      rhs_set -> try_rewrite(term_id, sub_id, rhs_set, order)
+      rhs_set -> try_rewrite(term_id, sub_id, ground_rhs(sub_id, rhs_set), order)
     end
   end
+
+  # The ground restriction (see module docs). An equation is usable as a
+  # rewrite rule only when neither side mentions a free variable.
+  defp ground_rhs(lhs_id, rhs_set) do
+    if ground?(lhs_id), do: Enum.filter(rhs_set, &ground?/1), else: []
+  end
+
+  @doc """
+  Whether `term_id` mentions no free variable.
+
+  Bound variables are irrelevant here: a closed λ-term is ground for the
+  purposes of rewriting. What matters is the rigid (γ / unification)
+  variables, whose values belong to the global CSP.
+  """
+  @spec ground?(Term.term_id()) :: boolean()
+  def ground?(term_id), do: MapSet.size(TF.get_term!(term_id).fvars) == 0
 
   # Rewrites `term_id[sub_id]` by replacing `sub_id` with an
   # NCPO-strictly-smaller RHS from `rhs_set`. Termination follows from
@@ -186,9 +231,9 @@ defmodule ShotTx.Prover.Demodulation do
 
         {head_decl, arity} ->
           oriented =
-            Enum.filter(rhs_ids, fn rhs_id ->
-              TermOrder.strict_gt?(lhs_id, rhs_id, order)
-            end)
+            lhs_id
+            |> ground_rhs(rhs_ids)
+            |> Enum.filter(fn rhs_id -> TermOrder.strict_gt?(lhs_id, rhs_id, order) end)
 
           if oriented == [], do: [], else: [{head_decl, arity, oriented, lhs_id}]
       end

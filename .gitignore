@@ -24,3 +24,7 @@ shot_main-*.tar
 
 
 .claude-config
+
+# Benchmark output. Regenerate with scripts/run_hol_benchmark.sh; the figures
+# it produces are recorded in reports/.
+/bench_results/

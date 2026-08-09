@@ -28,6 +28,7 @@ defmodule ShotTx.Prover.Manager do
             worker_count: 0,
             idle_workers: MapSet.new(),
             saturated_branches: %{},
+            exhausted_branches: MapSet.new(),
             parked_count: 0
 
   @root_name "root"
@@ -186,6 +187,20 @@ defmodule ShotTx.Prover.Manager do
   end
 
   @impl true
+  def handle_cast({:branch_exhausted, branch_id}, state) do
+    {:noreply, %{state | exhausted_branches: MapSet.put(state.exhausted_branches, branch_id)}}
+  end
+
+  # The agent could neither close the tableau nor certify any saturated branch
+  # as a countermodel. Forget the saturated set before re-deciding: it is never
+  # emptied on its own, so leaving it in place sends `check_and_trigger_deepening/1`
+  # straight back into the same dead end and deepening never resumes.
+  @impl true
+  def handle_cast(:csa_undecided, state) do
+    check_and_trigger_deepening(%{state | saturated_branches: %{}})
+  end
+
+  @impl true
   def handle_cast({:proof_result, result}, state) do
     if state.active_caller do
       Logger.info("Manager received final result: #{inspect(result)}")
@@ -240,11 +255,8 @@ defmodule ShotTx.Prover.Manager do
     all_idle? = MapSet.size(state.idle_workers) == state.worker_count
 
     if all_idle? and not is_nil(state.active_caller) do
-      has_saturated? = map_size(state.saturated_branches) > 0
-      idle_queue_empty? = state.parked_count == 0
-
       cond do
-        has_saturated? ->
+        map_size(state.saturated_branches) > 0 ->
           Logger.debug(
             "All workers idle. Saturated branches found. Asking Agent to investigate CSA..."
           )
@@ -252,16 +264,28 @@ defmodule ShotTx.Prover.Manager do
           GenServer.cast(ca_via(state), {:verify_csa, state.saturated_branches})
           {:noreply, state}
 
-        idle_queue_empty? ->
+        # Parked branches still have sleeping rules, so another deepening round
+        # can still make progress. This is checked before the exhausted case:
+        # an exhausted branch is a dead end for itself, not for the tableau.
+        state.parked_count > 0 ->
+          send_wake_up_if_open(state)
+
+        MapSet.size(state.exhausted_branches) > 0 ->
+          Logger.debug(
+            "All workers idle, #{MapSet.size(state.exhausted_branches)} branch(es) exhausted " <>
+              "without deciding satisfiability. Asking Agent for a final closure check..."
+          )
+
+          GenServer.cast(ca_via(state), :verify_exhausted)
+          {:noreply, state}
+
+        true ->
           Logger.debug(
             "All workers idle and queue exhausted. Asking Agent to verify global unification..."
           )
 
           GenServer.cast(ca_via(state), :verify_all_closed)
           {:noreply, state}
-
-        true ->
-          send_wake_up_if_open(state)
       end
     else
       {:noreply, state}
@@ -269,7 +293,7 @@ defmodule ShotTx.Prover.Manager do
   end
 
   defp send_wake_up_if_open(state) do
-    case GenServer.call(ca_via(state), :settle, :infinity) do
+    case settle(state) do
       :closed ->
         {:noreply, state}
 
@@ -277,6 +301,37 @@ defmodule ShotTx.Prover.Manager do
         deepen_or_report_unknown(state)
     end
   end
+
+  # Settling is bounded by whatever is left of the proof's own deadline, never
+  # `:infinity`. The agent answers this call only once its global-closure task
+  # finishes, and that task is an exponential cartesian product over every open
+  # branch's clash candidates — on a wide tableau it runs for minutes. While
+  # the manager blocks here it cannot process its own `:timeout` message, so
+  # the deadline it is supposed to enforce silently stops applying: a 3 s proof
+  # was observed returning after 197 s.
+  #
+  # Giving up on the settle is safe. `:open` is what the agent reports when it
+  # finds no closure, so treating a late answer as `:open` merely deepens or
+  # falls through to the timeout — the timeout message is already queued and is
+  # handled as soon as this returns. A reply that lands afterwards goes to a
+  # caller that has stopped listening, which `GenServer.reply/2` tolerates.
+  defp settle(state) do
+    GenServer.call(ca_via(state), :settle, settle_budget(state))
+  catch
+    :exit, {:timeout, _call} ->
+      Logger.warning("Settle exceeded the remaining proof budget; treating branches as open.")
+      :open
+  end
+
+  defp settle_budget(%{timer_ref: ref}) when is_reference(ref) do
+    case Process.read_timer(ref) do
+      remaining when is_integer(remaining) and remaining > 0 -> remaining
+      # Already fired or cancelled — the timeout is in the mailbox behind us.
+      _ -> 1
+    end
+  end
+
+  defp settle_budget(_state), do: :infinity
 
   defp deepen_or_report_unknown(%{params: %{iterative_deepening: false}} = state) do
     Logger.debug(
@@ -304,12 +359,19 @@ defmodule ShotTx.Prover.Manager do
       end
     )
 
+    # A new round re-derives branches under the higher limits, so last round's
+    # per-branch verdicts are stale: branch ids are positional, and `root_A` at
+    # gamma+1 carries more formulas than the `root_A` that ran out of rules at
+    # gamma. Carrying either set forward lets a dead end from an earlier round
+    # answer for a branch that has not been explored yet.
     {:noreply,
      %{
        new_state
        | current_gamma_limit: new_gamma,
          current_prim_depth_limit: new_prim,
-         idle_workers: MapSet.new()
+         idle_workers: MapSet.new(),
+         saturated_branches: %{},
+         exhausted_branches: MapSet.new()
      }}
   end
 

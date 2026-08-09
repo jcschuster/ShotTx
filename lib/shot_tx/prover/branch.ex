@@ -99,6 +99,7 @@ defmodule ShotTx.Prover.Branch do
           | {:instantiate, branches :: [%__MODULE__{}]}
           | {:idle, %__MODULE__{}}
           | {:saturated, {defs :: map(), literals :: MapSet.t()}}
+          | {:exhausted, %__MODULE__{}}
           | {:closed, %__MODULE__{}}
 
   ##############################################################################
@@ -193,8 +194,11 @@ defmodule ShotTx.Prover.Branch do
       FPQ.empty?(branch.queue) and not Enum.empty?(branch.sleeping_gamma_rules) ->
         {:idle, branch}
 
-      FPQ.empty?(branch.queue) ->
+      FPQ.empty?(branch.queue) and model_certain?(branch.literals, branch.equations) ->
         {:saturated, {branch.defs, branch.literals}}
+
+      FPQ.empty?(branch.queue) ->
+        {:exhausted, branch}
 
       true ->
         {{source, cf}, rest_queue} = FPQ.take_smallest(branch.queue)
@@ -212,6 +216,74 @@ defmodule ShotTx.Prover.Branch do
           apply_rule(eff_cf, eff_source, branch_after_simp, params, gamma_limit, prim_limit)
         end
     end
+  end
+
+  @doc """
+  Whether a rule-exhausted branch's literal set may be reported as a
+  countermodel.
+
+  An empty queue means no *syntactic* rule is left to fire. That is weaker than
+  satisfiability: literals `p s̄` and `¬(p t̄)` are complementary as soon as `s̄`
+  and `t̄` denote the same values, and ShotTx decides that only inside the
+  fragment its equational machinery covers — syntactically identical terms
+  (ground closure), unifiable terms (clash candidates handed to the CSP), and
+  terms related by an oriented equation (demodulation). Extensional equality of
+  two closed λ-terms is left open, so a branch holding `P (λ…)` and `¬(P (λ…))`
+  for two extensionally equal but syntactically different arguments has *not*
+  been shown satisfiable. Calling it a countermodel is unsound; it is merely
+  exhausted, and `step/4` reports it as `:exhausted` instead.
+
+  Returns `true` only when every same-head, opposite-polarity literal pair is
+  separated at some argument position by two distinct rigid base-type terms —
+  the case a free term model can satisfy by interpreting them as distinct
+  elements. `p a` against `¬(p b)` for distinct base constants `a`, `b` is
+  therefore still a genuine countermodel.
+  """
+  @spec model_certain?(MapSet.t(Term.term_id()), %{Term.term_id() => MapSet.t()}) :: boolean()
+  def model_certain?(literals, equations) do
+    {negative, positive} = literals |> MapSet.to_list() |> Enum.split_with(&negated_literal?/1)
+    negative_atoms = Enum.map(negative, &lit_neg/1)
+
+    Enum.all?(positive, fn pos ->
+      Enum.all?(negative_atoms, &separated?(pos, &1, equations))
+    end)
+  end
+
+  defp negated_literal?(term_id), do: match?(negated(_), TF.get_term!(term_id))
+
+  # Can this positive/negative atom pair still turn out complementary?
+  defp separated?(positive_atom, negative_atom, equations) do
+    p = TF.get_term!(positive_atom)
+    n = TF.get_term!(negative_atom)
+
+    cond do
+      # Two different rigid heads can never be identified, whatever the
+      # arguments denote.
+      rigid_head?(p) and rigid_head?(n) and p.head != n.head -> true
+      length(p.args) != length(n.args) -> true
+      true -> Enum.any?(Enum.zip(p.args, n.args), &distinguishable?(&1, equations))
+    end
+  end
+
+  defp rigid_head?(%Term{head: %Declaration{kind: :co}}), do: true
+  defp rigid_head?(%Term{}), do: false
+
+  # A pair of arguments a free term model may interpret as distinct elements:
+  # distinct rigid constants at a base type, neither rewritable by one of the
+  # branch's equations. Anything of functional or `$o` type is excluded — that
+  # is exactly where extensionality would be needed and is not available.
+  defp distinguishable?({same, same}, _equations), do: false
+
+  defp distinguishable?({s, t}, equations) do
+    base_typed_rigid?(s) and base_typed_rigid?(t) and
+      not Map.has_key?(equations, s) and not Map.has_key?(equations, t)
+  end
+
+  defp base_typed_rigid?(term_id) do
+    term = TF.get_term!(term_id)
+
+    match?(%Type{goal: goal, args: []} when goal != :o, term.type) and
+      term.bvars == [] and term.head.kind == :co and MapSet.size(term.fvars) == 0
   end
 
   @doc """
@@ -266,9 +338,21 @@ defmodule ShotTx.Prover.Branch do
          _g_limit,
          _p_limit
        ) do
+    # The expansion is inserted against every equation on the branch *except*
+    # the one `source` itself contributed. Demodulating `s ≡ t` with `s = t`
+    # yields `t ≡ t`, i.e. `⊤` — a perfectly valid rewrite that nonetheless
+    # throws away precisely the boolean content this expansion exists to
+    # expose. For `¬c = c` it discards a contradiction: the expansion
+    # `(¬c) ≡ c` simplifies to `⊥` and closes the branch, but only if it
+    # survives long enough to be classified. The equation stays in the branch
+    # for everything else, and an equation reaching the branch from some other
+    # formula still demodulates this one — that case is not circular.
+    without_own = %{branch | equations: drop_equation_of(branch.equations, source, params)}
+
     updated =
       formulas
-      |> Enum.reduce(branch, &insert_formula(&2, &1, branch.defs, params))
+      |> Enum.reduce(without_own, &insert_formula(&2, &1, branch.defs, params))
+      |> Map.put(:equations, branch.equations)
       |> ingest_formulas(formulas, params)
       |> record(source, rule, formulas)
       |> bump_frontier([source], formulas)
@@ -591,7 +675,19 @@ defmodule ShotTx.Prover.Branch do
 
   # --- Atoms ------------------------------------------------------------------
 
-  defp apply_rule({:atomic, term_id} = rule, source, branch, params, _g_limit, _p_limit) do
+  defp apply_rule({:atomic, raw_term_id} = rule, source, branch, params, _g_limit, _p_limit) do
+    # An atom is demodulated *here*, on the way into `literals`, and not only
+    # in `insert_formula`. A formula is classified and queued under the
+    # equations that existed when it was inserted, but equations keep arriving
+    # while it waits — `α` even ingests an equation produced by the very same
+    # rule that queued this atom. Normalizing at insert time alone therefore
+    # lets an atom enter `literals` in a form no longer normal, and the clash
+    # check is syntactic, so the clash is missed and the branch is reported
+    # saturated: an unsound `CounterSatisfiable`. `backward_demodulate/3`
+    # covers the opposite order (equation after literal); together the two
+    # keep `literals` in normal form under all equations known to the branch.
+    {term_id, branch} = demodulate_atom(raw_term_id, branch, params)
+
     case unfold_if_possible(term_id, branch.defs) do
       nil ->
         case check_local_clashes(term_id, branch.literals, params) do
@@ -717,6 +813,7 @@ defmodule ShotTx.Prover.Branch do
         c_branch =
           %{recorded | id: "#{recorded.id}_I#{idx}", defs: defs}
           |> unfold_literals(recorded.literals, defs, params)
+          |> unfold_equations(recorded.equations, defs, params)
           |> insert_formula(b_term, defs, params)
           |> ingest_formula(b_term, params)
           |> bump_frontier([], [b_term])
@@ -727,14 +824,31 @@ defmodule ShotTx.Prover.Branch do
     {:instantiate, final_branches}
   end
 
-  defp dual_atomize_source(term_id, branch, params) do
-    case check_local_clashes(term_id, branch.literals, params) do
+  defp dual_atomize_source(raw_term_id, branch, params) do
+    {term_id, demodulated} = demodulate_atom(raw_term_id, branch, params)
+
+    case check_local_clashes(term_id, demodulated.literals, params) do
       :ground_closure ->
-        {:ground_closure, %{branch | literals: MapSet.put(branch.literals, term_id)}}
+        {:ground_closure, %{demodulated | literals: MapSet.put(demodulated.literals, term_id)}}
 
       _ ->
-        updated = %{branch | literals: MapSet.put(branch.literals, term_id)}
+        updated = %{demodulated | literals: MapSet.put(demodulated.literals, term_id)}
         {:continue, updated}
+    end
+  end
+
+  # Normalizes an atom under the branch's current equations on its way into
+  # `literals`, recording the rewrite so proof reconstruction can replay it.
+  defp demodulate_atom(term_id, branch, params) do
+    case maybe_demodulate(term_id, branch.equations, params) do
+      ^term_id ->
+        {term_id, branch}
+
+      normal ->
+        {normal,
+         branch
+         |> Map.update!(:term_ids, &MapSet.put(&1, normal))
+         |> record(term_id, :demodulation, [normal])}
     end
   end
 
@@ -909,10 +1023,54 @@ defmodule ShotTx.Prover.Branch do
 
     case TF.get_term!(effective_id) do
       equality(lhs, rhs) when lhs != rhs ->
-        ingest_equation(branch, lhs, rhs, params)
+        branch
+        |> ingest_equation(lhs, rhs, params)
+        |> ingest_asserted_equality(lhs, rhs, params)
 
       _ ->
         branch
+    end
+  end
+
+  # `(s = t) = ⊤` asserts the equality *atom* `s = t`, which licenses `s → t`
+  # as a rewrite. Registering only the outer pair records the weaker fact "this
+  # boolean atom is true" and loses the term-level equation, so literals
+  # mentioning `s` and `t` are never normalized against each other. A branch
+  # holding `((h ⊤) = (h ⊥)) = ⊤` together with `P (h ⊤)` and `¬(P (h ⊥))` then
+  # looks clash-free and gets reported as a countermodel.
+  #
+  # The shape arises whenever `:rename` abbreviates an equality as a constant
+  # and a later `:instantiate` fixes that constant to `⊤`.
+  defp ingest_asserted_equality(branch, lhs, rhs, params) do
+    case {TF.get_term!(lhs), TF.get_term!(rhs)} do
+      {equality(l, r), truth()} when l != r -> ingest_equation(branch, l, r, params)
+      {truth(), equality(l, r)} when l != r -> ingest_equation(branch, l, r, params)
+      _ -> branch
+    end
+  end
+
+  # Removes the oriented equation `source` would contribute, leaving the rest of
+  # the branch's equation set intact. See `apply_rule/6` for the
+  # `:equality_expansion` rule, its only caller.
+  defp drop_equation_of(equations, source, params) do
+    case TF.get_term!(source) do
+      equality(lhs, rhs) when lhs != rhs ->
+        {ol, or_} = orient_pair(lhs, rhs, params.term_order)
+
+        case Map.get(equations, ol) do
+          nil -> equations
+          rhs_set -> prune_equation(equations, ol, MapSet.delete(rhs_set, or_))
+        end
+
+      _ ->
+        equations
+    end
+  end
+
+  defp prune_equation(equations, lhs, remaining) do
+    case MapSet.size(remaining) do
+      0 -> Map.delete(equations, lhs)
+      _ -> Map.put(equations, lhs, remaining)
     end
   end
 
@@ -921,7 +1079,7 @@ defmodule ShotTx.Prover.Branch do
     new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
 
     %{branch | equations: new_equations}
-    |> backward_demodulate(%{ol => MapSet.new([or_])}, params)
+    |> backward_demodulate(params)
   end
 
   # Backward demodulation: when a new equation lands, sweep existing
@@ -931,15 +1089,19 @@ defmodule ShotTx.Prover.Branch do
   # `insert_formula` (which will run its own forward-demodulation pass
   # and pick up the classification / queue entry).
   #
-  # We only bother rewriting under the *new* equation on this pass: any
-  # literal not touched by it was already in normal form under the
-  # previous equation set (invariant maintained inductively by forward
-  # demodulation at ingest time).
-  defp backward_demodulate(branch, _new_eq_only, %Parameters{demodulation: false}), do: branch
+  # Normalization uses the branch's *whole* equation set, not just the
+  # equation that triggered this pass. Rewriting under the new equation can
+  # expose a redex for an older one, and an earlier version of this function
+  # passed only the new equation on the assumption that every literal was
+  # already normal under the older set — an invariant the branch does not
+  # actually maintain, since literals also enter via `apply_rule({:atomic,
+  # ...})`. Using the full set makes the normal form independent of the order
+  # equations arrived in.
+  defp backward_demodulate(branch, %Parameters{demodulation: false}), do: branch
 
-  defp backward_demodulate(branch, new_eq_only, params) do
+  defp backward_demodulate(branch, params) do
     Enum.reduce(branch.literals, branch, fn lit, acc ->
-      normal = Demodulation.normalize(lit, new_eq_only, params.term_order)
+      normal = Demodulation.normalize(lit, acc.equations, params.term_order)
 
       cond do
         normal == lit ->
@@ -1055,6 +1217,35 @@ defmodule ShotTx.Prover.Branch do
           |> record(tid, {:atomic, tid}, [unfolded])
       end
     end)
+  end
+
+  # An `:instantiate` child fixes a new definition for a constant, and
+  # `unfold_literals/4` re-expands the branch's literals under it. Its
+  # *equations* need the same treatment. Without it a child can hold a
+  # definition set that its own equations refute and still call itself
+  # saturated — the `:rename` rule abbreviates `a ∧ b` as a fresh constant `C`
+  # and records `a ∧ b = C`, so a child choosing `a := ⊤, b := ⊤, C := ⊥` is
+  # inconsistent, yet every literal in it stays clash-free and the branch is
+  # reported as a countermodel.
+  #
+  # Re-inserting the unfolded equality routes it back through classification,
+  # where `⊤ = ⊥` simplifies to a contradiction and closes the branch.
+  defp unfold_equations(branch, equations, defs, %Parameters{} = params) do
+    for {lhs, rhs_set} <- equations, rhs <- rhs_set, reduce: branch do
+      acc ->
+        equation = eq(lhs, rhs)
+
+        case unfold_if_possible(equation, defs) do
+          nil ->
+            acc
+
+          unfolded ->
+            acc
+            |> insert_formula(unfolded, defs, params)
+            |> ingest_formula(unfolded, params)
+            |> record(equation, {:atomic, equation}, [unfolded])
+        end
+    end
   end
 
   defp check_local_clashes(new_term, existing, params) do

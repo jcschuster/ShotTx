@@ -443,6 +443,12 @@ defmodule ShotTx.Proof do
     {fold_rule_events(:paramodulation, src, paramodulants, evs), segs}
   end
 
+  defp interior_event({_src, :demodulation, []}, state), do: state
+
+  defp interior_event({src, :demodulation, [_ | _] = normal_forms}, {evs, segs}) do
+    {fold_rule_events(:demodulation, src, normal_forms, evs), segs}
+  end
+
   defp interior_event({src, :beta_variant, [additional]}, {evs, segs}) do
     {[{:rule, src, :beta_variant, additional} | evs], segs}
   end
@@ -788,7 +794,7 @@ defmodule ShotTx.Proof do
 
     lines =
       Enum.map(sub, fn {k, v} ->
-        @bullet <> "\\;" <> tex_formula(v) <> "\\;/\\;" <> tex_formula(k)
+        @bullet <> "\\;" <> tex_formula(k) <> "\\mapsto" <> tex_formula(v)
       end)
 
     "\n  Sub[\"" <> wrap_math([header | lines]) <> "\"]:::subst;"

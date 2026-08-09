@@ -1,7 +1,7 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
-  @version "0.0.2"
+  @version "0.0.3"
   @source_url "https://github.com/jcschuster/ShotTx"
 
   def project do
@@ -92,7 +92,9 @@ defmodule ShotTx.MixProject do
         ],
         Benchmarking: [
           ShotTx.Benchmark.Ablation,
-          ShotTx.Benchmark.TptpRunner
+          ShotTx.Benchmark.TptpRunner,
+          ShotTx.Benchmark.HolSuite,
+          ShotTx.Benchmark.HolRunner
         ]
       ]
     ]

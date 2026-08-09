@@ -22,6 +22,7 @@ defmodule ShotTx.Prover.Rules do
   """
 
   alias ShotDs.Data.{Type, Declaration, Term}
+  alias ShotDs.Stt.Semantics
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
   import ShotDs.Hol.Definitions
@@ -424,25 +425,24 @@ defmodule ShotTx.Prover.Rules do
   defp classify_atom(%Term{head: %Declaration{kind: :co}, args: [_ | _] = args} = term) do
     case find_deep_candidates(args) do
       nil ->
-        non_val_o_args =
-          args
-          |> Enum.with_index()
-          |> Enum.filter(fn {a_id, _idx} -> non_signature_o_constant?(a_id) end)
+        non_val_o_args = Enum.filter(args, &instantiable_o_constant?/1)
 
         if Enum.empty?(non_val_o_args) do
           {:atomic, TF.memoize(term)}
         else
-          [{to_instantiate, idx} | _] = non_val_o_args
-          %Term{head: decl, type: type} = TF.get_term!(to_instantiate)
+          %Term{head: decl} = TF.get_term!(hd(non_val_o_args))
 
           branches =
-            Stream.map(gen_o(type), fn instance ->
-              new_args = List.replace_at(args, idx, instance)
-              inst_term = TF.with_scratchpad!(fn -> rebuild_term(term, new_args) end)
+            Stream.map(gen_o(decl.type), fn instance ->
+              inst_term =
+                TF.with_scratchpad!(fn ->
+                  Semantics.unfold_defs!(term.id, %{decl => instance})
+                end)
+
               {inst_term, {decl, instance}}
             end)
 
-          {:instantiate, branches, o_type_size(type)}
+          {:instantiate, branches, o_type_size(decl.type)}
         end
 
       {:rename, candidate_id} ->
@@ -503,6 +503,12 @@ defmodule ShotTx.Prover.Rules do
         existing ->
           existing
 
+        not bound_var_free?(term.id) ->
+          # Both candidate kinds replace the subterm by a closed term, which
+          # would capture a loose index bound further out — and `:rename`'s
+          # companion equation `c = candidate` would not even be well-formed.
+          nil
+
         non_signature_o_constant?(term.id) ->
           case TF.primitive_term?(term.id) do
             {:ok, false} ->
@@ -541,6 +547,28 @@ defmodule ShotTx.Prover.Rules do
   @spec closed_term?(Term.term_id()) :: boolean()
   defp closed_term?(term_id), do: MapSet.size(TF.get_term!(term_id).fvars) == 0
 
+  # True when `term_id` contains no loose de Bruijn index — i.e. every bound
+  # variable it mentions is bound by one of its own `bvars`. `closed_term?/1`
+  # is *not* enough for this: it inspects `fvars`, which tracks free variables
+  # only, and says nothing about indices reaching a binder further out.
+  #
+  # Computed bottom-up: a term `λ..λ. h a₁ … aₙ` introduces `length(bvars)`
+  # binders over its head and arguments, so the deepest index still loose below
+  # it is the largest index mentioned there, less the binders it just bound.
+  @spec bound_var_free?(Term.term_id()) :: boolean()
+  defp bound_var_free?(term_id) do
+    {loose, _cache} = TermTraversal.fold_term!(term_id, &loose_index_depth/2)
+    loose == 0
+  end
+
+  defp loose_index_depth(%Term{head: head, bvars: bvars}, arg_depths) do
+    head_index = if head.kind == :bv, do: head.name, else: 0
+
+    max(head_index, Enum.max([0 | arg_depths]))
+    |> Kernel.-(length(bvars))
+    |> max(0)
+  end
+
   @spec pure_o_type?(Type.t()) :: boolean()
   defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
   defp pure_o_type?(_), do: false
@@ -551,6 +579,20 @@ defmodule ShotTx.Prover.Rules do
     pure_o_type?(term.type) &&
       term.head.kind == :co &&
       not Enum.member?(gen_o(term.type), term_id)
+  end
+
+  # `:instantiate` records `{term.head, instance}` as a branch definition, so
+  # the instance must inhabit the *head's* type, not the candidate's own. They
+  # differ once the candidate is applied: `p a` with `p : (o>o>o) > o` has type
+  # `o`, and pairing `p := ⊥` makes a later `p a` unfold to `⊥ a`.
+  #
+  # `classify_atom/1` therefore draws from `gen_o(head.type)`, which requires
+  # the head's type to be enumerable — not implied by the candidate's own type
+  # being pure-`o`, since `p : i > o` applied to `a : i` also has type `o`.
+  defp instantiable_o_constant?(term_id) do
+    term = TF.get_term!(term_id)
+
+    non_signature_o_constant?(term_id) && pure_o_type?(term.head.type)
   end
 
   @spec sk_term(MapSet.t(Declaration.free_var_t()), Type.t()) :: Term.term_id()

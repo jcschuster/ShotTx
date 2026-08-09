@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "atp": {
-      "command": "/workspace/.claude/atp-mcp-launch.sh"
+      "command": "/workspaces/ShotTx/.claude/atp-mcp-launch.sh"
     }
   }
 }

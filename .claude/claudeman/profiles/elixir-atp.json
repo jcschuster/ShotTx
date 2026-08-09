@@ -1,0 +1,7 @@
+{
+  "name": "elixir-atp",
+  "description": "Elixir 1.20 (image-native, no asdf) + atp_mcp escript",
+  "build": {
+    "dockerfile": "Dockerfile"
+  }
+}

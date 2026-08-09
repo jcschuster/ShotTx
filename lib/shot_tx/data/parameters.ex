@@ -7,7 +7,7 @@ defmodule ShotTx.Data.Parameters do
   | `timeout` | `5_000` | Milliseconds before the prover gives up and returns `:timeout`. |
   | `initial_gamma_limit` | `1` | Starting γ-rule instantiation depth for iterative deepening. |
   | `initial_prim_limit` | `1` | Starting primitive-substitution binding depth. |
-  | `prim_subst_after` | `0` | Number of γ instantiations before prim-subst is scheduled for a formula. |
+  | `prim_subst_after` | `1` | Number of γ instantiations before prim-subst is scheduled for a formula. |
   | `prim_subst_batch_size` | `8` | Maximum number of general bindings generated per prim-subst step. |
   | `unification_depth` | `8` | Maximum depth passed to the `shot_un` CSP solver. |
   | `unfold_defs` | `:lazy` | `:eager` unfolds definitions immediately; `:lazy` defers until the atomic rule. |
@@ -28,7 +28,7 @@ defmodule ShotTx.Data.Parameters do
   | `model_agent_max_frontier` | `100` | Skip branches whose frontier is larger than this — model finders scale poorly on vocabulary. |
   | `model_agent_min_delta_ms` | `200` | Tick interval for the agent's periodic scan of live branches. |
   | `model_agent_min_frontier` | `3` | Skip branches with frontiers below this size; trivially satisfiable frontiers are noise (a single atom `P(a)` is always SAT and tells us nothing). |
-  | `suggestions_enabled` | `false` | Feature flag for `ShotTx.Prover.SuggestionAgent`. When `false` (default), SA subscribes to nothing and stays a no-op, so the prover's behaviour is bit-for-bit unchanged. When `true`, SA runs pair-level unification on local clashes and emits instantiation hints. |
+  | `suggestions_enabled` | `true` | Feature flag for `ShotTx.Prover.SuggestionAgent`. When `true` (default), SA runs pair-level unification on local clashes and emits instantiation hints. When `false`, SA subscribes to nothing and stays a no-op. |
   | `suggestion_cascade_ceiling` | `3` | Cap on how many times any single suggestion (keyed by `{branch_prefix, recipe, term}`) may be spliced across all descendants of its `birth_branch`. Bounds the feedback loop where an applied suggestion produces fresh clashes → new unifiers → new suggestions. Enforced via `:ets.update_counter/3` at the splice site. |
   | `worker_pool_size` | `:auto` | Number of `Worker` processes the `Manager` spawns. `:auto` uses `System.schedulers_online()`; a positive integer pins the pool. Set to `1` for a serial baseline. |
   | `contradiction_agent` | `true` | When `true`, `ContradictionAgent` performs global unification-based closure across open branches via the `shot_un` CSP. When `false`, the agent still tracks branch state (needed for SAT extraction) but never dispatches a CSP; only local, per-branch ground clashes can close the proof. Ablation switch for "with/without global closure". |
@@ -43,7 +43,7 @@ defmodule ShotTx.Data.Parameters do
   defstruct timeout: 5_000,
             initial_gamma_limit: 1,
             initial_prim_limit: 1,
-            prim_subst_after: 0,
+            prim_subst_after: 1,
             prim_subst_batch_size: 8,
             unification_depth: 8,
             unfold_defs: :lazy,
@@ -64,7 +64,7 @@ defmodule ShotTx.Data.Parameters do
             model_agent_max_frontier: 100,
             model_agent_min_delta_ms: 200,
             model_agent_min_frontier: 3,
-            suggestions_enabled: false,
+            suggestions_enabled: true,
             suggestion_cascade_ceiling: 3,
             worker_pool_size: :auto,
             contradiction_agent: true,

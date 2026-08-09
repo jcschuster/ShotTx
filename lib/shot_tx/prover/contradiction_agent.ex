@@ -64,7 +64,13 @@ defmodule ShotTx.Prover.ContradictionAgent do
             branch_closures: %{},
             params: %Parameters{},
             pending_search: nil,
-            settle_waiter: nil
+            settle_waiter: nil,
+            # Bumped by every piece of branch evidence. `search_version` records
+            # the value a dispatched CSP was built from, so a search that
+            # answers "no closure" from a snapshot older than the current
+            # evidence can be recognised as stale.
+            evidence_version: 0,
+            search_version: 0
 
   ##############################################################################
   # PUBLIC API
@@ -183,7 +189,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
     Stats.record_max(state.ets_tables, :active_branches_max, MapSet.size(new_active))
     Stats.incr(state.ets_tables, :branches_activated_total, length(live_children))
 
-    check_global_closure(%{state | active_branches: new_active})
+    check_global_closure(record_evidence(%{state | active_branches: new_active}))
   end
 
   defp do_handle_info({:branch_closed, branch_id}, state) do
@@ -195,18 +201,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   defp do_handle_info({:branch_saturated, branch_id, {model_defs, model_atoms}}, state) do
     new_active = MapSet.delete(state.active_branches, branch_id)
-    traces = read_traces(state)
 
-    results = %{
-      model_branch_id: branch_id,
-      model_atoms: model_atoms,
-      model_defs: model_defs,
-      model_trace: Map.get(traces, branch_id, []),
-      closed_traces: Map.delete(traces, branch_id)
-    }
-
-    send_proof_result({:sat, results}, state)
-    {:noreply, %{state | active_branches: new_active}}
+    # A saturated branch is only a countermodel if nothing recorded against it
+    # can still close it. The manager-coordinated `:verify_csa` path applies
+    # exactly this filter through `csa_or_unknown/2`; the eager path used to
+    # skip it and answer `:sat` off the first saturation event, so a branch
+    # carrying unification clash candidates — which the CSP might well have
+    # closed under a global substitution — could win the race against its own
+    # refutation and be reported as a model.
+    if closable?(branch_id, state) do
+      {:noreply, %{state | active_branches: new_active}}
+    else
+      send_proof_result({:sat, model(branch_id, model_defs, model_atoms, state)}, state)
+      {:noreply, %{state | active_branches: new_active}}
+    end
   end
 
   defp do_handle_info({:local_clashes, branch_id, new_candidates}, state) do
@@ -222,7 +230,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
         &MapSet.union(&1, new_candidates)
       )
 
-    check_global_closure(%{state | clashing_local_pairs: updated_local_clashes})
+    check_global_closure(record_evidence(%{state | clashing_local_pairs: updated_local_clashes}))
   end
 
   defp do_handle_info(
@@ -245,12 +253,20 @@ defmodule ShotTx.Prover.ContradictionAgent do
          %{pending_search: %Task{ref: ref}, settle_waiter: waiter} = state
        ) do
     Process.demonitor(ref, [:flush])
+    cleared = %{state | pending_search: nil}
 
-    if waiter != nil do
-      GenServer.reply(waiter, :open)
+    # `check_global_closure/1` is a no-op while a search is in flight, so any
+    # clash or split that arrived during this one was recorded but never acted
+    # on. Answering the waiter `:open` from that stale snapshot would let the
+    # manager deepen past a closure it already had the evidence for. Re-running
+    # once is bounded: a waiter only exists when every worker is idle, so no
+    # further evidence can arrive while the second search runs.
+    if waiter != nil and stale_search?(cleared) do
+      redispatch_for_waiter(cleared)
+    else
+      if waiter != nil, do: GenServer.reply(waiter, :open)
+      {:noreply, %{cleared | settle_waiter: nil}}
     end
-
-    {:noreply, %{state | pending_search: nil, settle_waiter: nil}}
   end
 
   defp do_handle_info(
@@ -266,6 +282,22 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   defp do_handle_info(_event, state) do
     {:noreply, state}
+  end
+
+  defp record_evidence(state), do: %{state | evidence_version: state.evidence_version + 1}
+
+  defp stale_search?(state), do: state.evidence_version != state.search_version
+
+  defp redispatch_for_waiter(state) do
+    option_lists = option_lists_for(state.active_branches, state)
+
+    if insufficient_options?(option_lists) do
+      Stats.incr(state.ets_tables, :csp_calls_skipped)
+      GenServer.reply(state.settle_waiter, :open)
+      {:noreply, %{state | settle_waiter: nil}}
+    else
+      dispatch_csp(state, option_lists)
+    end
   end
 
   # ---- CAST CALLBACKS ----
@@ -293,9 +325,37 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
       :error ->
         case csa_or_unknown(saturated_branch_map, state) do
-          {:sat, results} -> send_proof_result({:sat, results}, state)
-          unknown -> if all_saturated?, do: send_proof_result(unknown, state)
+          {:sat, results} ->
+            send_proof_result({:sat, results}, state)
+
+          unknown ->
+            # Without the `else` the manager was left waiting on a verdict that
+            # never came: its `saturated_branches` map is never empty again, so
+            # every later stall re-entered this same branch and iterative
+            # deepening stopped for the rest of the session.
+            if all_saturated?,
+              do: send_proof_result(unknown, state),
+              else: notify_manager(:csa_undecided, state)
         end
+    end
+
+    {:noreply, state}
+  end
+
+  # Every branch has either closed or run out of rules without being provably
+  # satisfiable. One last global closure attempt, then `:unknown` — never
+  # `:sat`, since no branch here is certified as a model.
+  defp do_handle_cast(:verify_exhausted, state) do
+    closure =
+      if state.params.contradiction_agent do
+        try_close_sync(option_lists_for(state.active_branches, state), state)
+      else
+        :error
+      end
+
+    case closure do
+      {:ok, solution} -> broadcast_unsat(solution, state)
+      :error -> send_proof_result({:unknown, :exhausted_without_model}, state)
     end
 
     {:noreply, state}
@@ -322,32 +382,36 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp csa_or_unknown(saturated_branch_map, state) do
-    open_branches =
-      saturated_branch_map
-      |> Map.keys()
-      |> Enum.filter(fn b_id ->
-        Enum.empty?(get_inherited_closures(b_id, state)) and
-          Enum.empty?(get_inherited_clashes(b_id, state))
-      end)
-
-    case open_branches do
+    saturated_branch_map
+    |> Map.keys()
+    |> Enum.reject(&closable?(&1, state))
+    |> case do
       [model_branch_id | _] ->
         {model_defs, model_atoms} = Map.fetch!(saturated_branch_map, model_branch_id)
-        traces = read_traces(state)
-
-        results = %{
-          model_branch_id: model_branch_id,
-          model_atoms: model_atoms,
-          model_defs: model_defs,
-          model_trace: Map.get(traces, model_branch_id, []),
-          closed_traces: Map.delete(traces, model_branch_id)
-        }
-
-        {:sat, results}
+        {:sat, model(model_branch_id, model_defs, model_atoms, state)}
 
       [] ->
         {:unknown, :conflicting_substitutions}
     end
+  end
+
+  # Anything recorded against this branch (or an ancestor) that could still
+  # discharge it: a closure, or a unifiable literal pair the CSP may yet solve.
+  defp closable?(branch_id, state) do
+    not Enum.empty?(get_inherited_closures(branch_id, state)) or
+      not Enum.empty?(get_inherited_clashes(branch_id, state))
+  end
+
+  defp model(branch_id, model_defs, model_atoms, state) do
+    traces = read_traces(state)
+
+    %{
+      model_branch_id: branch_id,
+      model_atoms: model_atoms,
+      model_defs: model_defs,
+      model_trace: Map.get(traces, branch_id, []),
+      closed_traces: Map.delete(traces, branch_id)
+    }
   end
 
   defp check_global_closure(%__MODULE__{pending_search: %Task{}} = state) do
@@ -412,7 +476,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
         result
       end)
 
-    {:noreply, %{state | pending_search: task}}
+    {:noreply, %{state | pending_search: task, search_version: state.evidence_version}}
   end
 
   defp cancel_pending_search(%{pending_search: nil, settle_waiter: nil} = state), do: state
@@ -603,9 +667,13 @@ defmodule ShotTx.Prover.ContradictionAgent do
       stats -> :ets.insert(stats, {:aborted, true})
     end
 
+    notify_manager({:proof_result, result}, state)
+  end
+
+  defp notify_manager(message, state) do
     manager_via =
       {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :manager}}}
 
-    GenServer.cast(manager_via, {:proof_result, result})
+    GenServer.cast(manager_via, message)
   end
 end

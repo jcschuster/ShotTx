@@ -1,0 +1,8 @@
+{
+  "name": "elixir-atp",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/workspaces/ShotTx",
+  "remoteUser": "node"
+}
