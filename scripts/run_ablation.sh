@@ -13,7 +13,10 @@
 #
 # Environment variables:
 #   TPTP_ROOT        Required. Path to the TPTP directory containing Problems/.
-#   BASE_TIMEOUT     Optional. Base per-problem timeout in ms (default: 5000).
+#   BASE_TIMEOUT     Optional. Per-problem timeout in ms (default: 2000). Applied
+#                    uniformly to every configuration — the matrix does not sweep
+#                    the timeout, so that solved-count differences between rows
+#                    reflect the ablated component and not a differing budget.
 #   LANGUAGE         Optional. th0 | th1 | both (default: both).
 #   PROBLEM_LIMIT    Optional. Max problems per configuration (default: all).
 #
@@ -37,7 +40,7 @@
 set -euo pipefail
 
 OUTPUT_DIR="${1:-bench_results/$(date +%Y-%m-%d_%H%M%S)}"
-BASE_TIMEOUT="${BASE_TIMEOUT:-5000}"
+BASE_TIMEOUT="${BASE_TIMEOUT:-2000}"
 LANGUAGE="${LANGUAGE:-both}"
 
 # Rendered straight into the `mix run -e` snippet, so it must be a valid Elixir
@@ -46,6 +49,17 @@ PROBLEM_LIMIT_LITERAL="${PROBLEM_LIMIT:-nil}"
 
 if [ -z "${TPTP_ROOT:-}" ]; then
     echo "ERROR: TPTP_ROOT environment variable is not set." >&2
+    exit 1
+fi
+
+# TPTP_ROOT being set proves nothing: the devcontainer exports it unconditionally,
+# so a container started without the corpus bind-mount still passes the check
+# above and then silently produces empty result directories. Insist on the
+# directory the runner actually globs.
+if [ ! -d "$TPTP_ROOT/Problems" ]; then
+    echo "ERROR: no TPTP corpus at $TPTP_ROOT (expected a Problems/ subdirectory)." >&2
+    echo "       TPTP_ROOT is set but the corpus is not mounted there — most likely" >&2
+    echo "       this container was not started from the elixir-isabelle profile." >&2
     exit 1
 fi
 
@@ -65,14 +79,22 @@ echo "  problem_limit = $PROBLEM_LIMIT_LITERAL"
 echo "  tptp_root     = $TPTP_ROOT"
 echo "=================================================================="
 
-# Enumerate config labels once by asking the Ablation module.
+# Compile up front. `mix run` would otherwise emit "Compiling N files" on stdout
+# during label enumeration below and those lines would be captured as labels.
+echo ""
+echo "Compiling..."
+mix compile
+
+# Enumerate config labels once by asking the Ablation module. Errors are left on
+# stderr deliberately: swallowing them turns a compile failure or a renamed
+# module into a bare "returned no configurations" with no clue as to why.
 LABELS=$(mix run --no-start -e "
   ShotTx.Benchmark.Ablation.matrix(base_timeout: $BASE_TIMEOUT)
   |> Enum.each(fn {label, _} -> IO.puts(label) end)
-" 2>/dev/null)
+")
 
 if [ -z "$LABELS" ]; then
-    echo "ERROR: Ablation.matrix/1 returned no configurations." >&2
+    echo "ERROR: Ablation.matrix/1 returned no configurations (see errors above)." >&2
     exit 1
 fi
 

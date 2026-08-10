@@ -9,13 +9,17 @@ defmodule ShotTx.Benchmark.Ablation do
     * **`oat/1`** — one row per component switched off relative to the
       baseline (one-at-a-time ablation). Answers "how much does component X
       contribute to what the prover can solve?"
-    * **`sweeps/1`** — three numeric sweeps at three values each: `timeout`,
-      `initial_gamma_limit`, `prim_subst_batch_size`. Answers "how sensitive
-      is performance to the main tuning knobs?"
+    * **`sweeps/1`** — two numeric sweeps at three values each:
+      `initial_gamma_limit` and `prim_subst_batch_size`. Answers "how
+      sensitive is performance to the main tuning knobs?"
 
-  `matrix/1` concatenates the three, deduplicated on the label. The default
-  base timeout is 5s; override with `base_timeout: 2_000` etc. to reduce the
-  wall-clock cost.
+  `matrix/1` concatenates the three, deduplicated on the label.
+
+  The timeout is deliberately *not* a swept dimension: every configuration in
+  the matrix runs at the same `base_timeout` (default 2s) so that solved-count
+  differences between rows are attributable to the component under ablation
+  and not to a differing time budget. Raise it with `base_timeout: 5_000` to
+  give every row more room — uniformly.
 
   Each entry is a `{label, %Parameters{}}` pair, fed straight to
   `ShotTx.Benchmark.TptpRunner.run_sweep/2`.
@@ -47,7 +51,7 @@ defmodule ShotTx.Benchmark.Ablation do
   """
   @spec matrix(keyword()) :: [entry()]
   def matrix(opts \\ []) do
-    base_timeout = Keyword.get(opts, :base_timeout, 5_000)
+    base_timeout = Keyword.get(opts, :base_timeout, 2_000)
 
     (baseline(base_timeout) ++ oat(base_timeout) ++ sweeps(base_timeout))
     |> Enum.uniq_by(fn {_label, params} -> params end)
@@ -87,15 +91,15 @@ defmodule ShotTx.Benchmark.Ablation do
     ]
   end
 
-  @doc "Numeric parameter sweeps at three values each."
+  @doc """
+  Numeric parameter sweeps at three values each.
+
+  `timeout` is not among them, by design — see the module doc. Every row here
+  inherits `base_timeout` unchanged.
+  """
   @spec sweeps(pos_integer()) :: [entry()]
   def sweeps(base_timeout) do
     base = base_params(base_timeout)
-
-    timeout_sweep =
-      for t <- [1_000, 5_000, 15_000] do
-        {"timeout_#{t}", %{base | timeout: t}}
-      end
 
     gamma_sweep =
       for g <- [1, 3, 5] do
@@ -107,7 +111,7 @@ defmodule ShotTx.Benchmark.Ablation do
         {"prim_batch_#{b}", %{base | prim_subst_batch_size: b}}
       end
 
-    timeout_sweep ++ gamma_sweep ++ prim_batch_sweep
+    gamma_sweep ++ prim_batch_sweep
   end
 
   @doc """

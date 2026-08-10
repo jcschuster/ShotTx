@@ -1,17 +1,84 @@
+# Demo container: Elixir 1.20 + Isabelle/HOL + atp_mcp
+#
+# Design decisions:
+#
+#  1. Debian base, NOT alpine. Isabelle's bundled Poly/ML and JDK are
+#     glibc binaries and do not run on musl. This also gives sane locale
+#     behaviour for the BEAM.
+#  2. Exactly ONE Elixir installation: the one from the base image, at
+#     /usr/local/bin (always on the default PATH). No asdf devcontainer
+#     features on top — the old setup had the image's Elixir 1.19 AND an
+#     asdf-managed Elixir fighting over PATH, and settings.json pointed
+#     at asdf shim paths that didn't exist in every build.
+#  3. Elixir 1.20 / OTP 28 — atp_mcp requires `elixir: "~> 1.20"`, which
+#     is why `mix escript.install hex atp_mcp` silently failed on the old
+#     1.19 image (the launcher swallowed the error with `|| true`).
+#  4. The atp_mcp escript is installed at BUILD time to a fixed path
+#     (/home/node/.mix/escripts/atp_mcp, on PATH via ENV). No SessionStart
+#     install hook, no lazy install race on first MCP connect.
+#  5. +fnu and a UTF-8 locale are baked in as image ENV so every process
+#     (shells, mix, iex, the escript) inherits them.
+
+# --- Isabelle source stage -----------------------------------------------
+# Pull from the official makarius/isabelle image instead of downloading the
+# tarball at build time. The TUM distribution server redirects to an HTTP-
+# only CDN (dist.isabelle.cit.tum.de:80) that is unreachable from many
+# build environments. The Docker Hub image ships identical content with
+# system HOL heaps already built (via `isabelle build -o system_heaps -b HOL`),
+# so they are included in /home/isabelle/Isabelle and copied below.
+ARG ISABELLE_VERSION=Isabelle2025-2
+FROM docker.io/makarius/isabelle:${ISABELLE_VERSION} AS isabelle-src
+
 FROM docker.io/library/elixir:1.20-otp-28
 
+ARG ISABELLE_VERSION=Isabelle2025-2
+
 # --- OS packages --------------------------------------------------------
+# libfontconfig1/libgomp1/pwgen/rlwrap/unzip/less/perl cover headless
+# Isabelle (same set the official Isabelle Docker image installs).
 # eprover gives the AtpMcp `local_exec` backend an offline prover to run.
 # fd-find installs the binary as `fdfind` on Debian, hence the symlink.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq less unzip zsh sudo procps \
-    ripgrep fd-find fzf \
-    nodejs npm \
-    eprover \
+        ca-certificates curl git jq less unzip zsh sudo procps \
+        ripgrep fd-find fzf \
+        libfontconfig1 libgomp1 pwgen rlwrap perl \
+        nodejs npm \
+        eprover \
     && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code @ast-grep/cli
+
+# --- Isabelle ------------------------------------------------------------
+# Copy from the source stage. The makarius image installs Isabelle at
+# /home/isabelle/Isabelle with system heaps inside that directory tree.
+COPY --from=isabelle-src /home/isabelle/Isabelle /opt/${ISABELLE_VERSION}
+RUN chown -R root:root /opt/${ISABELLE_VERSION}
+
+# --- TPTP corpus ----------------------------------------------------------
+# scripts/run_ablation.sh needs the TPTP library at $TPTP_ROOT. Ship it in
+# the image rather than bind-mounting it from the host: a mount that fails
+# to materialise (an unset ${localEnv:...}, a corpus the host doesn't have)
+# leaves TPTP_ROOT pointing at an empty path, and the sweep only discovers
+# that as thousands of empty result rows. Baking it in means the variable
+# and the files it names can never disagree.
+#
+# Only the higher-order fragment is extracted — TptpRunner globs
+# Problems/**/*^N.p — plus Axioms/, which those problems pull in via
+# include() directives. That keeps the layer far smaller than the ~900MB
+# download, which is piped straight into tar and never lands on disk.
+#
+# Use tptp.org, NOT www.tptp.org: the latter is now a Google Sites page and
+# every /TPTP/Distribution/ URL under it 404s.
+ARG TPTP_VERSION=9.3.0
+RUN mkdir -p /opt/TPTP \
+    && curl -fsSL "https://tptp.org/TPTP/Distribution/TPTP-v${TPTP_VERSION}.tgz" \
+       | tar -xz -C /opt/TPTP --strip-components=1 --wildcards \
+             "TPTP-v${TPTP_VERSION}/Problems/*/*^*.p" \
+             "TPTP-v${TPTP_VERSION}/Axioms/*" \
+    && test "$(find /opt/TPTP/Problems -name '*.p' | wc -l)" -gt 1000
+
+ENV TPTP_ROOT=/opt/TPTP
 
 # --- Locale / BEAM filename encoding -------------------------------------
 # +fnu forces the BEAM into unicode filename mode. Without it (e.g. under
@@ -29,26 +96,38 @@ ENV LANG=C.UTF-8 \
 RUN useradd -m -s /bin/zsh node \
     && echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node
 USER node
+# /workspaces/ShotTx, not /workspace: claudeman bind-mounts the project at
+# /workspaces/<repo> and reserves /workspace for CLAUDE_CONFIG_DIR. Pointing
+# WORKDIR (and the PATH tail below) at /workspace put the claudeman bin
+# directory — `notify`, `xdg-open` — on a path that does not exist.
 WORKDIR /workspaces/ShotTx
 
-# Single, deterministic PATH baked into the image. .claude/settings.json
-# repeats exactly this value (see comment there); the two must stay in
-# sync, and both must match the workspaceFolder in devcontainer.json.
+# Single, deterministic PATH baked into the image. settings.json repeats
+# exactly this value (see comment there); the two must stay in sync.
 ENV MIX_HOME=/home/node/.mix \
     HEX_HOME=/home/node/.hex \
     SHELL=/bin/zsh \
-    PATH="/home/node/.mix/escripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/workspaces/ShotTx/.claude/claudeman/bin"
+    PATH="/home/node/.mix/escripts:/opt/${ISABELLE_VERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/workspaces/ShotTx/.claude/claudeman/bin"
 
 # --- Elixir tooling + atp_mcp escript (baked in) --------------------------
 RUN mix local.hex --force && mix local.rebar --force \
     && mix escript.install hex atp_mcp --force \
     && test -x /home/node/.mix/escripts/atp_mcp
 
-# Optional: Livebook for the KinoAtpClient smart-cell demo. Comment out to
-# slim the image / speed up the build. Run inside the container with:
-#   livebook server --ip 0.0.0.0 --port 8080 examples/demo.livemd
-RUN mix escript.install hex livebook --force
+# NOTE: no Livebook in this image. The container is for claudeman (Claude
+# Code + the atp MCP server) and local StarExec work only; the KinoAtpClient
+# Livebook demo (examples/demo.livemd) is run on the host — see the README.
+
+# --- Isabelle first-run ---------------------------------------------------
+# System HOL heaps arrive prebuilt from the isabelle-src stage (built with
+# `-o system_heaps`). This call returns immediately and only serves to
+# initialise $ISABELLE_HOME_USER (~/.isabelle) so the server registry
+# directory exists before the first demo query.
+RUN isabelle build -b HOL
 
 # Sanity checks: fail the build if anything the demo depends on is missing
 # from PATH.
-RUN elixir --version && mix --version && command -v atp_mcp && command -v eprover
+RUN elixir --version && mix --version && isabelle version \
+    && command -v atp_mcp && command -v eprover \
+    && test -d "$TPTP_ROOT/Problems" \
+    && echo "TPTP problems: $(find "$TPTP_ROOT/Problems" -name '*.p' | wc -l)"

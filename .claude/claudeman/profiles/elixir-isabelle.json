@@ -1,13 +1,12 @@
 {
   "name": "elixir-isabelle",
-  "description": "Elixir 1.20 (image-native, no asdf) + Isabelle/HOL 2025-2 + atp_mcp escript + TPTP v9.2.1 corpus",
+  "description": "Elixir 1.20 (image-native, no asdf) + Isabelle/HOL 2025-2 + atp_mcp escript + TPTP v9.3.0 corpus (baked into the image, not host-mounted)",
   "build": {
-    "dockerfile": "Dockerfile-isabelle"
+    "dockerfile": "Dockerfile"
   },
-  "mounts": [
-    "source=${localEnv:HOME}/Documents/TPTP-v9.2.1,target=/opt/TPTP,type=bind,readonly"
-  ],
+  "workspaceFolder": "/workspaces/ShotTx",
   "containerEnv": {
     "TPTP_ROOT": "/opt/TPTP"
-  }
+  },
+  "remoteUser": "node"
 }

@@ -1,8 +1,11 @@
 {
-  "name": "elixir-atp",
+  "name": "elixir-isabelle",
   "build": {
     "dockerfile": "Dockerfile"
   },
   "workspaceFolder": "/workspaces/ShotTx",
+  "containerEnv": {
+    "TPTP_ROOT": "/opt/TPTP"
+  },
   "remoteUser": "node"
 }

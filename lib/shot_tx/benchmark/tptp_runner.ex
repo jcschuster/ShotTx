@@ -31,7 +31,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
     * `run_label` — the label of the parameter configuration.
     * `problem` — path relative to `TPTP/Problems`, e.g. `SYO/SYO001^1.p`.
-    * `language` — `TH0` | `TH1` | `unknown` (from the file `Syntax` header).
+    * `language` — `TH0` | `TH1` | `unknown` (from the file `SPC` header).
     * `expected_szs` — TPTP-declared status: `Theorem`, `CounterSatisfiable`,
       `Unknown`, `Open`, … (or `unknown` if the header is missing).
     * `result` — `thm` | `csa` | `unk` | `timeout` | `parser_error` |
@@ -59,7 +59,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
       files and the `STOP` sentinel for this run. Persist a stable name
       across resumes.
     * `language` (default `:both`) — `:th0`, `:th1`, or `:both`. Filters
-      problems by the `Syntax` header line.
+      problems by the `SPC` header line.
     * `problem_limit` (default `nil`) — max number of problems to process in
       this invocation (after already-completed rows are skipped). Handy for
       smoke tests.
@@ -361,21 +361,25 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # HEADER PARSING & DISCOVERY
   ##############################################################################
 
-  # Parses `% Status : Theorem` and `% Syntax : TH0_...` from a TPTP file
-  # header. Reads at most the first 40 lines to keep this cheap on the ~4000
-  # problem TH0/TH1 corpus.
+  # Parses `% Status : Theorem` and `% SPC : TH0_THM_EQU_NAR` from a TPTP file
+  # header. The language lives in the `SPC` field: `Syntax` carries formula
+  # statistics, not a language tag, in every problem of the current corpus.
+  #
+  # 50 lines rather than 40: the header is longer in some problems and the SPC
+  # line sits as deep as line 42. Reading past it would cost a full scan of
+  # every file in the ~5000 problem TH0/TH1 corpus for nothing.
   defp read_headers(abs_path) do
     lines =
       abs_path
       |> File.stream!()
-      |> Stream.take(40)
+      |> Stream.take(50)
       |> Enum.to_list()
 
-    {parse_status(lines), parse_syntax(lines)}
+    {parse_status(lines), parse_spc(lines)}
   end
 
   defp parse_status(lines), do: parse_header_field(lines, "Status", "unknown")
-  defp parse_syntax(lines), do: syntax_language(parse_header_field(lines, "Syntax", ""))
+  defp parse_spc(lines), do: syntax_language(parse_header_field(lines, "SPC", ""))
 
   defp parse_header_field(lines, field, default) do
     Enum.find_value(lines, default, fn line ->
