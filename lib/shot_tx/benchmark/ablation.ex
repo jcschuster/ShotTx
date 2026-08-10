@@ -63,9 +63,10 @@ defmodule ShotTx.Benchmark.Ablation do
   One-at-a-time ablations. Each entry differs from the baseline by a single
   component turned off (or a single enum flipped to its most neutral variant).
 
-  Off-by-default components (currently only `suggestions_enabled`) appear
-  as `<name>_on` rows that flip them on so their impact still shows up in
-  the sweep.
+  Every row must differ from the baseline in the resulting `%Parameters{}`,
+  or `matrix/1`'s deduplication drops it and the component goes unmeasured.
+  For a component that is off by default, express the row as an `<name>_on`
+  entry that flips it on.
   """
   @spec oat(pos_integer()) :: [entry()]
   def oat(base_timeout) do
@@ -82,7 +83,7 @@ defmodule ShotTx.Benchmark.Ablation do
       {"eager_unfold_defs", %{base | unfold_defs: :eager}},
       {"no_iterative_deepening", %{base | iterative_deepening: false}},
       {"serial", %{base | worker_pool_size: 1}},
-      {"suggestions_on", %{base | suggestions_enabled: true}}
+      {"no_suggestions", %{base | suggestions_enabled: false}}
     ]
   end
 

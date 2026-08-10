@@ -1,7 +1,7 @@
 {
 	"enabledMcpjsonServers": ["atp"],
 	"env": {
-		"PATH": "/home/node/.mix/escripts:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/share/npm-global/bin:/workspaces/ShotTx/.claude/claudeman/bin"
+		"PATH": "/home/node/.mix/escripts:/opt/Isabelle2025-2/bin:/home/node/.mix/escripts:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/share/npm-global/bin:/workspaces/ShotTx/.claude/claudeman/bin"
 	},
 	"hooks": {
 		"TaskCompleted": [

@@ -1,0 +1,13 @@
+{
+  "name": "elixir-isabelle",
+  "build": {
+    "dockerfile": "Dockerfile-isabelle"
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/Documents/TPTP-v9.2.1,target=/opt/TPTP,type=bind,readonly"
+  ],
+  "containerEnv": {
+    "TPTP_ROOT": "/opt/TPTP"
+  },
+  "remoteUser": "node"
+}

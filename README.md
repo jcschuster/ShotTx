@@ -199,6 +199,14 @@ export TPTP_ROOT=/path/to/TPTP
 ./scripts/run_ablation.sh
 ```
 
+The full sweep is a multi-day run, so validate the corpus first with a
+short pass — a TPTP-version mismatch surfaces as `parser_error` rows:
+
+```bash
+PROBLEM_LIMIT=20 ./scripts/run_ablation.sh smoke_results
+grep -c parser_error smoke_results/baseline.csv
+```
+
 See `ShotTx.Benchmark.Ablation` and `ShotTx.Benchmark.TptpRunner` for
 the sweep matrix and per-problem CSV format.
 

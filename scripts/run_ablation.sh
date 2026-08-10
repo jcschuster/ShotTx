@@ -15,6 +15,17 @@
 #   TPTP_ROOT        Required. Path to the TPTP directory containing Problems/.
 #   BASE_TIMEOUT     Optional. Base per-problem timeout in ms (default: 5000).
 #   LANGUAGE         Optional. th0 | th1 | both (default: both).
+#   PROBLEM_LIMIT    Optional. Max problems per configuration (default: all).
+#
+# Validate the corpus cheaply before committing to the full multi-day sweep —
+# a parser-version mismatch shows up as `parser_error` in every row:
+#
+#   PROBLEM_LIMIT=20 scripts/run_ablation.sh smoke_results
+#   grep -c parser_error smoke_results/baseline.csv
+#
+# Note that PROBLEM_LIMIT interacts with resume: the limit counts problems
+# processed in *this* invocation, so re-running with the same OUTPUT_DIR
+# advances through the corpus another PROBLEM_LIMIT problems.
 #
 # Pause a live run:
 #   touch <OUTPUT_DIR>/STOP     # graceful, waits for current problem
@@ -29,8 +40,17 @@ OUTPUT_DIR="${1:-bench_results/$(date +%Y-%m-%d_%H%M%S)}"
 BASE_TIMEOUT="${BASE_TIMEOUT:-5000}"
 LANGUAGE="${LANGUAGE:-both}"
 
+# Rendered straight into the `mix run -e` snippet, so it must be a valid Elixir
+# literal: an integer when set, `nil` (TptpRunner's "no limit") when not.
+PROBLEM_LIMIT_LITERAL="${PROBLEM_LIMIT:-nil}"
+
 if [ -z "${TPTP_ROOT:-}" ]; then
     echo "ERROR: TPTP_ROOT environment variable is not set." >&2
+    exit 1
+fi
+
+if [ "$PROBLEM_LIMIT_LITERAL" != "nil" ] && ! [[ "$PROBLEM_LIMIT_LITERAL" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: PROBLEM_LIMIT must be a positive integer, got '$PROBLEM_LIMIT'." >&2
     exit 1
 fi
 
@@ -41,6 +61,7 @@ echo "ShotTx ablation sweep"
 echo "  output_dir    = $OUTPUT_DIR"
 echo "  base_timeout  = ${BASE_TIMEOUT}ms"
 echo "  language      = $LANGUAGE"
+echo "  problem_limit = $PROBLEM_LIMIT_LITERAL"
 echo "  tptp_root     = $TPTP_ROOT"
 echo "=================================================================="
 
@@ -82,7 +103,8 @@ for LABEL in $LABELS; do
       result = ShotTx.Benchmark.TptpRunner.run_tptp(params,
         label: \"$LABEL\",
         output_dir: \"$OUTPUT_DIR\",
-        language: :$LANGUAGE
+        language: :$LANGUAGE,
+        problem_limit: $PROBLEM_LIMIT_LITERAL
       )
       if result == :stopped, do: System.halt(2), else: System.halt(0)
     " || {
