@@ -11,9 +11,14 @@ defmodule ShotTx.Prover do
     * `prove_string/1`, `prove_string/2`, `prove_string/3` — thin convenience
       wrapper that formats the outcome via `format_result/1`.
 
+  `release_term_pool/0` sits alongside them for callers that run many proofs in
+  one node.
+
   Every call spins up a fresh `ShotTx.Prover.SessionSupervisor` and blocks
   synchronously on the `Manager` until the search terminates (theorem,
-  countermodel, timeout, or exhausted iterative deepening). Configuration
+  countermodel, timeout, or exhausted iterative deepening). The session tree is
+  torn down on every exit path, including a caller that is killed outright.
+  Configuration
   is threaded through as a keyword list that is merged into a
   `ShotTx.Data.Parameters` struct — see that module for the full list of
   knobs, and `ShotTx.Config` for session-wide defaults.
@@ -192,10 +197,16 @@ defmodule ShotTx.Prover do
         {ShotTx.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
       )
 
+    reaper = start_session_reaper(session_pid)
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
-    {result, stats} = GenServer.call(manager_via, :start_proof, :infinity)
 
-    DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
+    {result, stats} =
+      try do
+        GenServer.call(manager_via, :start_proof, :infinity)
+      after
+        send(reaper, :caller_done)
+        terminate_session(session_pid)
+      end
 
     unwrapped =
       case result do
@@ -219,6 +230,45 @@ defmodule ShotTx.Prover do
   end
 
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
+
+  # The session tree hangs off a node-wide supervisor, so only this ties its
+  # lifetime to the caller's. `after` covers every exit the caller can observe;
+  # the reaper covers `Process.exit(caller, :kill)`, which it cannot.
+  defp start_session_reaper(session_pid) do
+    caller = self()
+
+    spawn(fn ->
+      ref = Process.monitor(caller)
+
+      receive do
+        {:DOWN, ^ref, :process, ^caller, _reason} -> terminate_session(session_pid)
+        :caller_done -> :ok
+      end
+    end)
+  end
+
+  # Drops the `EtsKeeper` and with it the session's tables. The reaper may race
+  # the `after` block; the loser gets `{:error, :not_found}`.
+  defp terminate_session(session_pid) do
+    DynamicSupervisor.terminate_child(ShotTx.SessionSpawner, session_pid)
+  end
+
+  @doc """
+  Drops every term memoized in the node-wide `:term_pool`.
+
+  Sessions release their own ETS tables when they terminate, but the term pool
+  is shared and only ever grows: a sweep accumulates every term of every problem
+  it has seen, and the hash-consing lookups on the hot path pay for it.
+
+  Term IDs do not survive a release. Any `ShotTx.Proof`, `ShotDs.Data.Problem`
+  or bare term ID still held becomes unreadable, so call this only between
+  problems, once the previous result has been consumed.
+  """
+  @spec release_term_pool() :: :ok
+  def release_term_pool do
+    :ets.delete_all_objects(:term_pool)
+    :ok
+  end
 
   @doc """
   Compiles a raw stats snapshot (as returned by `prove/3` with `stats: true`)

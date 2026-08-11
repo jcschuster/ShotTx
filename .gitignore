@@ -28,3 +28,5 @@ shot_main-*.tar
 # Benchmark output. Regenerate with scripts/run_hol_benchmark.sh; the figures
 # it produces are recorded in reports/.
 /bench_results/
+
+/ablation_results/

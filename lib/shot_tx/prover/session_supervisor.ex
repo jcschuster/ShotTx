@@ -3,14 +3,15 @@ defmodule ShotTx.Prover.SessionSupervisor do
   OTP supervisor owning the per-session proof-search tree.
 
   Started once per `ShotTx.Prover.prove/*` call and torn down when the caller
-  returns. Uses `:rest_for_one` so that if the `Manager` or an agent crashes,
-  its dependents restart in the correct order — the ETS keeper stays alive
-  and preserves stats/traces for post-mortem inspection.
+  returns, raises, or dies — see the reaper in `ShotTx.Prover`. Uses
+  `:rest_for_one` so that if the `Manager` or an agent crashes, its dependents
+  restart in the correct order — the ETS keeper stays alive and preserves
+  stats/traces for post-mortem inspection.
 
   Children (in start order):
 
     * `EtsKeeper` — owns the per-session tables (`:stats`, `:tombs`,
-      `:work_queue`, `:idle_queue`, `:traces`).
+      `:work_queue`, `:idle_queue`, `:traces`, `:provenance`, `:suggestions`).
     * `Task.Supervisor` — supervises async CSP dispatches from
       `ContradictionAgent`.
     * `Manager` — orchestrates workers and iterative deepening.

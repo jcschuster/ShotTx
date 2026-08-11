@@ -4,9 +4,6 @@ defmodule ShotTx.Application do
 
   @impl true
   def start(_type, _args) do
-    # cache simplifications
-    :ets.new(:term_cache, [:set, :public, :named_table, read_concurrency: true])
-
     children =
       [
         {Registry, keys: :duplicate, name: ShotTx.Prover.PubSub},

@@ -83,6 +83,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
   @spec run_tptp(Parameters.t(), [opt()]) :: :ok | :stopped
   def run_tptp(params \\ %Parameters{}, opts \\ []) do
+    Logger.configure(level: :info)
+
     label = Keyword.get(opts, :label, "default")
     output_dir = Keyword.get(opts, :output_dir, "bench_results")
     language = Keyword.get(opts, :language, :both)
@@ -168,6 +170,10 @@ defmodule ShotTx.Benchmark.TptpRunner do
       :stopped
     else
       process_one(path, tptp_root, ctx)
+
+      # The row is written, so nothing downstream can still read this problem's
+      # terms. Without this the pool carries every problem in the sweep.
+      ShotTx.Prover.release_term_pool()
 
       new_budget =
         case ctx.remaining_budget do

@@ -2,9 +2,10 @@ defmodule ShotTx.Prover.EtsKeeper do
   @moduledoc """
   GenServer that owns the ETS tables for a single proof session.
 
-  Creates five shared, public tables on startup and keeps them alive for the
-  duration of the session tree. All other processes obtain the table references
-  via `get_tables/1`.
+  Creates the shared, public tables listed below on startup and keeps them alive
+  for the duration of the session tree; they are dropped with this process when
+  the session is torn down. All other processes obtain the table references via
+  `get_tables/1`.
 
   Tables created:
   - `:stats` — proof-search counters and timing metadata.

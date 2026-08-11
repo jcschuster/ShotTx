@@ -11,14 +11,15 @@ defmodule ShotTx.Benchmark.HolRunner do
   > #### One problem per BEAM {: .warning}
   >
   > This module deliberately evaluates a *single* problem per invocation.
-  > ShotTx keeps shared state across proof sessions (the global `:term_cache`,
-  > the session registries), and a session that crashes or is killed leaves
-  > enough of it behind to change the answer for later problems in the same
-  > node — during development of this suite, one problem returned `thm`,
-  > `csa` and `prover_error` depending on what ran before it. Sweeping the
-  > suite inside one node therefore does not measure the prover; it measures
-  > the prover plus its history. `scripts/run_hol_benchmark.sh` drives the
-  > sweep with a fresh node per problem for that reason.
+  > ShotTx keeps shared state across proof sessions — the node-wide
+  > `:term_pool` (released only by `ShotTx.Prover.release_term_pool/0`) and the
+  > session registries — and enough of it survives a problem to change the
+  > answer for later ones in the same node: during development of this suite,
+  > one problem returned `thm`, `csa` and `prover_error` depending on what ran
+  > before it. Sweeping the suite inside one node therefore does not measure
+  > the prover; it measures the prover plus its history.
+  > `scripts/run_hol_benchmark.sh` drives the sweep with a fresh node per
+  > problem for that reason.
   >
   > Independent of ordering, a handful of problems are genuinely
   > nondeterministic run-to-run — the search is parallel, and which worker

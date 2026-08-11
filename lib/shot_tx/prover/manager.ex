@@ -100,22 +100,30 @@ defmodule ShotTx.Prover.Manager do
   # --- Kill Switches & Results ------------------------------------------------
 
   @impl true
+  def handle_info(:timeout, %{active_caller: nil} = state), do: {:noreply, state}
+
+  @impl true
   def handle_info(:timeout, state) do
-    if state.active_caller do
-      Logger.warning("Proof timed out!")
+    Logger.warning("Proof timed out!")
 
-      stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
-      :ets.insert(state.ets_tables.stats, {:aborted, true})
+    # Park the workers first: everything below competes with them for schedulers
+    # and lands on the caller as overshoot past its deadline.
+    :ets.insert(state.ets_tables.stats, {:aborted, true})
 
-      log_timeout_traces(state)
+    ShotTx.Prover.Stats.set(
+      state.ets_tables,
+      :proof_finished_at_us,
+      System.monotonic_time(:microsecond)
+    )
 
-      partial_proof = ShotTx.Proof.from_partial(gather_traces(state), state.formulas)
+    stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
 
-      GenServer.reply(state.active_caller, {{:timeout, partial_proof}, stats})
-      {:noreply, %{state | active_caller: nil}}
-    else
-      {:noreply, state}
-    end
+    log_timeout_traces(state)
+
+    partial_proof = ShotTx.Proof.from_partial(gather_traces(state), state.formulas)
+
+    GenServer.reply(state.active_caller, {{:timeout, partial_proof}, stats})
+    {:noreply, %{state | active_caller: nil}}
   end
 
   @impl true
@@ -406,27 +414,31 @@ defmodule ShotTx.Prover.Manager do
     end)
   end
 
+  # Thunked on purpose: rendering walks every queued and parked branch, and an
+  # interpolated string would be built here before Logger could discard it.
   defp log_timeout_traces(state) do
-    queued =
-      state.ets_tables.work_queue
-      |> :ets.tab2list()
-      |> Enum.map(fn {_key, branch} -> branch end)
+    Logger.debug(fn ->
+      queued =
+        state.ets_tables.work_queue
+        |> :ets.tab2list()
+        |> Enum.map(fn {_key, branch} -> branch end)
 
-    parked =
-      state.ets_tables.idle_queue
-      |> :ets.tab2list()
-      |> Enum.map(fn {_id, branch} -> branch end)
+      parked =
+        state.ets_tables.idle_queue
+        |> :ets.tab2list()
+        |> Enum.map(fn {_id, branch} -> branch end)
 
-    queued_str = Enum.map_join(queued, "\n", &format_branch_for_log/1)
-    parked_str = Enum.map_join(parked, "\n", &format_branch_for_log/1)
+      queued_str = Enum.map_join(queued, "\n", &format_branch_for_log/1)
+      parked_str = Enum.map_join(parked, "\n", &format_branch_for_log/1)
 
-    Logger.warning("""
-    Timeout trace — gamma_limit=#{state.current_gamma_limit} prim_limit=#{state.current_prim_depth_limit} idle_workers=#{MapSet.size(state.idle_workers)}/#{state.worker_count}
-    work_queue (#{length(queued)} branch(es)):
-    #{if queued == [], do: "  (empty)", else: queued_str}
-    idle_queue (#{length(parked)} branch(es)):
-    #{if parked == [], do: "  (empty)", else: parked_str}
-    """)
+      """
+      Timeout trace — gamma_limit=#{state.current_gamma_limit} prim_limit=#{state.current_prim_depth_limit} idle_workers=#{MapSet.size(state.idle_workers)}/#{state.worker_count}
+      work_queue (#{length(queued)} branch(es)):
+      #{if queued == [], do: "  (empty)", else: queued_str}
+      idle_queue (#{length(parked)} branch(es)):
+      #{if parked == [], do: "  (empty)", else: parked_str}
+      """
+    end)
   end
 
   defp format_branch_for_log(branch) do
