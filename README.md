@@ -124,8 +124,8 @@ branch snapshots, with shared state held in per-session ETS tables.
 ```
 ShotTx.Prover (public API)
   └─ SessionSupervisor (per-proof OTP tree)
-       ├─ EtsKeeper           — owns :stats, :tombs, :work_queue,
-       │                        :idle_queue, :traces, :suggestions
+       ├─ EtsKeeper           — owns :stats, :tombs, :work_queue, :idle_queue,
+       │                        :idle_workers, :traces, :provenance, :suggestions
        ├─ Manager             — spawns N workers, drives iterative
        │                        deepening, owns the result
        ├─ ContradictionAgent  — global closure via unification CSP

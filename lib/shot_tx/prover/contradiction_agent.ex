@@ -19,7 +19,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       branches, indexed by branch id and inherited by descendant branches.
 
   Closure is detected through three coordinated triggers, all funneling into
-  `find_global_closure/2`:
+  `find_global_closure/3`:
 
     * `check_global_closure` — eager, async via `dispatch_csp`. Runs after
       every clash or split as long as no other search is in flight.
@@ -65,6 +65,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
             params: %Parameters{},
             pending_search: nil,
             settle_waiter: nil,
+            deadline_us: nil,
             # Bumped by every piece of branch evidence. `search_version` records
             # the value a dispatched CSP was built from, so a search that
             # answers "no closure" from a snapshot older than the current
@@ -102,8 +103,18 @@ defmodule ShotTx.Prover.ContradictionAgent do
        session_id: session_id,
        params: params,
        ets_tables: ets_tables,
-       active_branches: active_branches
+       active_branches: active_branches,
+       deadline_us: proof_deadline_us(ets_tables, params)
      }}
+  end
+
+  # Derived from the timestamp `EtsKeeper` stamps at session start, so the agent
+  # shares the manager's notion of the deadline without extra plumbing.
+  defp proof_deadline_us(ets_tables, %Parameters{timeout: timeout}) do
+    case :ets.lookup(ets_tables.stats, :proof_started_at_us) do
+      [{_key, started_us}] -> started_us + timeout * 1000
+      [] -> System.monotonic_time(:microsecond) + timeout * 1000
+    end
   end
 
   @impl true
@@ -439,10 +450,12 @@ defmodule ShotTx.Prover.ContradictionAgent do
         Stats.incr(state.ets_tables, :csp_calls_skipped)
         {:noreply, state}
       else
-        Logger.warning(
+        # Fires after every clash and split, so `:warning` put it on by default
+        # and rendered both lists whether or not anything was listening.
+        Logger.debug(fn ->
           "Dispatching CSP. Branches: #{inspect(MapSet.to_list(state.active_branches))}. " <>
             "Candidates: #{inspect(Enum.map(option_lists, &length/1))}"
-        )
+        end)
 
         dispatch_csp(state, option_lists)
       end
@@ -455,6 +468,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
     tables = state.ets_tables
     depth = state.params.unification_depth
+    deadline_us = state.deadline_us
 
     task =
       Task.Supervisor.async_nolink(task_sup_via, fn ->
@@ -462,7 +476,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
         t0 = System.monotonic_time(:microsecond)
 
         result =
-          case find_global_closure(option_lists, depth) do
+          case find_global_closure(option_lists, depth, deadline_us) do
             {:ok, solution} ->
               Stats.incr(tables, :csp_calls_succeeded)
               {:closure, solution}
@@ -499,23 +513,34 @@ defmodule ShotTx.Prover.ContradictionAgent do
   # absent from `active_branches` and therefore never appear in `option_lists`.
   @typep option :: [{Term.term_id(), Term.term_id()}]
 
-  @spec find_global_closure([[option()]], non_neg_integer()) ::
+  # The cartesian product is exponential in the number of open branches, so the
+  # synchronous `:verify_csa` / `:verify_exhausted` callers could run well past
+  # the proof's deadline. Abandoning yields `:error` — the same verdict a search
+  # that completed without a unifier gives — costing completeness at the current
+  # deepening round, never soundness.
+  @spec find_global_closure([[option()]], non_neg_integer(), integer()) ::
           {:ok, UnifSolution.t()} | :error
-  defp find_global_closure(option_lists, depth) do
+  defp find_global_closure(option_lists, depth, deadline_us) do
     option_lists
     |> Enum.sort_by(&length/1)
     |> cartesian_product()
-    |> Enum.find_value(:error, fn choice ->
-      case ShotUn.unify(Enum.concat(choice), depth) |> Enum.take(1) do
-        [sol] ->
-          Logger.debug("CSP succeeded with: #{inspect(sol.substitutions)}")
-          {:ok, sol}
+    |> Enum.reduce_while(:error, fn choice, no_closure ->
+      if past_deadline?(deadline_us) do
+        {:halt, no_closure}
+      else
+        case ShotUn.unify(Enum.concat(choice), depth) |> Enum.take(1) do
+          [sol] ->
+            Logger.debug("CSP succeeded with: #{inspect(sol.substitutions)}")
+            {:halt, {:ok, sol}}
 
-        [] ->
-          nil
+          [] ->
+            {:cont, no_closure}
+        end
       end
     end)
   end
+
+  defp past_deadline?(deadline_us), do: System.monotonic_time(:microsecond) >= deadline_us
 
   defp try_close_sync(option_lists, %__MODULE__{} = state) do
     if insufficient_options?(option_lists) do
@@ -526,7 +551,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
       t0 = System.monotonic_time(:microsecond)
 
       result =
-        case find_global_closure(option_lists, state.params.unification_depth) do
+        case find_global_closure(option_lists, state.params.unification_depth, state.deadline_us) do
           {:ok, _} = ok ->
             Stats.incr(state.ets_tables, :csp_calls_succeeded)
             ok

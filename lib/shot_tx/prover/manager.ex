@@ -2,12 +2,17 @@ defmodule ShotTx.Prover.Manager do
   @moduledoc """
   GenServer that orchestrates the proof search for a single session.
 
-  On `start_proof`, seeds the root branch into the ETS work queue, spawns `N`
-  worker processes, and sets a timeout timer. Workers report back as idle when
-  their queue empties; once all workers stall the Manager triggers iterative
-  deepening by incrementing the gamma and prim-subst limits and waking the parked
-  branches. The final proof result is returned synchronously to the caller of
-  `start_proof`.
+  On `start_proof`, arms the deadline, then builds the root branch in a
+  supervised task and spawns `N` workers once it lands. Workers report back as
+  idle when their queue empties; once all workers stall the Manager triggers
+  iterative deepening by incrementing the gamma and prim-subst limits and waking
+  the parked branches. The final proof result is returned synchronously to the
+  caller of `start_proof`.
+
+  The deadline is enforced against the wall clock at the head of every callback,
+  not by the `:timeout` message alone — see `on_deadline/3`. Every step this
+  process runs on a proof's behalf must therefore stay bounded, or it defers the
+  deadline it is meant to enforce.
   """
 
   use GenServer
@@ -23,6 +28,8 @@ defmodule ShotTx.Prover.Manager do
             params: %Parameters{},
             active_caller: nil,
             timer_ref: nil,
+            deadline_us: nil,
+            seeding: nil,
             current_gamma_limit: 1,
             current_prim_depth_limit: 1,
             worker_count: 0,
@@ -32,6 +39,11 @@ defmodule ShotTx.Prover.Manager do
             parked_count: 0
 
   @root_name "root"
+
+  # How many parked branches are woken between deadline checks during a
+  # deepening round. Checking every branch would put a clock read on the hot
+  # path; checking never is what let a round run for 70s past the deadline.
+  @wake_check_interval 256
 
   ##############################################################################
   # PUBLIC API
@@ -76,12 +88,9 @@ defmodule ShotTx.Prover.Manager do
 
       :ets.insert(state.ets_tables.stats, {:aborted, false})
 
-      root_branch = Branch.new(@root_name, state.formulas, state.params, defs: state.defs)
-      priority_key = {byte_size(root_branch.id), root_branch.id}
-      :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
-
-      spawn_workers(state)
-
+      # Armed before any proof work: arming it after the root branch was built
+      # left that build outside the deadline entirely — 68s of it, on a
+      # 279-formula TH1 problem given a 2s budget.
       schedule_progress_log(state.params.progress_interval_ms)
       timer = Process.send_after(self(), :timeout, state.params.timeout)
 
@@ -90,6 +99,8 @@ defmodule ShotTx.Prover.Manager do
          state
          | active_caller: from,
            timer_ref: timer,
+           deadline_us: System.monotonic_time(:microsecond) + state.params.timeout * 1000,
+           seeding: seed_root_branch(state),
            current_gamma_limit: state.params.initial_gamma_limit,
            current_prim_depth_limit: state.params.initial_prim_limit,
            idle_workers: MapSet.new()
@@ -97,40 +108,57 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  # --- Kill Switches & Results ------------------------------------------------
+  # Lambda-lifts, ingests and indexes every input formula, which on a large
+  # problem outlasts the whole proof budget. Run inline it would block this
+  # process throughout, leaving the deadline unenforceable however early the
+  # timer was armed.
+  defp seed_root_branch(%__MODULE__{} = state) do
+    %{formulas: formulas, params: params, defs: defs} = state
 
-  @impl true
-  def handle_info(:timeout, %{active_caller: nil} = state), do: {:noreply, state}
-
-  @impl true
-  def handle_info(:timeout, state) do
-    Logger.warning("Proof timed out!")
-
-    # Park the workers first: everything below competes with them for schedulers
-    # and lands on the caller as overshoot past its deadline.
-    :ets.insert(state.ets_tables.stats, {:aborted, true})
-
-    ShotTx.Prover.Stats.set(
-      state.ets_tables,
-      :proof_finished_at_us,
-      System.monotonic_time(:microsecond)
-    )
-
-    stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
-
-    log_timeout_traces(state)
-
-    partial_proof = ShotTx.Proof.from_partial(gather_traces(state), state.formulas)
-
-    GenServer.reply(state.active_caller, {{:timeout, partial_proof}, stats})
-    {:noreply, %{state | active_caller: nil}}
+    Task.Supervisor.async_nolink(task_sup_via(state), fn ->
+      {:root_branch, Branch.new(@root_name, formulas, params, defs: defs)}
+    end)
   end
 
+  defp task_sup_via(state),
+    do: {:via, Registry, {ShotTx.Prover.ProcessRegistry, {state.session_id, :task_supervisor}}}
+
+  # --- Deadline ---------------------------------------------------------------
+
+  # `:timeout` is only as punctual as the mailbox in front of it: worker casts
+  # fan into this one process, and a backlog that outgrows the drain rate defers
+  # the deadline indefinitely. Reading the clock at the head of every callback
+  # keeps the deadline enforceable whatever is queued; the timer remains the
+  # ordinary trigger.
   @impl true
-  def handle_info(:log_progress, %{active_caller: nil} = state), do: {:noreply, state}
+  def handle_info(message, state), do: on_deadline(&do_handle_info/2, message, state)
 
   @impl true
-  def handle_info(:log_progress, state) do
+  def handle_cast(message, state), do: on_deadline(&do_handle_cast/2, message, state)
+
+  defp on_deadline(handler, message, state) do
+    if overdue?(state) do
+      {:noreply, finish_with_timeout(state)}
+    else
+      handler.(message, state)
+    end
+  end
+
+  defp overdue?(%__MODULE__{active_caller: nil}), do: false
+  defp overdue?(%__MODULE__{deadline_us: nil}), do: false
+
+  defp overdue?(%__MODULE__{deadline_us: deadline_us}),
+    do: System.monotonic_time(:microsecond) >= deadline_us
+
+  # --- Kill Switches & Results ------------------------------------------------
+
+  defp do_handle_info(:timeout, %{active_caller: nil} = state), do: {:noreply, state}
+
+  defp do_handle_info(:timeout, state), do: {:noreply, finish_with_timeout(state)}
+
+  defp do_handle_info(:log_progress, %{active_caller: nil} = state), do: {:noreply, state}
+
+  defp do_handle_info(:log_progress, state) do
     stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
     queue_size = :ets.info(state.ets_tables.work_queue, :size)
     parked_size = :ets.info(state.ets_tables.idle_queue, :size)
@@ -150,10 +178,67 @@ defmodule ShotTx.Prover.Manager do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info(_, state) do
+  defp do_handle_info({ref, {:root_branch, root_branch}}, %{seeding: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+
+    priority_key = {byte_size(root_branch.id), root_branch.id}
+    :ets.insert(state.ets_tables.work_queue, {priority_key, root_branch})
+
+    # Workers start only now: one that finds an empty queue reports itself idle,
+    # and an all-idle pool is what triggers a deepening round — starting them
+    # before the root exists would deepen against nothing.
+    spawn_workers(state)
+
+    {:noreply, %{state | seeding: nil}}
+  end
+
+  defp do_handle_info({:DOWN, ref, :process, _pid, reason}, %{seeding: %Task{ref: ref}} = state) do
+    {:noreply, finish_with_error(state, {:root_branch_failed, reason})}
+  end
+
+  defp do_handle_info(_, state) do
     {:noreply, state}
   end
+
+  defp finish_with_timeout(state) do
+    Logger.warning("Proof timed out!")
+
+    # Park the workers first: everything below competes with them for schedulers
+    # and lands on the caller as overshoot past its deadline.
+    :ets.insert(state.ets_tables.stats, {:aborted, true})
+    cancel_seeding(state.seeding)
+
+    ShotTx.Prover.Stats.set(
+      state.ets_tables,
+      :proof_finished_at_us,
+      System.monotonic_time(:microsecond)
+    )
+
+    stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
+
+    log_timeout_traces(state)
+
+    partial_proof = ShotTx.Proof.from_partial(gather_traces(state), state.formulas)
+
+    GenServer.reply(state.active_caller, {{:timeout, partial_proof}, stats})
+    %{state | active_caller: nil, seeding: nil}
+  end
+
+  # The root branch could not be built. There is no tableau to time out on, so
+  # the caller gets an error rather than a partial proof.
+  defp finish_with_error(%{active_caller: nil} = state, _reason), do: state
+
+  defp finish_with_error(state, reason) do
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    :ets.insert(state.ets_tables.stats, {:aborted, true})
+
+    stats = ShotTx.Prover.Stats.snapshot(state.ets_tables)
+    GenServer.reply(state.active_caller, {{:error, reason}, stats})
+    %{state | active_caller: nil, seeding: nil}
+  end
+
+  defp cancel_seeding(nil), do: :ok
+  defp cancel_seeding(%Task{} = task), do: Task.shutdown(task, :brutal_kill)
 
   defp schedule_progress_log(interval) when is_integer(interval) and interval > 0 do
     Process.send_after(self(), :log_progress, interval)
@@ -166,14 +251,7 @@ defmodule ShotTx.Prover.Manager do
 
   # --- Worker Tracking & Deepening --------------------------------------------
 
-  @impl true
-  def handle_cast({:worker_active, worker_id}, state) do
-    new_idle = MapSet.delete(state.idle_workers, worker_id)
-    {:noreply, %{state | idle_workers: new_idle}}
-  end
-
-  @impl true
-  def handle_cast({:worker_idle, worker_id}, state) do
+  defp do_handle_cast({:worker_idle, worker_id}, state) do
     case :ets.lookup(state.ets_tables.stats, :aborted) do
       [{:aborted, true}] ->
         {:noreply, state}
@@ -188,14 +266,12 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  @impl true
-  def handle_cast({:branch_saturated, branch_id, data}, state) do
+  defp do_handle_cast({:branch_saturated, branch_id, data}, state) do
     new_sat = Map.put(state.saturated_branches, branch_id, data)
     {:noreply, %{state | saturated_branches: new_sat}}
   end
 
-  @impl true
-  def handle_cast({:branch_exhausted, branch_id}, state) do
+  defp do_handle_cast({:branch_exhausted, branch_id}, state) do
     {:noreply, %{state | exhausted_branches: MapSet.put(state.exhausted_branches, branch_id)}}
   end
 
@@ -203,15 +279,15 @@ defmodule ShotTx.Prover.Manager do
   # as a countermodel. Forget the saturated set before re-deciding: it is never
   # emptied on its own, so leaving it in place sends `check_and_trigger_deepening/1`
   # straight back into the same dead end and deepening never resumes.
-  @impl true
-  def handle_cast(:csa_undecided, state) do
+  defp do_handle_cast(:csa_undecided, state) do
     check_and_trigger_deepening(%{state | saturated_branches: %{}})
   end
 
-  @impl true
-  def handle_cast({:proof_result, result}, state) do
+  defp do_handle_cast({:proof_result, result}, state) do
     if state.active_caller do
-      Logger.info("Manager received final result: #{inspect(result)}")
+      # Thunked: a `:unsat` result carries the whole trace store, so inspecting
+      # it eagerly renders the entire proof on every successful search.
+      Logger.info(fn -> "Manager received final result: #{inspect(result)}" end)
       if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
 
       ShotTx.Prover.Stats.set(
@@ -230,8 +306,7 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  @impl true
-  def handle_cast({:branch_parked, _branch_id}, state) do
+  defp do_handle_cast({:branch_parked, _branch_id}, state) do
     {:noreply, %{state | parked_count: state.parked_count + 1}}
   end
 
@@ -310,19 +385,12 @@ defmodule ShotTx.Prover.Manager do
     end
   end
 
-  # Settling is bounded by whatever is left of the proof's own deadline, never
-  # `:infinity`. The agent answers this call only once its global-closure task
-  # finishes, and that task is an exponential cartesian product over every open
-  # branch's clash candidates — on a wide tableau it runs for minutes. While
-  # the manager blocks here it cannot process its own `:timeout` message, so
-  # the deadline it is supposed to enforce silently stops applying: a 3 s proof
-  # was observed returning after 197 s.
-  #
-  # Giving up on the settle is safe. `:open` is what the agent reports when it
-  # finds no closure, so treating a late answer as `:open` merely deepens or
-  # falls through to the timeout — the timeout message is already queued and is
-  # handled as soon as this returns. A reply that lands afterwards goes to a
-  # caller that has stopped listening, which `GenServer.reply/2` tolerates.
+  # Bounded by whatever is left of the proof's own deadline, never `:infinity`:
+  # the agent replies only once its global-closure search finishes, and blocking
+  # here would defer the manager's own `:timeout` (a 3s proof was observed
+  # returning after 197s). Giving up is safe — `:open` is what the agent reports
+  # when it finds no closure, and a late reply goes to a caller that has stopped
+  # listening, which `GenServer.reply/2` tolerates.
   defp settle(state) do
     GenServer.call(ca_via(state), :settle, settle_budget(state))
   catch
@@ -383,17 +451,41 @@ defmodule ShotTx.Prover.Manager do
      }}
   end
 
+  # Unbounded work in the process that must stay responsive to its own deadline.
+  # Draining a key at a time, rather than snapshotting the table, bounds both the
+  # heap this copies into and how far a deepening round runs past the deadline.
+  # Branches left parked stay in the idle queue, where a timeout would have found
+  # them anyway.
   defp transfer_idle_to_work_queue(state, ets_tables, cost_fn) do
-    parked_branches = :ets.tab2list(ets_tables.idle_queue)
+    woken = drain_idle_queue(state, ets_tables, cost_fn, 0)
+    %{state | parked_count: max(state.parked_count - woken, 0)}
+  end
 
-    Enum.each(parked_branches, fn {id, branch} ->
-      awakened_branch = Branch.wake_up(branch, cost_fn)
-      priority_key = {byte_size(id), id}
-      :ets.insert(ets_tables.work_queue, {priority_key, awakened_branch})
-    end)
+  defp drain_idle_queue(state, ets_tables, cost_fn, woken) do
+    case :ets.first(ets_tables.idle_queue) do
+      :"$end_of_table" ->
+        woken
 
-    :ets.delete_all_objects(ets_tables.idle_queue)
-    %{state | parked_count: 0}
+      id ->
+        wake_parked(ets_tables, id, cost_fn)
+
+        if rem(woken + 1, @wake_check_interval) == 0 and overdue?(state) do
+          woken + 1
+        else
+          drain_idle_queue(state, ets_tables, cost_fn, woken + 1)
+        end
+    end
+  end
+
+  defp wake_parked(ets_tables, id, cost_fn) do
+    case :ets.take(ets_tables.idle_queue, id) do
+      [{^id, branch}] ->
+        priority_key = {byte_size(id), id}
+        :ets.insert(ets_tables.work_queue, {priority_key, Branch.wake_up(branch, cost_fn)})
+
+      [] ->
+        :ok
+    end
   end
 
   defp gather_traces(state) do

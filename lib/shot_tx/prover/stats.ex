@@ -121,16 +121,26 @@ defmodule ShotTx.Prover.Stats do
   # USER-FACING COMPILATION & FORMATTING
   ##############################################################################
 
+  # Must stay in step with `ShotTx.Prover.Worker.rule_key/1`, which is what
+  # writes these counters. A key produced there but missing here is dropped from
+  # both the breakdown and `rules.total`, since that total is the sum over this
+  # list — `rule_equality_expansion` was undercounting every sweep that way.
   @rule_keys ~w(
     rule_alpha rule_beta rule_gamma rule_gamma_finite rule_delta
     rule_rename rule_atomic rule_instantiate rule_prim_subst
-    rule_suggested_instantiate
+    rule_suggested_instantiate rule_equality_expansion
     rule_contradiction rule_tautology rule_other
   )a
 
+  # `branches_errored` counts branches whose rule application raised and were
+  # reported undecidable rather than proved so. It is the one counter here that
+  # signals a defect rather than a search outcome, and it was previously written
+  # but never reported — a configuration degrading this way looked identical to
+  # one that simply could not close the tableau.
   @branch_counter_keys ~w(
     branches_activated_total branches_split branches_instantiate_children
-    branches_closed_locally branches_saturated
+    branches_closed_locally branches_saturated branches_exhausted
+    branches_errored
   )a
 
   @doc """

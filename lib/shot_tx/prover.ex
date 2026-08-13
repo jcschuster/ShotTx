@@ -91,12 +91,14 @@ defmodule ShotTx.Prover do
       when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
     {defs, params} = Keyword.pop(opts, :defs, %{})
 
-    Logger.info(
+    # Thunked: `format!/2` runs over every assumption, so a problem with
+    # thousands of axioms would render all of them even when nothing logs.
+    Logger.info(fn ->
       "Attempting to prove:\n" <>
         Enum.map_join(assumptions, ", ", &format!(&1, _hide_types = true)) <>
         " ⊢ " <>
         format!(conclusion)
-    )
+    end)
 
     closed_conclusion = close_formula(conclusion)
     closed_assms = Enum.map(assumptions, &close_formula/1)

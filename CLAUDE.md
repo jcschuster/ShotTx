@@ -25,8 +25,8 @@ The prover uses a distributed tableau calculus. Proof search is split across con
 ```
 ShotTx.Prover (public API)
   └─ SessionSupervisor (per-proof OTP tree)
-       ├─ EtsKeeper        — creates :stats, :tombs, :work_queue, :idle_queue, :traces,
-       │                     :provenance, :suggestions tables
+       ├─ EtsKeeper        — creates :stats, :tombs, :work_queue, :idle_queue,
+       │                     :idle_workers, :traces, :provenance, :suggestions tables
        ├─ Manager          — spawns N workers, drives iterative deepening, owns the result
        ├─ ContradictionAgent — global closure detection and SAT countermodel extraction
        └─ DynamicSupervisor → Worker × N

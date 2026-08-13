@@ -31,6 +31,7 @@ defmodule ShotTx.Data.Parameters do
   | `suggestions_enabled` | `true` | Feature flag for `ShotTx.Prover.SuggestionAgent`. When `true` (default), SA runs pair-level unification on local clashes and emits instantiation hints. When `false`, SA subscribes to nothing and stays a no-op. |
   | `suggestion_cascade_ceiling` | `3` | Cap on how many times any single suggestion (keyed by `{branch_prefix, recipe, term}`) may be spliced across all descendants of its `birth_branch`. Bounds the feedback loop where an applied suggestion produces fresh clashes → new unifiers → new suggestions. Enforced via `:ets.update_counter/3` at the splice site. |
   | `worker_pool_size` | `:auto` | Number of `Worker` processes the `Manager` spawns. `:auto` uses `System.schedulers_online()`; a positive integer pins the pool. Set to `1` for a serial baseline. |
+  | `worker_yield_limit` | `10` | Rule applications a `Worker` performs on one branch before returning it to the shared queue. Lower values spread a deep branch across the pool at the cost of re-queueing; higher values keep it on one worker and can starve the others. |
   | `contradiction_agent` | `true` | When `true`, `ContradictionAgent` performs global unification-based closure across open branches via the `shot_un` CSP. When `false`, the agent still tracks branch state (needed for SAT extraction) but never dispatches a CSP; only local, per-branch ground clashes can close the proof. Ablation switch for "with/without global closure". |
   | `primitive_substitution` | `true` | When `true`, γ-rules whose bound type has goal `:o` schedule a `:prim_subst` companion after `prim_subst_after` firings. When `false`, prim-subst is never scheduled regardless of `initial_prim_limit`. Hard off-switch for the general-bindings enumeration; equality/higher-order reasoning falls back to Leibniz/extensional expansion and paramodulation. |
   | `iterative_deepening` | `true` | When `true`, the `Manager` bumps `gamma_limit` and `prim_depth_limit` by 1 every time all workers stall, then wakes parked branches. When `false`, deepening never fires: once workers are all idle the prover returns `:unknown` with the initial limits. Use with elevated `initial_gamma_limit` / `initial_prim_limit` to run at a fixed depth. |
@@ -67,6 +68,7 @@ defmodule ShotTx.Data.Parameters do
             suggestions_enabled: true,
             suggestion_cascade_ceiling: 3,
             worker_pool_size: :auto,
+            worker_yield_limit: 10,
             contradiction_agent: true,
             primitive_substitution: true,
             iterative_deepening: true,
@@ -101,6 +103,7 @@ defmodule ShotTx.Data.Parameters do
           suggestions_enabled: boolean(),
           suggestion_cascade_ceiling: non_neg_integer(),
           worker_pool_size: :auto | pos_integer(),
+          worker_yield_limit: pos_integer(),
           contradiction_agent: boolean(),
           primitive_substitution: boolean(),
           iterative_deepening: boolean(),

@@ -35,7 +35,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
     * `expected_szs` — TPTP-declared status: `Theorem`, `CounterSatisfiable`,
       `Unknown`, `Open`, … (or `unknown` if the header is missing).
     * `result` — `thm` | `csa` | `unk` | `timeout` | `parser_error` |
-      `prover_error` | `unexpected` | `no_conjecture`.
+      `prover_error` | `no_conjecture`.
     * `correct` — `yes` | `no` | `n/a`. Only decidable when both the expected
       status is one of `Theorem` / `CounterSatisfiable` and the prover
       terminated with a definite answer.
@@ -64,6 +64,19 @@ defmodule ShotTx.Benchmark.TptpRunner do
       this invocation (after already-completed rows are skipped). Handy for
       smoke tests.
     * `problem_filter` (default `nil`) — a function `(relative_path -> boolean)`.
+    * `log_level` (default `:none`) — level applied to the *prover's* Logger for
+      the duration of the run. The runner's own progress and result lines go
+      straight to standard output and are unaffected. Raising it costs search
+      time as well as screen space: Logger skips argument evaluation for
+      suppressed calls, and several hot sites build their message eagerly.
+
+  ### Progress output
+
+  One line per problem on standard output, with a running ETA extrapolated
+  from the problems completed so far *in this invocation*:
+
+      [baseline] 142/5138 2.8% | SYO/SYO001^1.p → thm 152ms correct=yes | elapsed 00:04:11 eta 02:27:03
+
   """
 
   require Logger
@@ -80,10 +93,11 @@ defmodule ShotTx.Benchmark.TptpRunner do
           | {:language, :th0 | :th1 | :both}
           | {:problem_limit, pos_integer() | nil}
           | {:problem_filter, (String.t() -> boolean()) | nil}
+          | {:log_level, Logger.level() | :none}
 
   @spec run_tptp(Parameters.t(), [opt()]) :: :ok | :stopped
   def run_tptp(params \\ %Parameters{}, opts \\ []) do
-    Logger.configure(level: :info)
+    Logger.configure(level: Keyword.get(opts, :log_level, :none))
 
     label = Keyword.get(opts, :label, "default")
     output_dir = Keyword.get(opts, :output_dir, "bench_results")
@@ -110,8 +124,10 @@ defmodule ShotTx.Benchmark.TptpRunner do
       |> discover_problems(problem_filter)
       |> Enum.reject(&MapSet.member?(completed, relative_path(&1, tptp_root)))
 
-    Logger.info(
-      "TptpRunner[#{label}]: #{length(problems)} problem(s) to process; " <>
+    total = min(length(problems), problem_limit || length(problems))
+
+    notice(
+      "TptpRunner[#{label}]: #{total} problem(s) to process; " <>
         "#{MapSet.size(completed)} already completed."
     )
 
@@ -121,7 +137,10 @@ defmodule ShotTx.Benchmark.TptpRunner do
       language: language,
       csv_path: csv_path,
       stop_path: stop_path,
-      remaining_budget: problem_limit
+      remaining_budget: problem_limit,
+      done: 0,
+      total: total,
+      started_at_ms: System.monotonic_time(:millisecond)
     })
   end
 
@@ -154,22 +173,24 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # MAIN LOOP
   ##############################################################################
 
-  defp process_all([], _tptp_root, %{label: label}) do
-    Logger.info("TptpRunner[#{label}]: done.")
+  defp process_all([], _tptp_root, ctx) do
+    notice("TptpRunner[#{ctx.label}]: done. #{ctx.done} problem(s) in #{elapsed(ctx)}.")
     :ok
   end
 
-  defp process_all(_problems, _tptp_root, %{remaining_budget: 0, label: label}) do
-    Logger.info("TptpRunner[#{label}]: hit problem_limit.")
+  defp process_all(_problems, _tptp_root, %{remaining_budget: 0} = ctx) do
+    notice("TptpRunner[#{ctx.label}]: hit problem_limit after #{elapsed(ctx)}.")
     :ok
   end
 
   defp process_all([path | rest], tptp_root, %{stop_path: stop_path, label: label} = ctx) do
     if File.exists?(stop_path) do
-      Logger.warning("TptpRunner[#{label}]: STOP sentinel present, halting.")
+      notice("TptpRunner[#{label}]: STOP sentinel present, halting.")
       :stopped
     else
-      process_one(path, tptp_root, ctx)
+      advanced = %{ctx | done: ctx.done + 1}
+
+      process_one(path, tptp_root, advanced)
 
       # The row is written, so nothing downstream can still read this problem's
       # terms. Without this the pool carries every problem in the sweep.
@@ -181,7 +202,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
           n when is_integer(n) -> n - 1
         end
 
-      process_all(rest, tptp_root, %{ctx | remaining_budget: new_budget})
+      process_all(rest, tptp_root, %{advanced | remaining_budget: new_budget})
     end
   end
 
@@ -191,14 +212,15 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
     if match_language?(language, ctx.language) do
       {time_micro, {result_tag, details, stats}} =
-        :timer.tc(fn -> run_one(abs_path, ctx.params) end)
+        :timer.tc(fn -> run_one(abs_path, ctx) end)
 
       time_ms = div(time_micro, 1000)
       correct = score(expected, result_tag)
 
-      Logger.info(
-        "[#{ctx.label}] #{rel_path} → #{result_tag} " <>
-          "(expected #{expected}, #{time_ms}ms, correct=#{correct})"
+      IO.puts(
+        "[#{ctx.label}] #{ctx.done}/#{ctx.total} #{percent(ctx)} | " <>
+          "#{rel_path} → #{result_tag} #{time_ms}ms correct=#{correct} | " <>
+          "elapsed #{elapsed(ctx)} eta #{eta(ctx)}"
       )
 
       append_row(
@@ -218,17 +240,23 @@ defmodule ShotTx.Benchmark.TptpRunner do
     end
   end
 
-  defp run_one(abs_path, params) do
-    try do
-      case Tptp.parse_tptp_file(abs_path, :custom) do
-        {:ok, problem} -> prove_problem(problem, params)
-        {:error, reason} -> {:parser_error, to_string(reason), %{}}
-      end
-    rescue
-      e -> {:parser_error, Exception.message(e), %{}}
-    catch
-      :exit, reason -> {:prover_error, inspect(reason), %{}}
+  # Parsing and proving are rescued separately so the CSV attributes a failure
+  # to the phase it happened in. The previous single `try` wrapped both, so an
+  # exception raised inside `Prover.prove/3` was recorded as `parser_error`.
+  defp run_one(abs_path, ctx) do
+    case parse_problem(abs_path) do
+      {:ok, problem} -> prove_problem(problem, ctx.params)
+      {:error, message} -> {:parser_error, message, %{}}
     end
+  end
+
+  defp parse_problem(abs_path) do
+    case Tptp.parse_tptp_file(abs_path, :custom) do
+      {:ok, problem} -> {:ok, problem}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   defp prove_problem(%{conjecture: nil}, _params), do: {:no_conjecture, "", %{}}
@@ -254,6 +282,10 @@ defmodule ShotTx.Benchmark.TptpRunner do
       {:timeout, _} -> {:timeout, "", stats_map}
       {:error, reason} -> {:prover_error, inspect(reason), stats_map}
     end
+  rescue
+    e -> {:prover_error, Exception.message(e), %{}}
+  catch
+    :exit, reason -> {:prover_error, inspect(reason), %{}}
   end
 
   @stats_columns [
@@ -285,6 +317,41 @@ defmodule ShotTx.Benchmark.TptpRunner do
   defp stats_cells(stats), do: Enum.map(@stats_columns, &to_string(Map.get(stats, &1, "")))
 
   ##############################################################################
+  # PROGRESS REPORTING
+  ##############################################################################
+
+  # The runner's own output goes straight to standard output rather than
+  # through Logger, so that silencing the prover (`log_level: :none`, the
+  # default) never takes the progress report with it.
+  defp notice(message), do: IO.puts(message)
+
+  defp percent(%{done: done, total: total}) when total > 0,
+    do: "#{Float.round(done / total * 100, 1)}%"
+
+  defp percent(_ctx), do: "--%"
+
+  defp elapsed(ctx), do: format_duration(System.monotonic_time(:millisecond) - ctx.started_at_ms)
+
+  # Extrapolates from the mean cost of the problems finished so far. That mean
+  # is a poor predictor over the first handful of problems and a decent one by
+  # a few hundred in, which is the regime the estimate is actually read in.
+  defp eta(%{done: done}) when done <= 0, do: "--:--:--"
+
+  defp eta(%{done: done, total: total} = ctx) do
+    (System.monotonic_time(:millisecond) - ctx.started_at_ms)
+    |> div(done)
+    |> Kernel.*(max(total - done, 0))
+    |> format_duration()
+  end
+
+  defp format_duration(milliseconds) do
+    total_seconds = div(milliseconds, 1000)
+
+    [div(total_seconds, 3600), rem(div(total_seconds, 60), 60), rem(total_seconds, 60)]
+    |> Enum.map_join(":", &(&1 |> Integer.to_string() |> String.pad_leading(2, "0")))
+  end
+
+  ##############################################################################
   # CSV HELPERS
   ##############################################################################
 
@@ -307,8 +374,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
     case File.read(meta_path) do
       {:ok, existing} ->
         if params_line(existing) != params_line(current) do
-          Logger.warning(
-            "TptpRunner[#{label}]: parameters differ from previous run recorded in " <>
+          notice(
+            "WARNING TptpRunner[#{label}]: parameters differ from previous run recorded in " <>
               meta_path <> ". Resumed CSV may mix configurations."
           )
         end

@@ -11,7 +11,8 @@ defmodule ShotTx.Prover.SessionSupervisor do
   Children (in start order):
 
     * `EtsKeeper` — owns the per-session tables (`:stats`, `:tombs`,
-      `:work_queue`, `:idle_queue`, `:traces`, `:provenance`, `:suggestions`).
+      `:work_queue`, `:idle_queue`, `:idle_workers`, `:traces`, `:provenance`,
+      `:suggestions`).
     * `Task.Supervisor` — supervises async CSP dispatches from
       `ContradictionAgent`.
     * `Manager` — orchestrates workers and iterative deepening.

@@ -19,9 +19,8 @@ defmodule ShotTx.Prover.Worker do
             current_gamma_limit: 1,
             current_prim_depth_limit: 1,
             current_branch: nil,
-            steps_since_yield: 0
-
-  @yield_limit 10
+            steps_since_yield: 0,
+            idle?: false
 
   ##############################################################################
   # PUBLIC API
@@ -81,11 +80,17 @@ defmodule ShotTx.Prover.Worker do
       "Worker #{state.id} waking up. Gamma: #{new_gamma}, Prim depth: #{new_prim_depth}"
     )
 
-    new_state = %{
-      state
-      | current_gamma_limit: new_gamma,
-        current_prim_depth_limit: new_prim_depth
-    }
+    # A deepening round clears the manager's idle set, so every worker must
+    # report its stall again for the next round to be detected. Without this an
+    # already-idle worker would stay silent and the pool would never again
+    # register as fully stalled.
+    new_state =
+      %{
+        state
+        | current_gamma_limit: new_gamma,
+          current_prim_depth_limit: new_prim_depth
+      }
+      |> mark_busy()
 
     {:noreply, new_state, {:continue, :process_next}}
   end
@@ -122,16 +127,17 @@ defmodule ShotTx.Prover.Worker do
   defp do_process_next(%{current_branch: nil} = state) do
     case checkout_work(state.ets_tables.work_queue) do
       {:ok, branch} ->
+        working = mark_busy(state)
+
         if poisoned?(branch.id, state.ets_tables) do
-          {:noreply, state, {:continue, :process_next}}
+          {:noreply, working, {:continue, :process_next}}
         else
-          spliced = splice_suggestions(branch, state)
-          {:noreply, %{state | current_branch: spliced}, {:continue, :process_next}}
+          spliced = splice_suggestions(branch, working)
+          {:noreply, %{working | current_branch: spliced}, {:continue, :process_next}}
         end
 
       :empty ->
-        notify_manager(state.session_id, {:worker_idle, state.id})
-        {:noreply, state}
+        {:noreply, mark_idle(state)}
     end
   end
 
@@ -140,10 +146,10 @@ defmodule ShotTx.Prover.Worker do
       poisoned?(branch.id, state.ets_tables) ->
         {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
 
-      steps >= @yield_limit ->
+      steps >= state.params.worker_yield_limit ->
         Stats.incr(state.ets_tables, :worker_yields)
         spliced = splice_suggestions(branch, state)
-        push_work(state.ets_tables.work_queue, spliced, state.session_id)
+        push_work(state.ets_tables, spliced)
 
         {:noreply, %{state | current_branch: nil, steps_since_yield: 0},
          {:continue, :process_next}}
@@ -189,6 +195,25 @@ defmodule ShotTx.Prover.Worker do
     end
   end
 
+  # Edge-triggered: the manager keeps idle workers in a `MapSet`, so reporting on
+  # every empty poll cost a message and told it nothing new. The ETS row is what
+  # `push_work/2` reads to wake only workers actually waiting, written here so
+  # the two cannot disagree.
+  defp mark_idle(%{idle?: true} = state), do: state
+
+  defp mark_idle(state) do
+    :ets.insert(state.ets_tables.idle_workers, {self(), true})
+    notify_manager(state.session_id, {:worker_idle, state.id})
+    %{state | idle?: true}
+  end
+
+  defp mark_busy(%{idle?: false} = state), do: state
+
+  defp mark_busy(state) do
+    :ets.delete(state.ets_tables.idle_workers, self())
+    %{state | idle?: false}
+  end
+
   ##############################################################################
   # RESULT HANDLING & SIDE EFFECTS
   ##############################################################################
@@ -212,8 +237,8 @@ defmodule ShotTx.Prover.Worker do
 
     broadcast_evidence(state.session_id, {:branch_split, parent_id, [a.id, b.id]})
 
-    push_work(state.ets_tables.work_queue, a, state.session_id)
-    push_work(state.ets_tables.work_queue, b, state.session_id)
+    push_work(state.ets_tables, a)
+    push_work(state.ets_tables, b)
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
   end
 
@@ -228,7 +253,7 @@ defmodule ShotTx.Prover.Worker do
 
     broadcast_evidence(state.session_id, {:branch_split, parent_id, child_ids})
 
-    Enum.each(branches, fn b -> push_work(state.ets_tables.work_queue, b, state.session_id) end)
+    Enum.each(branches, fn b -> push_work(state.ets_tables, b) end)
     {:noreply, %{state | current_branch: nil, steps_since_yield: 0}, {:continue, :process_next}}
   end
 
@@ -356,13 +381,15 @@ defmodule ShotTx.Prover.Worker do
     end
   end
 
-  defp push_work(table, branch, session_id) do
+  # Only parked workers are told. A worker already holding a branch discards
+  # `:work_available` on arrival, so dispatching to the whole topic cost N-1
+  # useless messages per push — worst exactly during a blow-up, when every worker
+  # is busy and this table is empty.
+  defp push_work(ets_tables, branch) do
     priority_key = {byte_size(branch.id), branch.id}
-    :ets.insert(table, {priority_key, branch})
+    :ets.insert(ets_tables.work_queue, {priority_key, branch})
 
-    Registry.dispatch(ShotTx.Prover.PubSub, "branch_control_#{session_id}", fn entries ->
-      for {pid, _} <- entries, do: send(pid, :work_available)
-    end)
+    for {pid, _} <- :ets.tab2list(ets_tables.idle_workers), do: send(pid, :work_available)
   end
 
   defp poisoned?(branch_id, ets_tables) do
@@ -451,6 +478,7 @@ defmodule ShotTx.Prover.Worker do
   defp rule_key({:rename, _}), do: :rule_rename
   defp rule_key({:atomic, _}), do: :rule_atomic
   defp rule_key({:gamma, _, _, _, _}), do: :rule_gamma
+  defp rule_key({:gamma_finite, _, _}), do: :rule_gamma_finite
   defp rule_key({:prim_subst, _, _, _, _}), do: :rule_prim_subst
   defp rule_key({:instantiate, _, _}), do: :rule_instantiate
   defp rule_key({:suggested_instantiate, _, _}), do: :rule_suggested_instantiate

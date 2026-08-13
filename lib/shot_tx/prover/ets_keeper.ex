@@ -15,6 +15,9 @@ defmodule ShotTx.Prover.EtsKeeper do
   - `:traces` — per-branch rule application history for proof reconstruction.
   - `:provenance` — per-fresh-variable annotation (γ / prim-subst origin);
     see `ShotTx.Prover.Provenance`.
+  - `:idle_workers` — `{worker_pid, true}` for each worker currently parked on
+    an empty queue. Read by `ShotTx.Prover.Worker` when it pushes a branch, so
+    that a push only wakes workers actually waiting for one.
   - `:suggestions` — instantiation hints published by `SuggestionAgent`,
     consumed by workers on splice; see `ShotTx.Prover.Suggestion`. Rows
     are `{{prefix, recipe, term}, applied_count, %Suggestion{}}` so that
@@ -50,6 +53,13 @@ defmodule ShotTx.Prover.EtsKeeper do
       idle_queue:
         :ets.new(:idle_queue, [:set, :public, read_concurrency: true, write_concurrency: true]),
       traces: :ets.new(:traces, [:set, :public, read_concurrency: true, write_concurrency: true]),
+      idle_workers:
+        :ets.new(:idle_workers, [
+          :set,
+          :public,
+          read_concurrency: true,
+          write_concurrency: true
+        ]),
       provenance:
         :ets.new(:provenance, [:set, :public, read_concurrency: true, write_concurrency: true]),
       suggestions:
