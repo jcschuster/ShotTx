@@ -112,7 +112,7 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, "~> 1.2"},
+      {:shot_ds, github: "jcschuster/ShotDs", override: true},
       # Unification algorithm
       {:shot_un, "~> 0.1"},
       # NCPO Term Ordering
