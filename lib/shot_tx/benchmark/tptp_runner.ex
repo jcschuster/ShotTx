@@ -13,6 +13,10 @@ defmodule ShotTx.Benchmark.TptpRunner do
     * **Pausable.** Between problems, the runner checks for a `STOP`
       sentinel file in the output directory and exits cleanly if it exists.
       Delete the file to resume.
+    * **Wall-clock bounded.** Parsing and proving each run in a throwaway
+      process the runner kills when its budget expires, so no single problem
+      can stall a sweep. A killed phase is still recorded as a CSV row
+      (`parse_timeout` / `hard_timeout`), so the data set stays complete.
     * **SZS-scored.** The TPTP problem header (`% Status : ...`) is parsed
       from each file so the CSV records whether the prover's answer matched
       the expected TPTP status.
@@ -34,8 +38,11 @@ defmodule ShotTx.Benchmark.TptpRunner do
     * `language` — `TH0` | `TH1` | `unknown` (from the file `SPC` header).
     * `expected_szs` — TPTP-declared status: `Theorem`, `CounterSatisfiable`,
       `Unknown`, `Open`, … (or `unknown` if the header is missing).
-    * `result` — `thm` | `csa` | `unk` | `timeout` | `parser_error` |
-      `prover_error` | `no_conjecture`.
+    * `result` — `thm` | `csa` | `unk` | `timeout` | `parse_timeout` |
+      `hard_timeout` | `parser_error` | `prover_error` | `no_conjecture`.
+      `timeout` is the prover reporting its own budget exhausted;
+      `hard_timeout` is the runner killing a prover that overran it anyway;
+      `parse_timeout` is the parser killed before the prover ever started.
     * `correct` — `yes` | `no` | `n/a`. Only decidable when both the expected
       status is one of `Theorem` / `CounterSatisfiable` and the prover
       terminated with a definite answer.
@@ -69,13 +76,33 @@ defmodule ShotTx.Benchmark.TptpRunner do
       straight to standard output and are unaffected. Raising it costs search
       time as well as screen space: Logger skips argument evaluation for
       suppressed calls, and several hot sites build their message eagerly.
+    * `parse_timeout` (default `60_000` ms) — wall-clock budget for parsing
+      one problem. A handful of TPTP problems pull in enough `include`s to
+      keep the parser busy for many minutes; those are killed at the budget
+      and recorded as `parse_timeout`.
+    * `prove_grace` (default `10_000` ms) — slack added to
+      `params.timeout` to obtain the wall-clock budget for the proof attempt.
+      The prover's own timeout is cooperative (workers have to come back
+      around to notice it); this is the hard backstop, recorded as
+      `hard_timeout`.
+
+  ### Parse cache
+
+  The parser never sees `%Parameters{}`, so a problem that times out or fails to
+  parse under one configuration does the same under all of them. The first
+  configuration to hit one appends the outcome to `<output_dir>/parse_cache`;
+  later configurations replay it from there instead of paying the parse again —
+  which is the difference between one 60-second stall and one per configuration.
+  Successful parses are not cached: the parsed problem is what the prover needs.
+  Delete the file to force a re-attempt (e.g. after a parser fix).
 
   ### Progress output
 
-  One line per problem on standard output, with a running ETA extrapolated
-  from the problems completed so far *in this invocation*:
+  One line per problem on standard output, prefixed with the local wall-clock
+  time and carrying an ETA extrapolated from the problems completed so far *in
+  this invocation*:
 
-      [baseline] 142/5138 2.8% | SYO/SYO001^1.p → thm 152ms correct=yes | elapsed 00:04:11 eta 02:27:03
+      [07-28 14:03:22] [baseline] 142/5138 2.8% | SYO/SYO001^1.p → thm 152ms correct=yes | elapsed 00:04:11 eta 02:27:03
 
   """
 
@@ -85,6 +112,9 @@ defmodule ShotTx.Benchmark.TptpRunner do
   alias ShotTx.Prover
 
   @stop_sentinel "STOP"
+  @parse_cache "parse_cache"
+  @default_parse_timeout 60_000
+  @default_prove_grace 10_000
 
   @typedoc "Runner options."
   @type opt ::
@@ -94,6 +124,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
           | {:problem_limit, pos_integer() | nil}
           | {:problem_filter, (String.t() -> boolean()) | nil}
           | {:log_level, Logger.level() | :none}
+          | {:parse_timeout, pos_integer()}
+          | {:prove_grace, non_neg_integer()}
 
   @spec run_tptp(Parameters.t(), [opt()]) :: :ok | :stopped
   def run_tptp(params \\ %Parameters{}, opts \\ []) do
@@ -104,6 +136,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
     language = Keyword.get(opts, :language, :both)
     problem_limit = Keyword.get(opts, :problem_limit)
     problem_filter = Keyword.get(opts, :problem_filter)
+    parse_timeout = Keyword.get(opts, :parse_timeout, @default_parse_timeout)
+    prove_grace = Keyword.get(opts, :prove_grace, @default_prove_grace)
 
     tptp_root =
       System.get_env("TPTP_ROOT") ||
@@ -118,6 +152,13 @@ defmodule ShotTx.Benchmark.TptpRunner do
     completed = load_completed(csv_path, label)
 
     stop_path = Path.join(output_dir, @stop_sentinel)
+    parse_cache_path = Path.join(output_dir, @parse_cache)
+    parse_cache = load_parse_cache(parse_cache_path)
+
+    # Linked to the runner, so an abandoned sweep takes its phase processes
+    # with it. `async_nolink` below keeps the traffic one-way: a phase that
+    # crashes is reported back as a value, never as an exit signal.
+    {:ok, task_sup} = Task.Supervisor.start_link()
 
     problems =
       tptp_root
@@ -128,7 +169,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
     notice(
       "TptpRunner[#{label}]: #{total} problem(s) to process; " <>
-        "#{MapSet.size(completed)} already completed."
+        "#{MapSet.size(completed)} already completed, " <>
+        "#{map_size(parse_cache)} known-unparsable."
     )
 
     process_all(problems, tptp_root, %{
@@ -137,6 +179,11 @@ defmodule ShotTx.Benchmark.TptpRunner do
       language: language,
       csv_path: csv_path,
       stop_path: stop_path,
+      parse_cache_path: parse_cache_path,
+      parse_cache: parse_cache,
+      task_sup: task_sup,
+      parse_timeout: parse_timeout,
+      prove_timeout: params.timeout + prove_grace,
       remaining_budget: problem_limit,
       done: 0,
       total: total,
@@ -212,12 +259,12 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
     if match_language?(language, ctx.language) do
       {time_micro, {result_tag, details, stats}} =
-        :timer.tc(fn -> run_one(abs_path, ctx) end)
+        :timer.tc(fn -> run_one(abs_path, rel_path, ctx) end)
 
       time_ms = div(time_micro, 1000)
       correct = score(expected, result_tag)
 
-      IO.puts(
+      notice(
         "[#{ctx.label}] #{ctx.done}/#{ctx.total} #{percent(ctx)} | " <>
           "#{rel_path} → #{result_tag} #{time_ms}ms correct=#{correct} | " <>
           "elapsed #{elapsed(ctx)} eta #{eta(ctx)}"
@@ -243,23 +290,67 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # Parsing and proving are rescued separately so the CSV attributes a failure
   # to the phase it happened in. The previous single `try` wrapped both, so an
   # exception raised inside `Prover.prove/3` was recorded as `parser_error`.
-  defp run_one(abs_path, ctx) do
-    case parse_problem(abs_path) do
-      {:ok, problem} -> prove_problem(problem, ctx.params)
-      {:error, message} -> {:parser_error, message, %{}}
+  defp run_one(abs_path, rel_path, ctx) do
+    case parse_phase(abs_path, rel_path, ctx) do
+      {:ok, problem} -> prove_phase(problem, ctx)
+      {:error, tag, message} -> {tag, message, %{}}
     end
   end
 
-  defp parse_problem(abs_path) do
-    case Tptp.parse_tptp_file(abs_path, :custom) do
-      {:ok, problem} -> {:ok, problem}
-      {:error, reason} -> {:error, to_string(reason)}
+  # A parse that timed out or failed once does the same again: the parser never
+  # sees `%Parameters{}`, so its outcome is identical under every configuration
+  # of the sweep. Replaying it from the cache turns "one stalled parse per
+  # configuration" into "one stalled parse".
+  defp parse_phase(abs_path, rel_path, ctx) do
+    case Map.fetch(ctx.parse_cache, rel_path) do
+      {:ok, {tag, message}} -> {:error, tag, "cached: " <> message}
+      :error -> parse_problem(abs_path, rel_path, ctx)
     end
-  rescue
-    e -> {:error, Exception.message(e)}
   end
 
-  defp prove_problem(%{conjecture: nil}, _params), do: {:no_conjecture, "", %{}}
+  defp parse_problem(abs_path, rel_path, ctx) do
+    parse = fn ->
+      try do
+        Tptp.parse_tptp_file(abs_path, :custom)
+      rescue
+        e -> {:error, Exception.message(e)}
+      end
+    end
+
+    case isolated(ctx.task_sup, ctx.parse_timeout, parse) do
+      {:ok, {:ok, problem}} ->
+        {:ok, problem}
+
+      {:ok, {:error, reason}} ->
+        cache_parse_failure(ctx, rel_path, :parser_error, to_string(reason))
+
+      {:exit, reason} ->
+        cache_parse_failure(ctx, rel_path, :parser_error, inspect(reason))
+
+      :timeout ->
+        cache_parse_failure(
+          ctx,
+          rel_path,
+          :parse_timeout,
+          "parse exceeded #{ctx.parse_timeout}ms"
+        )
+    end
+  end
+
+  defp cache_parse_failure(ctx, rel_path, tag, message) do
+    record_parse_failure(ctx.parse_cache_path, rel_path, tag, message)
+    {:error, tag, message}
+  end
+
+  defp prove_phase(%{conjecture: nil}, _ctx), do: {:no_conjecture, "", %{}}
+
+  defp prove_phase(problem, ctx) do
+    case isolated(ctx.task_sup, ctx.prove_timeout, fn -> prove_problem(problem, ctx.params) end) do
+      {:ok, outcome} -> outcome
+      {:exit, reason} -> {:prover_error, inspect(reason), %{}}
+      :timeout -> {:hard_timeout, "killed after #{ctx.prove_timeout}ms", %{}}
+    end
+  end
 
   defp prove_problem(problem, params) do
     {_name, conclusion} = problem.conjecture
@@ -286,6 +377,29 @@ defmodule ShotTx.Benchmark.TptpRunner do
     e -> {:prover_error, Exception.message(e), %{}}
   catch
     :exit, reason -> {:prover_error, inspect(reason), %{}}
+  end
+
+  ##############################################################################
+  # WALL-CLOCK ISOLATION
+  ##############################################################################
+
+  # `try/after` cannot bound a runaway computation — `after` runs once the body
+  # returns, however long that takes. The only hard wall-clock guarantee on the
+  # BEAM is a separate process the caller can kill, which is what this is.
+  #
+  # `async_nolink` keeps a crashing phase from taking the runner down with it,
+  # and a killed proof attempt is cleaned up by `Prover`'s session reaper, which
+  # monitors its caller — here, the task.
+  @spec isolated(pid(), pos_integer(), (-> result)) :: {:ok, result} | {:exit, term()} | :timeout
+        when result: term()
+  defp isolated(task_sup, timeout, fun) do
+    task = Task.Supervisor.async_nolink(task_sup, fun)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, value} -> {:ok, value}
+      {:exit, reason} -> {:exit, reason}
+      nil -> :timeout
+    end
   end
 
   @stats_columns [
@@ -322,8 +436,12 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
   # The runner's own output goes straight to standard output rather than
   # through Logger, so that silencing the prover (`log_level: :none`, the
-  # default) never takes the progress report with it.
-  defp notice(message), do: IO.puts(message)
+  # default) never takes the progress report with it. Every line carries the
+  # local wall-clock time: a sweep runs for days, and `elapsed`/`eta` alone
+  # cannot say when a line was printed or whether the run is still moving.
+  defp notice(message), do: IO.puts(stamp() <> " " <> message)
+
+  defp stamp, do: "[" <> Calendar.strftime(NaiveDateTime.local_now(), "%m-%d %H:%M:%S") <> "]"
 
   defp percent(%{done: done, total: total}) when total > 0,
     do: "#{Float.round(done / total * 100, 1)}%"
@@ -422,6 +540,41 @@ defmodule ShotTx.Benchmark.TptpRunner do
       MapSet.new()
     end
   end
+
+  # Shared across every configuration of a sweep, unlike the per-label CSVs:
+  # one tab-separated `path <TAB> tag <TAB> message` line per problem that
+  # could not be parsed. A malformed line is dropped rather than fatal — the
+  # cache is an optimisation, and re-parsing is always a correct fallback.
+  defp load_parse_cache(parse_cache_path) do
+    case File.read(parse_cache_path) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.flat_map(&parse_cache_entry/1)
+        |> Map.new()
+
+      {:error, :enoent} ->
+        %{}
+    end
+  end
+
+  defp parse_cache_entry(line) do
+    case String.split(line, "\t") do
+      [rel_path, "parse_timeout", message] -> [{rel_path, {:parse_timeout, message}}]
+      [rel_path, "parser_error", message] -> [{rel_path, {:parser_error, message}}]
+      _malformed -> []
+    end
+  end
+
+  defp record_parse_failure(parse_cache_path, rel_path, tag, message) do
+    entry =
+      [rel_path, Atom.to_string(tag), message |> single_line() |> String.slice(0, 200)]
+      |> Enum.join("\t")
+
+    File.write!(parse_cache_path, entry <> "\n", [:append])
+  end
+
+  defp single_line(text), do: String.replace(text, ~r/\s+/, " ")
 
   defp append_row(csv_path, cells) do
     line = Enum.map_join(cells, ",", &sanitize/1) <> "\n"

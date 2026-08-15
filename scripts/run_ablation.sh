@@ -19,6 +19,18 @@
 #                    reflect the ablated component and not a differing budget.
 #   LANGUAGE         Optional. th0 | th1 | both (default: both).
 #   PROBLEM_LIMIT    Optional. Max problems per configuration (default: all).
+#   PARSE_TIMEOUT    Optional. Wall-clock budget in ms for parsing one problem
+#                    (default: 60000). Problems whose includes keep the parser
+#                    busy past this are killed and recorded as `parse_timeout`.
+#                    Timed-out and failed parses are both appended to
+#                    $OUTPUT_DIR/parse_cache and replayed from there by the
+#                    remaining configurations — the parser's verdict does not
+#                    depend on the prover parameters, so each is paid once per
+#                    sweep rather than once per configuration.
+#   PROVE_GRACE      Optional. Slack in ms added to BASE_TIMEOUT to obtain the
+#                    hard wall-clock budget for a proof attempt (default: 10000).
+#                    A prover that overruns its own cooperative timeout is killed
+#                    and recorded as `hard_timeout`.
 #
 # Validate the corpus cheaply before committing to the full multi-day sweep —
 # a parser-version mismatch shows up as `parser_error` in every row:
@@ -42,6 +54,12 @@ set -euo pipefail
 OUTPUT_DIR="${1:-bench_results/$(date +%Y-%m-%d_%H%M%S)}"
 BASE_TIMEOUT="${BASE_TIMEOUT:-2000}"
 LANGUAGE="${LANGUAGE:-both}"
+PARSE_TIMEOUT="${PARSE_TIMEOUT:-60000}"
+PROVE_GRACE="${PROVE_GRACE:-10000}"
+
+# Prefixes a line with the local wall-clock time, so a multi-day sweep's log
+# says when each configuration started and finished, not just how long it took.
+stamp() { date '+[%m-%d %H:%M:%S]'; }
 
 # Rendered straight into the `mix run -e` snippet, so it must be a valid Elixir
 # literal: an integer when set, `nil` (TptpRunner's "no limit") when not.
@@ -72,8 +90,11 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "=================================================================="
 echo "ShotTx ablation sweep"
+echo "  started       = $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "  output_dir    = $OUTPUT_DIR"
 echo "  base_timeout  = ${BASE_TIMEOUT}ms"
+echo "  parse_timeout = ${PARSE_TIMEOUT}ms"
+echo "  prove_grace   = ${PROVE_GRACE}ms"
 echo "  language      = $LANGUAGE"
 echo "  problem_limit = $PROBLEM_LIMIT_LITERAL"
 echo "  tptp_root     = $TPTP_ROOT"
@@ -115,7 +136,7 @@ for LABEL in $LABELS; do
 
     echo ""
     echo "------------------------------------------------------------------"
-    echo "[$INDEX/$TOTAL] Config: $LABEL"
+    echo "$(stamp) [$INDEX/$TOTAL] Config: $LABEL"
     echo "  writing -> $CSV_PATH"
     echo "------------------------------------------------------------------"
 
@@ -126,7 +147,9 @@ for LABEL in $LABELS; do
         label: \"$LABEL\",
         output_dir: \"$OUTPUT_DIR\",
         language: :$LANGUAGE,
-        problem_limit: $PROBLEM_LIMIT_LITERAL
+        problem_limit: $PROBLEM_LIMIT_LITERAL,
+        parse_timeout: $PARSE_TIMEOUT,
+        prove_grace: $PROVE_GRACE
       )
       if result == :stopped, do: System.halt(2), else: System.halt(0)
     " || {
@@ -142,5 +165,8 @@ done
 
 echo ""
 echo "=================================================================="
-echo "Sweep complete. $TOTAL configurations in $OUTPUT_DIR/"
+echo "$(stamp) Sweep complete. $TOTAL configurations in $OUTPUT_DIR/"
+if [ -f "$OUTPUT_DIR/parse_cache" ]; then
+    echo "  $(wc -l < "$OUTPUT_DIR/parse_cache") problem(s) unparsable; see $OUTPUT_DIR/parse_cache"
+fi
 echo "=================================================================="

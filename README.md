@@ -207,6 +207,14 @@ PROBLEM_LIMIT=20 ./scripts/run_ablation.sh smoke_results
 grep -c parser_error smoke_results/baseline.csv
 ```
 
+Parsing and proving each run under a hard wall-clock budget
+(`PARSE_TIMEOUT`, default 60s; `BASE_TIMEOUT + PROVE_GRACE` for the proof
+attempt), so no single problem can stall the sweep — a few TPTP problems
+pull in enough `include`s to keep the parser busy for many minutes. A
+killed phase still yields a CSV row (`parse_timeout` / `hard_timeout`),
+and unparsable problems are recorded in `<output_dir>/parse_cache` so
+later configurations replay the verdict instead of re-parsing.
+
 See `ShotTx.Benchmark.Ablation` and `ShotTx.Benchmark.TptpRunner` for
 the sweep matrix and per-problem CSV format.
 

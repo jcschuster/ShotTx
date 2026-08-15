@@ -193,13 +193,7 @@ defmodule ShotTx.Prover do
     :ok = validate_term_order!(formulas, params)
     session_id = make_ref() |> inspect()
 
-    {:ok, session_pid} =
-      DynamicSupervisor.start_child(
-        ShotTx.SessionSpawner,
-        {ShotTx.Prover.SessionSupervisor, {session_id, formulas, defs, params}}
-      )
-
-    reaper = start_session_reaper(session_pid)
+    {session_pid, reaper} = start_session({session_id, formulas, defs, params})
     manager_via = {:via, Registry, {ShotTx.Prover.ProcessRegistry, {session_id, :manager}}}
 
     {result, stats} =
@@ -233,21 +227,55 @@ defmodule ShotTx.Prover do
 
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
 
-  # The session tree hangs off a node-wide supervisor, so only this ties its
-  # lifetime to the caller's. `after` covers every exit the caller can observe;
-  # the reaper covers `Process.exit(caller, :kill)`, which it cannot.
-  defp start_session_reaper(session_pid) do
+  # The session tree hangs off a node-wide supervisor, so only the reaper ties
+  # its lifetime to the caller's. `after` covers every exit the caller can
+  # observe; the reaper covers `Process.exit(caller, :kill)`, which it cannot.
+  #
+  # The reaper starts the session itself, once its monitor is in place. Handing
+  # it an already-started session instead leaves a window — caller killed after
+  # `start_child` returns but before the monitor is set — in which a fully
+  # running session, workers and ETS tables and all, is orphaned for the
+  # lifetime of the node. That window is precisely what a harness enforcing a
+  # wall-clock budget on `prove/3` aims at.
+  defp start_session(session_spec) do
     caller = self()
+    ref = make_ref()
 
-    spawn(fn ->
-      ref = Process.monitor(caller)
+    {reaper, monitor_ref} =
+      spawn_monitor(fn ->
+        caller_ref = Process.monitor(caller)
 
-      receive do
-        {:DOWN, ^ref, :process, ^caller, _reason} -> terminate_session(session_pid)
-        :caller_done -> :ok
-      end
-    end)
+        outcome =
+          DynamicSupervisor.start_child(ShotTx.SessionSpawner, session_child(session_spec))
+
+        send(caller, {ref, outcome})
+        await_caller(outcome, caller, caller_ref)
+      end)
+
+    receive do
+      {^ref, {:ok, session_pid}} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {session_pid, reaper}
+
+      {^ref, other} ->
+        Process.demonitor(monitor_ref, [:flush])
+        raise "ShotTx could not start a proof session: #{inspect(other)}"
+
+      {:DOWN, ^monitor_ref, :process, ^reaper, reason} ->
+        raise "ShotTx session reaper died before starting the session: #{inspect(reason)}"
+    end
   end
+
+  defp session_child(session_spec), do: {ShotTx.Prover.SessionSupervisor, session_spec}
+
+  defp await_caller({:ok, session_pid}, caller, caller_ref) do
+    receive do
+      {:DOWN, ^caller_ref, :process, ^caller, _reason} -> terminate_session(session_pid)
+      :caller_done -> :ok
+    end
+  end
+
+  defp await_caller(_failed_start, _caller, _caller_ref), do: :ok
 
   # Drops the `EtsKeeper` and with it the session's tables. The reaper may race
   # the `after` block; the loser gets `{:error, :not_found}`.
