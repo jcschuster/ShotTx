@@ -218,7 +218,7 @@ res = ~f"""
   (p @ ^[X : $o]: $true)
 )
 =>
-![Y : $o>$o]: p @ Y
+![Y : $o>$o]: (p @ Y)
 """
 |> prove
 format_result res
@@ -237,7 +237,7 @@ res = ~f"""
   (p @ ^[X : $o]: $true)
 )
 =>
-?[Y : $o>$o]: ~ p @ Y
+?[Y : $o>$o]: (~ (p @ Y))
 """
 |> prove
 format_result res
@@ -257,7 +257,7 @@ render res
 ```
 
 ```elixir
-res = ~f"p @ a & q @ a => ?[X : $i>$o]: X @ a & X @ b" |> prove
+res = ~f"p @ a & q @ a => (?[X : $i>$o]: ((X @ a) & (X @ b)))" |> prove
 format_result res
 ```
 
@@ -266,7 +266,7 @@ render res
 ```
 
 ```elixir
-res = ~f"p @ a & q @ b => ?[X : $i>$o]: X @ a & X @ b & X != (^[Y: $i]: $true)"
+res = ~f"p @ a & q @ b => (?[X : $i>$o]: (((X @ a) & (X @ b)) & (X != (^[Y: $i]: $true))))"
 |> prove
 format_result res
 ```

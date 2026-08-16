@@ -16,8 +16,7 @@ defmodule ShotTx.MixProject do
       docs: docs(),
       package: package(),
       name: "ShotTx",
-      description:
-        "Tableau component of Shot, a parallel Church Simple Type Theory theorem prover.",
+      description: "Tableau component of Shot, a parallel higher-order theorem prover.",
       source_url: @source_url
     ]
   end

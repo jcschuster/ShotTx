@@ -35,6 +35,12 @@ defmodule ShotTx.Prover.Branch do
       branch literal under the enlarged equation set and discards any that
       changed.
 
+  Both are traced. A rewrite is buffered in `pending_rewrites` and committed
+  by the next `record/4` just after the rule that triggered it, so replaying
+  the history yields the terms the branch actually holds — the rule's raw
+  output, then its normal form. An untraced rewrite would leave every step
+  downstream of it citing a formula the trace never produced.
+
   Only rewrites whose matcher σ is the empty substitution are admitted (the
   equation LHS must be structurally identical to the target subterm, or a
   primitive η-expansion `λv̄. h(v̄)` matching an applied subterm's head
@@ -72,11 +78,13 @@ defmodule ShotTx.Prover.Branch do
             queue: nil,
             defs: %{},
             equations: %{},
+            equation_origins: %{},
             literals: MapSet.new(),
             sleeping_gamma_rules: [],
             type_universe: MapSet.new(),
             ground_terms: %{},
             history: [],
+            pending_rewrites: [],
             last_clash: nil,
             processed_rules: MapSet.new(),
             term_ids: MapSet.new(),
@@ -132,6 +140,7 @@ defmodule ShotTx.Prover.Branch do
     expanded_formulas
     |> Enum.reduce(skel, &insert_formula(&2, &1, defs, params))
     |> then(fn b -> Enum.reduce(expanded_formulas, b, &ingest_formula(&2, &1, params)) end)
+    |> flush_rewrites()
   end
 
   # Runs lambda-lifting once per user formula. For each formula that produces
@@ -414,12 +423,14 @@ defmodule ShotTx.Prover.Branch do
       %{recorded | id: recorded.id <> "_A"}
       |> insert_formula(b1, recorded.defs, params)
       |> ingest_formula(b1, params)
+      |> flush_rewrites()
       |> bump_frontier([source], [b1])
 
     sib_branch =
       %{recorded | id: recorded.id <> "_B"}
       |> insert_formula(b2, recorded.defs, params)
       |> ingest_formula(b2, params)
+      |> flush_rewrites()
       |> bump_frontier([source], [b2])
 
     if params.beta_variant do
@@ -816,6 +827,7 @@ defmodule ShotTx.Prover.Branch do
           |> unfold_equations(recorded.equations, defs, params)
           |> insert_formula(b_term, defs, params)
           |> ingest_formula(b_term, params)
+          |> flush_rewrites()
           |> bump_frontier([], [b_term])
 
         [c_branch | acc_branches]
@@ -848,7 +860,7 @@ defmodule ShotTx.Prover.Branch do
         {normal,
          branch
          |> Map.update!(:term_ids, &MapSet.put(&1, normal))
-         |> record(term_id, :demodulation, [normal])}
+         |> note_rewrite(term_id, normal)}
     end
   end
 
@@ -987,7 +999,13 @@ defmodule ShotTx.Prover.Branch do
         pending_closure: pending
     }
 
-    register_ground_subterms(base, effective, params)
+    # `effective` — not `formula` — is what the branch queues, classifies and
+    # eventually closes on. Leaving the rewrite untraced strands the closing
+    # literal outside the proof: it cites a term no recorded step ever produced,
+    # so `⊥` comes out with no justification at all.
+    base
+    |> note_rewrite(formula, effective)
+    |> register_ground_subterms(effective, params)
   end
 
   defp reinsert_rule(queue, source, rule, cost_fn) do
@@ -1024,8 +1042,8 @@ defmodule ShotTx.Prover.Branch do
     case TF.get_term!(effective_id) do
       equality(lhs, rhs) when lhs != rhs ->
         branch
-        |> ingest_equation(lhs, rhs, params)
-        |> ingest_asserted_equality(lhs, rhs, params)
+        |> ingest_equation(lhs, rhs, term_id, params)
+        |> ingest_asserted_equality(lhs, rhs, term_id, params)
 
       _ ->
         branch
@@ -1041,10 +1059,10 @@ defmodule ShotTx.Prover.Branch do
   #
   # The shape arises whenever `:rename` abbreviates an equality as a constant
   # and a later `:instantiate` fixes that constant to `⊤`.
-  defp ingest_asserted_equality(branch, lhs, rhs, params) do
+  defp ingest_asserted_equality(branch, lhs, rhs, origin, params) do
     case {TF.get_term!(lhs), TF.get_term!(rhs)} do
-      {equality(l, r), truth()} when l != r -> ingest_equation(branch, l, r, params)
-      {truth(), equality(l, r)} when l != r -> ingest_equation(branch, l, r, params)
+      {equality(l, r), truth()} when l != r -> ingest_equation(branch, l, r, origin, params)
+      {truth(), equality(l, r)} when l != r -> ingest_equation(branch, l, r, origin, params)
       _ -> branch
     end
   end
@@ -1074,11 +1092,19 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  defp ingest_equation(branch, lhs, rhs, params) do
+  # `origin` is the branch formula the equation was read off. The oriented pair
+  # is often no formula the branch ever held — `orient_pair/3` may flip it, and
+  # `ingest_asserted_equality/5` digs it out of an enclosing `(s = t) = ⊤` — so
+  # only the origin gives `unfold_equations/4` a step it can cite.
+  defp ingest_equation(branch, lhs, rhs, origin, params) do
     {ol, or_} = orient_pair(lhs, rhs, params.term_order)
     new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
 
-    %{branch | equations: new_equations}
+    %{
+      branch
+      | equations: new_equations,
+        equation_origins: Map.put_new(branch.equation_origins, {ol, or_}, origin)
+    }
     |> backward_demodulate(params)
   end
 
@@ -1118,8 +1144,8 @@ defmodule ShotTx.Prover.Branch do
           # classified and paramodulated correctly.
           acc
           |> Map.update!(:literals, &(&1 |> MapSet.delete(lit) |> MapSet.put(normal)))
+          |> note_rewrite(lit, normal)
           |> insert_formula(normal, acc.defs, params)
-          |> record(lit, :demodulation, [normal])
       end
     end)
   end
@@ -1176,8 +1202,39 @@ defmodule ShotTx.Prover.Branch do
     orient_top(rebuilt, order)
   end
 
+  # Commits a rule firing, then the rewrites the rule's own insertions
+  # performed. History is newest-first, so the buffered rewrites sit *above*
+  # the rule entry and replay right after it.
   defp record(branch, source, rule, produced) do
-    %{branch | history: [{source, rule, produced} | branch.history]}
+    %{
+      branch
+      | history: branch.pending_rewrites ++ [{source, rule, produced} | branch.history],
+        pending_rewrites: []
+    }
+  end
+
+  # Buffers a rewrite performed on a formula's way into the branch. The entry
+  # cannot go straight into `history`: normalization happens while the rule
+  # that produced the formula is still assembling its own record, and `record/4`
+  # prepends, so a direct write would place the rewrite *before* the step it
+  # rewrites — proof reconstruction would then label the normal form ahead of
+  # its source and resolve neither.
+  defp note_rewrite(branch, formula, formula), do: branch
+
+  defp note_rewrite(%__MODULE__{} = branch, formula, effective) do
+    %{
+      branch
+      | pending_rewrites: [{formula, :demodulation, [effective]} | branch.pending_rewrites]
+    }
+  end
+
+  # Commits buffered rewrites without a rule entry to hang them on. Needed by
+  # `new/4` (which never records) and by the rules that record *before* they
+  # insert (β, `:instantiate`), where `record/4` has already run.
+  defp flush_rewrites(%__MODULE__{pending_rewrites: []} = branch), do: branch
+
+  defp flush_rewrites(%__MODULE__{} = branch) do
+    %{branch | history: branch.pending_rewrites ++ branch.history, pending_rewrites: []}
   end
 
   # Frontier is the coarse "what does this branch commit to for a model finder"
@@ -1229,11 +1286,11 @@ defmodule ShotTx.Prover.Branch do
   # reported as a countermodel.
   #
   # Re-inserting the unfolded equality routes it back through classification,
-  # where `⊤ = ⊥` simplifies to a contradiction and closes the branch.
+  # where `(⊤ ∧ ⊤) = ⊥` expands to `(⊤ ∧ ⊤) ≡ ⊥` and closes the branch.
   defp unfold_equations(branch, equations, defs, %Parameters{} = params) do
     for {lhs, rhs_set} <- equations, rhs <- rhs_set, reduce: branch do
       acc ->
-        equation = eq(lhs, rhs)
+        equation = equation_origin(acc, lhs, rhs)
 
         case unfold_if_possible(equation, defs) do
           nil ->
@@ -1246,6 +1303,12 @@ defmodule ShotTx.Prover.Branch do
             |> record(equation, {:atomic, equation}, [unfolded])
         end
     end
+  end
+
+  # Falls back to rebuilding the equation for pairs seeded through `new/4`'s
+  # `:equations` option, which carry no origin.
+  defp equation_origin(%__MODULE__{equation_origins: origins}, lhs, rhs) do
+    Map.get_lazy(origins, {lhs, rhs}, fn -> eq(lhs, rhs) end)
   end
 
   defp check_local_clashes(new_term, existing, params) do

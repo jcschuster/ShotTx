@@ -15,35 +15,35 @@ defmodule ShotTx.SoundnessTest do
   @leibniz1 """
   thf(leibniz_t, type, l: A > A > $o).
   thf(leibniz_def, definition,
-    l = ^[X, Y]: ![P]: P @ X => P @ Y
+    l = ^[X, Y]: ![P]: (P @ X => P @ Y)
   ).
   """
 
   @leibniz2 """
   thf(leibniz_t, type, l: A > A > $o).
   thf(leibniz_def, definition,
-    l = ^[X, Y]: ![P]: P @ X <= P @ Y
+    l = ^[X, Y]: ![P]: (P @ X <= P @ Y)
   ).
   """
 
   @leibniz3 """
   thf(leibniz_t, type, l: A > A > $o).
   thf(leibniz_def, definition,
-    l = ^[X, Y]: ![P]: P @ X <=> P @ Y
+    l = ^[X, Y]: ![P]: (P @ X <=> P @ Y)
   ).
   """
 
   @andrews """
   thf(andrews_t, type, a: A > A > $o).
   thf(andrews_def, definition,
-    a = ^[X, Y]: ![Q]: ((![Z]: Q @ Z @ Z) => Q @ X @ Y)
+    a = ^[X, Y]: ![Q]: ((![Z]: (Q @ Z @ Z)) => Q @ X @ Y)
   ).
   """
 
   @extensional """
   thf(extensional_t, type, e: (A>B) > (A>B) > $o).
   thf(extensional_def, definition,
-    e = ^[X, Y]: ![Z]: X @ Z = Y @ Z
+    e = ^[X, Y]: ![Z]: (X @ Z = Y @ Z)
   ).
   """
 
@@ -75,7 +75,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       thf(q_type, type, q : $i>$i>$o).
       thf(conj, conjecture,
-        (?[X:$i]: ![Y: $i]: q @ X @ Y) | (?[U:$i]: ![V:$i]: ~ (q @ V @ U))
+        (?[X:$i]: ![Y: $i]: (q @ X @ Y)) | (?[U:$i]: ![V:$i]: (~ (q @ V @ U)))
       ).
       """)
     end
@@ -85,7 +85,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       thf(q_type, type, q: $i>$i>$o).
       thf(conj, conjecture,
-        ?[Y:$i]: ![X:$i]: ( (![Z:$i]: q @ X @ Z) | ~(q @ X @ Y) )
+        ?[Y:$i]: ![X:$i]: ( (![Z:$i]: (q @ X @ Z)) | ~(q @ X @ Y) )
       ).
       """)
     end
@@ -94,7 +94,7 @@ defmodule ShotTx.SoundnessTest do
     test "F has a fixpoint (bare equality)" do
       assert_not_theorem(~p"""
       thf(conj, conjecture,
-        ![F:$i>$i]: ?[X:$i]: F @ X = X
+        ![F:$i>$i]: ?[X:$i]: (F @ X = X)
       ).
       """)
     end
@@ -104,7 +104,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       #{@leibniz1}
       thf(conj, conjecture,
-        ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+        ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
       ).
       """)
     end
@@ -114,7 +114,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       #{@leibniz2}
       thf(conj, conjecture,
-        ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+        ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
       ).
       """)
     end
@@ -124,7 +124,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       #{@leibniz3}
       thf(conj, conjecture,
-        ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+        ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
       ).
       """)
     end
@@ -134,7 +134,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       #{@andrews}
       thf(conj, conjecture,
-        ![F:$i>$i]: ?[X:$i]: a @ (F @ X) @ X
+        ![F:$i>$i]: ?[X:$i]: (a @ (F @ X) @ X)
       ).
       """)
     end
@@ -144,7 +144,7 @@ defmodule ShotTx.SoundnessTest do
       assert_not_theorem(~p"""
       #{@extensional}
       thf(conj, conjecture,
-        ![F:($i>$i)>$i>$i]: ?[X:$i>$i]: e @ (F @ X) @ X
+        ![F:($i>$i)>$i>$i]: ?[X:$i>$i]: (e @ (F @ X) @ X)
       ).
       """)
     end

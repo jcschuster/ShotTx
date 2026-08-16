@@ -44,7 +44,7 @@ import Util
 leibniz1 = """
 thf(leibniz_t, type, l: A > A > $o).
 thf(leibniz_def, definition,
-  l = ^[X, Y]: ![P]: P @ X => P @ Y
+  l = ^[X, Y]: ![P]: (P @ X => P @ Y)
 ).
 """
 ```
@@ -53,7 +53,7 @@ thf(leibniz_def, definition,
 leibniz2 = """
 thf(leibniz_t, type, l: A > A > $o).
 thf(leibniz_def, definition,
-  l = ^[X, Y]: ![P]: P @ X <= P @ Y
+  l = ^[X, Y]: ![P]: (P @ X <= P @ Y)
 ).
 """
 ```
@@ -62,7 +62,7 @@ thf(leibniz_def, definition,
 leibniz3 = """
 thf(leibniz_t, type, l: A > A > $o).
 thf(leibniz_def, definition,
-  l = ^[X, Y]: ![P]: P @ X <=> P @ Y
+  l = ^[X, Y]: ![P]: (P @ X <=> P @ Y)
 ).
 """
 ```
@@ -71,7 +71,7 @@ thf(leibniz_def, definition,
 andrews = """
 thf(andrews_t, type, a: A > A > $o).
 thf(andrews_def, definition,
-  a = ^[X, Y]: ![Q]: ((![Z]: Q @ Z @ Z) => Q @ X @ Y)
+  a = ^[X, Y]: ![Q]: ((![Z]: (Q @ Z @ Z)) => Q @ X @ Y)
 ).
 """
 ```
@@ -80,7 +80,7 @@ thf(andrews_def, definition,
 extensional = """
 thf(extensional_t, type, e: (A>B) > (A>B) > $o).
 thf(extensional_def, definition,
-  e = ^[X, Y]: ![Z]: X @ Z = Y @ Z
+  e = ^[X, Y]: ![Z]: (X @ Z = Y @ Z)
 ).
 """
 ```
@@ -108,71 +108,59 @@ thf(powerset_t, type, powerset: ($i>$o)>($i>$o)>$o).
 
 set_theory_defs = """
 thf(elem_def, definition,
-  elem = ^[X:$i, S:$i>$o]: S @ X
+  elem = ^[X:$i, S:$i>$o]: (S @ X)
 ).
 thf(set_def, definition,
-  set = ^[X:$i, Y:$i]: X = Y
+  set = ^[X:$i, Y:$i]: (X = Y)
 ).
 thf(set_l1_def, definition,
-  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X => P @ Y
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: (P @ X => P @ Y)
 ).
 thf(set_l2_def, definition,
-  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <= P @ Y
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: (P @ X <= P @ Y)
 ).
 thf(set_l3_def, definition,
-  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: P @ X <=> P @ Y
+  set_l1 = ^[X:$i, Y:$i]: ![P:$i>$o]: (P @ X <=> P @ Y)
 ).
 thf(set_a_def, definition,
-  set_a = ^[X:$i, Y:$i]: ![Q:$i>$i>$o]: ((![Z:$i]: Q @ Z @ Z) => Q @ X @ Y)
+  set_a = ^[X:$i, Y:$i]: ![Q:$i>$i>$o]: ((![Z:$i]: (Q @ Z @ Z)) => Q @ X @ Y)
 ).
 thf(set_set_def, definition,
   set_set = ^[X:$i>$o, Y:$i>$o]: X = Y
 ).
 thf(set_set_l1_def, definition,
-  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X => P @ Y
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: (P @ X => P @ Y)
 ).
 thf(set_set_l2_def, definition,
-  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <= P @ Y
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: (P @ X <= P @ Y)
 ).
 thf(set_set_l3_def, definition,
-  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: P @ X <=> P @ Y
+  set_set_l1 = ^[X:$i>$o, Y:$i>$o]: ![P:($i>$o)>$o]: (P @ X <=> P @ Y)
 ).
 thf(set_set_a_def, definition,
-  set_set_a = ^[X:$i>$o, Y:$i>$o]: ![Q:($i>$o)>($i>$o)>$o]: ((![Z:$i>$o]: Q @ Z @ Z) => Q @ X @ Y)
+  set_set_a = ^[X:$i>$o, Y:$i>$o]: ![Q:($i>$o)>($i>$o)>$o]: ((![Z:$i>$o]: (Q @ Z @ Z)) => Q @ X @ Y)
 ).
 thf(set_set_e_def, definition,
-  set_set_e = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: X @ Z = Y @ Z
+  set_set_e = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: (X @ Z = Y @ Z)
 ).
 thf(null_def, definition,
   null = ^[Z:$i]: $false
 ).
 thf(inter_def, definition,
-  inter = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X & elem @ Z @ Y
+  inter = ^[X:$i>$o, Y:$i>$o, Z:$i]: (elem @ Z @ X & elem @ Z @ Y)
 ).
 thf(union_def, definition,
-  union = ^[X:$i>$o, Y:$i>$o, Z:$i]: elem @ Z @ X | elem @ Z @ Y
+  union = ^[X:$i>$o, Y:$i>$o, Z:$i]: (elem @ Z @ X | elem @ Z @ Y)
 ).
 thf(subset_def, definition,
-  subset = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: elem @ Z @ X => elem @ Z @ Y
+  subset = ^[X:$i>$o, Y:$i>$o]: ![Z:$i]: (elem @ Z @ X => elem @ Z @ Y)
 ).
 thf(powerset_def, definition,
-  powerset = ^[X:$i>$o, Y:$i>$o]: subset @ Y @ X
+  powerset = ^[X:$i>$o, Y:$i>$o]: (subset @ Y @ X)
 ).
 """
 
 set_theory = set_theory_types <> set_theory_defs
-```
-
-## Section
-
-```elixir
-res = prove ~f"~ ![Y:$o>$o]: ( (~a & Y @ a) | (~ (p @ b) & p @ (Y @ b)) )"
-# TODO: deactivate instance-based gamma instantiation
-format_result res
-```
-
-```elixir
-render res
 ```
 
 <!-- livebook:{"branch_parent_index":0} -->
@@ -183,7 +171,7 @@ render res
 res = prove ~p"""
 thf(q_type, type, q : $i>$i>$o).
 thf(conj,conjecture,
-  (?[X:$i]: ![Y: $i]: q @ X @ Y) | (?[U:$i]: ![V:$i]: ~ (q @ V @ U))
+  (?[X:$i]: ![Y: $i]: (q @ X @ Y)) | (?[U:$i]: ![V:$i]: (~ (q @ V @ U)))
 ).
 """
 
@@ -195,7 +183,7 @@ format_result res
 res = prove ~p"""
 thf(q_type, type, q: $i>$i>$o).
 thf(conj,conjecture,
-  ?[Y:$i]: ![X:$i]: ( (![Z:$i]: q @ X @ Z) | ~(q @ X @ Y) )
+  ?[Y:$i]: ![X:$i]: ( ![Z:$i]: (q @ X @ Z) | ~(q @ X @ Y) )
 ).
 """
 
@@ -206,7 +194,7 @@ format_result res
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  ![F:$i>$i]: ?[X:$i]: F @ X = X
+  ![F:$i>$i]: ?[X:$i]: (F @ X = X)
 ).
 """
 
@@ -218,7 +206,7 @@ format_result res
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
-  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+  ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -230,7 +218,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+  ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -242,7 +230,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  ![F:$i>$i]: ?[X:$i]: l @ (F @ X) @ X
+  ![F:$i>$i]: ?[X:$i]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -254,7 +242,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  ![F:$i>$i]: ?[X:$i]: a @ (F @ X) @ X
+  ![F:$i>$i]: ?[X:$i]: (a @ (F @ X) @ X)
 ).
 """
 
@@ -266,7 +254,7 @@ format_result res
 res = prove ~p"""
 #{extensional}
 thf(conj, conjecture,
-  ![F:($i>$i)>$i>$i]: ?[X:$i>$i]: e @ (F @ X) @ X
+  ![F:($i>$i)>$i>$i]: ?[X:$i>$i]: (e @ (F @ X) @ X)
 ).
 """
 
@@ -280,7 +268,7 @@ format_result res
 
 ```elixir
 res = prove ~f"""
-(![X:$i]: ?[Y:$i]: r @ X @ Y) => (?[F:$i>$i]: ![X:$i]: r @ X @ (F @ X))
+(![X:$i]: ?[Y:$i]: (r @ X @ Y)) => (?[F:$i>$i]: ![X:$i]: (r @ X @ (F @ X)))
 """
 
 format_result res
@@ -293,7 +281,7 @@ render res
 
 ```elixir
 res = prove ~f"""
-?[E:($i>$o)>$i]: ![P:$i>$o]: ( (![Y:$i]: P @ Y) => P @ (E @ P) )
+?[E:($i>$o)>$i]: ![P:$i>$o]: ( (![Y:$i]: (P @ Y)) => P @ (E @ P) )
 """
 
 format_result res
@@ -313,7 +301,7 @@ a) Reflexivity
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  ![X:$i]: X = X
+  ![X:$i]: (X = X)
 ).
 """
 
@@ -325,7 +313,7 @@ format_result res
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
-  ![X:$i]: l @ X @ X
+  ![X:$i]: (l @ X @ X)
 ).
 """
 
@@ -337,7 +325,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  ![X:$i]: l @ X @ X
+  ![X:$i]: (l @ X @ X)
 ).
 """
 
@@ -349,7 +337,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  ![X:$i]: l @ X @ X
+  ![X:$i]: (l @ X @ X)
 ).
 """
 
@@ -361,7 +349,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  ![X:$i]: a @ X @ X
+  ![X:$i]: (a @ X @ X)
 ).
 """
 
@@ -373,7 +361,7 @@ format_result res
 res = prove ~p"""
 #{extensional}
 thf(conj, conjecture,
-  ![X:$i>$i]: e @ X @ X
+  ![X:$i>$i]: (e @ X @ X)
 ).
 """
 
@@ -579,7 +567,7 @@ render res
 res = prove ~p"""
 thf(leibniz_t, type, l: A > A > $o).
 thf(leibniz_def, definition,
-  l = ^[X, Y]: ![P]: P @ X => P @ Y
+  l = ^[X, Y]: ![P]: (P @ X => P @ Y)
 ).
 thf(conj, conjecture,
   ![X:$i, Y:$i, F:$i>$i]: (
@@ -798,7 +786,7 @@ a) Functional Extensionality
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  ![F:$i>$i, G:$i>$i]: ( (F = G) => (![X:$i]: F @ X = G @ X) )
+  ![F:$i>$i, G:$i>$i]: ( (F = G) => (![X:$i]: (F @ X = G @ X)) )
 ).
 """
 
@@ -822,7 +810,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: l @ (F @ X) @ (G @ X)) )
+  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: (l @ (F @ X) @ (G @ X))) )
 ).
 """
 
@@ -834,7 +822,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: l @ (F @ X) @ (G @ X)) )
+  ![F:$i>$i, G:$i>$i]: ( (l @ F @ G) => (![X:$i]: (l @ (F @ X) @ (G @ X))) )
 ).
 """
 
@@ -846,7 +834,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  ![F:$i>$i, G:$i>$i]: ( (a @ F @ G) => (![X:$i]: a @ (F @ X) @ (G @ X)) )
+  ![F:$i>$i, G:$i>$i]: ( (a @ F @ G) => (![X:$i]: (a @ (F @ X) @ (G @ X))) )
 ).
 """
 
@@ -858,7 +846,7 @@ format_result res
 res = prove ~p"""
 #{extensional}
 thf(conj, conjecture,
-  ![F:$i>($i>$i), G:$i>($i>$i)]: ( (e @ F @ G) => (![X:$i]: e @ (F @ X) @ (G @ X)) )
+  ![F:$i>($i>$i), G:$i>($i>$i)]: ( (e @ F @ G) => (![X:$i]: (e @ (F @ X) @ (G @ X))) )
 ).
 """
 
@@ -1027,7 +1015,7 @@ format_result res
 ```elixir
 res = prove with_context ~e[p:($i>$i)>$o, f:$i>$i], fn ->
   ~f"""
-  p @ (^[X:$i]: f @ X) => p @ f
+  p @ (^[X:$i]: (f @ X)) => p @ f
   """
 end
 
@@ -1044,7 +1032,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: f @ X = X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+  (![X:$i]: (f @ X = X)) & p @ (^[X:$i]: X) => p @ (^[X:$i]: (f @ X))
 ).
 """
 
@@ -1058,7 +1046,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+  (![X:$i]: (l @ (f @ X) @ X)) & p @ (^[X:$i]: X) => p @ (^[X:$i]: (f @ X))
 ).
 """
 
@@ -1072,7 +1060,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+  (![X:$i]: (l @ (f @ X) @ X)) & p @ (^[X:$i]: X) => p @ (^[X:$i]: (f @ X))
 ).
 """
 
@@ -1086,7 +1074,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+  (![X:$i]: (l @ (f @ X) @ X)) & p @ (^[X:$i]: X) => p @ (^[X:$i]: (f @ X))
 ).
 """
 
@@ -1100,7 +1088,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: a @ (f @ X) @ X) & p @ (^[X:$i]: X) => p @ (^[X:$i]: f @ X)
+  (![X:$i]: (a @ (f @ X) @ X)) & p @ (^[X:$i]: X) => p @ (^[X:$i]: (f @ X))
 ).
 """
 
@@ -1114,7 +1102,7 @@ res = prove ~p"""
 thf(f_type, type, f: ($i>$i)>$i>$i).
 thf(p_type, type, p: (($i>$i)>$i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i>$i]: e @ (f @ X) @ X) & p @ (^[X:$i>$i]: X) => p @ (^[X:$i>$i]: f @ X)
+  (![X:$i>$i]: (e @ (f @ X) @ X)) & p @ (^[X:$i>$i]: X) => p @ (^[X:$i>$i]: (f @ X))
 ).
 """
 
@@ -1150,7 +1138,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: f @ X = X) & (p @ (^[X:$i]: X)) => p @ f
+  (![X:$i]: (f @ X = X)) & (p @ (^[X:$i]: X)) => p @ f
 ).
 """
 
@@ -1164,7 +1152,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+  (![X:$i]: (l @ (f @ X) @ X)) & (p @ (^[X:$i]: X)) => p @ f
 ).
 """
 
@@ -1178,7 +1166,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+  (![X:$i]: (l @ (f @ X) @ X)) & (p @ (^[X:$i]: X)) => p @ f
 ).
 """
 
@@ -1192,7 +1180,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: l @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+  (![X:$i]: (l @ (f @ X) @ X)) & (p @ (^[X:$i]: X)) => p @ f
 ).
 """
 
@@ -1206,7 +1194,7 @@ res = prove ~p"""
 thf(f_type, type, f: $i>$i).
 thf(p_type, type, p: ($i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i]: a @ (f @ X) @ X) & (p @ (^[X:$i]: X)) => p @ f
+  (![X:$i]: (a @ (f @ X) @ X)) & (p @ (^[X:$i]: X)) => p @ f
 ).
 """
 
@@ -1220,7 +1208,7 @@ res = prove ~p"""
 thf(f_type, type, f: ($i>$i)>$i>$i).
 thf(p_type, type, p: (($i>$i)>$i>$i)>$o).
 thf(conj, conjecture,
-  (![X:$i>$i]: e @ (f @ X) @ X) & (p @ (^[X:$i>$i]: X)) => p @ f
+  (![X:$i>$i]: (e @ (f @ X) @ X)) & (p @ (^[X:$i>$i]: X)) => p @ f
 ).
 """
 
@@ -1355,7 +1343,7 @@ format_result res
 
 ```elixir
 res = prove with_context ~e[p:($i>$i)>$o, f:$o>$i>$i, a:($i>$i)>$o, b:$o], fn ->
-  ~f"p @ (^[X:$i]: f @ (a @ (^[X:$i]: f @ b @ X) & b) @ X) => p @ (f @ (b & a @ (f @ b)))"
+  ~f"p @ (^[X:$i]: (f @ (a @ (^[X:$i]: (f @ b @ X)) & b) @ X)) => p @ (f @ (b & a @ (f @ b)))"
 end
 
 format_result res
@@ -1443,7 +1431,7 @@ format_result res
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  (^[U, V]: U & V) = (^[X, Y]: ~(~X | ~Y))
+  (^[U, V]: (U & V)) = (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1455,7 +1443,7 @@ format_result res
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
-  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (^[U, V]: (U & V)) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1467,7 +1455,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (^[U, V]: (U & V)) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1479,7 +1467,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  l @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (^[U, V]: (U & V)) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1491,7 +1479,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  a @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+  a @ (^[U, V]: (U & V)) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1503,7 +1491,7 @@ format_result res
 res = prove ~p"""
 #{extensional}
 thf(conj, conjecture,
-  e @ (^[U, V]: U & V) @ (^[X, Y]: ~(~X | ~Y))
+  e @ (^[U, V]: (U & V)) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1518,7 +1506,7 @@ format_result res
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  (&) = (^[X, Y]: ~(~X | ~Y))
+  (&) = (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1530,7 +1518,7 @@ format_result res
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
-  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (&) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1542,7 +1530,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (&) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1554,7 +1542,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  l @ (&) @ (^[X, Y]: ~(~X | ~Y))
+  l @ (&) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1566,7 +1554,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  a @ (&) @ (^[X, Y]: ~(~X | ~Y))
+  a @ (&) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1578,7 +1566,7 @@ format_result res
 res = prove ~p"""
 #{extensional}
 thf(conj, conjecture,
-  e @ (&) @ (^[X, Y]: ~(~X | ~Y))
+  e @ (&) @ (^[X, Y]: (~(~X | ~Y)))
 ).
 """
 
@@ -1594,10 +1582,10 @@ format_result res
 res = prove ~f"""
 (
   (p @ (^[X:$o]: X)) &
-  (p @ (^[X:$o]: ~X)) &
+  (p @ (^[X:$o]: (~X))) &
   (p @ (^[X:$o]: $false)) &
   (p @ (^[X:$o]: $true))
-) => ![Y:$o>$o]: p @ Y
+) => ![Y:$o>$o]: (p @ Y)
 """
 
 format_result res
@@ -1789,7 +1777,7 @@ format_result res
 ## Example 25
 
 ```elixir
-res = prove ~f"?[N:$o>$o]: ![P:$o]: N @ P <=> ~P"
+res = prove ~f"?[N:$o>$o]: ![P:$o]: (N @ P <=> ~P)"
 
 format_result res
 # THM
@@ -1802,7 +1790,7 @@ format_result res
 ```elixir
 res = prove ~p"""
 thf(conj, conjecture,
-  ~![F:$o>$o]: ?[X:$o]: F @ X = X
+  ~![F:$o>$o]: ?[X:$o]: (F @ X = X)
 ).
 """
 
@@ -1814,7 +1802,7 @@ format_result res
 res = prove ~p"""
 #{leibniz1}
 thf(conj, conjecture,
-  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+  ~![F:$o>$o]: ?[X]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -1826,7 +1814,7 @@ format_result res
 res = prove ~p"""
 #{leibniz2}
 thf(conj, conjecture,
-  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+  ~![F:$o>$o]: ?[X]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -1838,7 +1826,7 @@ format_result res
 res = prove ~p"""
 #{leibniz3}
 thf(conj, conjecture,
-  ~![F:$o>$o]: ?[X]: l @ (F @ X) @ X
+  ~![F:$o>$o]: ?[X]: (l @ (F @ X) @ X)
 ).
 """
 
@@ -1850,7 +1838,7 @@ format_result res
 res = prove ~p"""
 #{andrews}
 thf(conj, conjecture,
-  ~![F:$o>$o]: ?[X]: a @ (F @ X) @ X
+  ~![F:$o>$o]: ?[X]: (a @ (F @ X) @ X)
 ).
 """
 
@@ -1863,7 +1851,7 @@ format_result res
 ## Example 27
 
 ```elixir
-res = prove ~f"?[D:$o>$o>$o]: ![P:$o, Q:$o]: D @ P @ Q <=> (P | Q)"
+res = prove ~f"?[D:$o>$o>$o]: ![P:$o, Q:$o]: (D @ P @ Q <=> (P | Q))"
 
 format_result res
 # THM
@@ -1874,7 +1862,7 @@ format_result res
 ## Example 28
 
 ```elixir
-res = prove ~f"?[Q:($i>$o)>$o]: ![P:$i>$o]: Q @ P <=> ![X:$i]: P @ X"
+res = prove ~f"?[Q:($i>$o)>$o]: ![P:$i>$o]: (Q @ P <=> (![X:$i]: (P @ X)))"
 
 format_result res
 # Timeout
@@ -1885,7 +1873,7 @@ format_result res
 ## Example 29
 
 ```elixir
-res = prove ~f"?[N:$o>$o]: ![P:$o]: N @ P <=> P"
+res = prove ~f"?[N:$o>$o]: ![P:$o]: (N @ P <=> P)"
 
 format_result res
 # THM
@@ -1896,7 +1884,7 @@ format_result res
 ## Example 20: Surjective Cantor Theorem
 
 ```elixir
-res = prove ~f"~?[G:$i>$i>$o]: ![F:$i>$o]: ?[J:$i]: G @ J = F",
+res = prove ~f"~?[G:$i>$i>$o]: ![F:$i>$o]: ?[J:$i]: (G @ J = F)",
   timeout: 200,
   simplification: :none,
   instance_based_gamma: false,
@@ -1918,7 +1906,7 @@ render res
 ## Example 21: Injective Cantor Theorem
 
 ```elixir
-res = prove ~f"~?[H:($i>$o)>$i]: ![P:$i>$o, Q:$i>$o]: H @ P = H @ Q => P = Q"
+res = prove ~f"~?[H:($i>$o)>$i]: ![P:$i>$o, Q:$i>$o]: (H @ P = H @ Q => P = Q)"
 
 format_result res
 # Timeout

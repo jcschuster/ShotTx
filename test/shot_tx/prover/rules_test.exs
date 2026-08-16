@@ -180,24 +180,24 @@ defmodule ShotTx.Prover.RulesTest do
 
     test "universal over $o is gamma_finite" do
       assert {:gamma_finite, _recipe, %ShotDs.Data.Type{goal: :o}} =
-               Rules.classify_formula(~f"![P:$o]: P | ~P")
+               Rules.classify_formula(~f"![P:$o]: (P | ~P)")
     end
 
     test "universal over $o falls back to gamma when finite_o_quantification is disabled" do
       assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0, false} =
-               Rules.classify_formula(~f"![P:$o]: P | ~P", false)
+               Rules.classify_formula(~f"![P:$o]: (P | ~P)", false)
     end
 
     test "negated existential over $o falls back to gamma when finite_o_quantification is disabled" do
       assert {:gamma, _recipe, %ShotDs.Data.Type{goal: :o}, 0, false} =
-               Rules.classify_formula(~f"~ ?[P:$o]: P & ~P", false)
+               Rules.classify_formula(~f"~ ?[P:$o]: (P & ~P)", false)
     end
 
     test "existential over $i triggers delta (skolemization)" do
       ctx = ~e"p: $i>$o"
 
       ShotDs.Hol.Sigils.with_context(ctx, fn ->
-        assert {:delta, _sk_term} = Rules.classify_formula(~f"?[X:$i]: p @ X")
+        assert {:delta, _sk_term} = Rules.classify_formula(~f"?[X:$i]: (p @ X)")
       end)
     end
 

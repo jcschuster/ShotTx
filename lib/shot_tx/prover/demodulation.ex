@@ -92,7 +92,26 @@ defmodule ShotTx.Prover.Demodulation do
       design — the Leibniz/extensional α-expansion is the complete
       fallback. Demodulation is a canonicalization shortcut for the
       binding-free fragment.
+
+  ## The connective restriction
+
+  An equation with a connective application on either side — `(a ∧ b) = C`,
+  `⊤ = (⊥ ∧ ⊥)` — is not a rewrite rule either. It is a propositional
+  equivalence, which `:iff_o` expansion decides completely; using it to rewrite
+  instead replaces a formula the tableau can still decompose by an opaque atom,
+  and the propositional content is gone before classification sees it.
+
+  `:rename` abbreviates `a ∧ b` as a fresh `C` and records `(a ∧ b) = C`, so an
+  `:instantiate` child choosing `a := ⊤, b := ⊤, C := ⊥` holds its own
+  refutation as `(⊤ ∧ ⊤) = ⊥` — and rewrote it, by the very equation whose
+  consequences it was checking, to the vacuous `C = ⊥`. Without
+  `simplification: :deep` to evaluate `⊤ ∧ ⊤` the branch then saturated, and
+  its literals were reported as a countermodel for a theorem.
+
+  Atoms are unaffected: `b = a` still rewrites `¬b` to `¬a`.
   """
+
+  use ShotDs.Hol.Patterns
 
   alias ShotDs.Data.{Declaration, Term}
   alias ShotDs.Stt.TermFactory, as: TF
@@ -177,14 +196,30 @@ defmodule ShotTx.Prover.Demodulation do
   defp match_and_rewrite(term_id, sub_id, equations, order) do
     case Map.get(equations, sub_id) do
       nil -> nil
-      rhs_set -> try_rewrite(term_id, sub_id, ground_rhs(sub_id, rhs_set), order)
+      rhs_set -> try_rewrite(term_id, sub_id, usable_rhs(sub_id, rhs_set), order)
     end
   end
 
-  # The ground restriction (see module docs). An equation is usable as a
-  # rewrite rule only when neither side mentions a free variable.
-  defp ground_rhs(lhs_id, rhs_set) do
-    if ground?(lhs_id), do: Enum.filter(rhs_set, &ground?/1), else: []
+  # The ground and connective restrictions (see module docs). An equation is
+  # usable as a rewrite rule only when neither side mentions a free variable
+  # and neither side is a formula the tableau can still decompose.
+  defp usable_rhs(lhs_id, rhs_set) do
+    if usable_side?(lhs_id), do: Enum.filter(rhs_set, &usable_side?/1), else: []
+  end
+
+  defp usable_side?(term_id), do: ground?(term_id) and not connective?(term_id)
+
+  defp connective?(term_id) do
+    case TF.get_term!(term_id) do
+      negated(_) -> true
+      conjunction(_, _) -> true
+      disjunction(_, _) -> true
+      implication(_, _) -> true
+      equivalence(_, _) -> true
+      universal_quantification(_) -> true
+      existential_quantification(_) -> true
+      _ -> false
+    end
   end
 
   @doc """
@@ -232,7 +267,7 @@ defmodule ShotTx.Prover.Demodulation do
         {head_decl, arity} ->
           oriented =
             lhs_id
-            |> ground_rhs(rhs_ids)
+            |> usable_rhs(rhs_ids)
             |> Enum.filter(fn rhs_id -> TermOrder.strict_gt?(lhs_id, rhs_id, order) end)
 
           if oriented == [], do: [], else: [{head_decl, arity, oriented, lhs_id}]
