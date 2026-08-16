@@ -127,7 +127,7 @@ import ShotTx.Prover
 ```
 
 ```elixir
-res = ~f"![P:$i>$o, Q:$i>$o]: ((?[X:$i]: P @ X & Q @ X) => (?[X:$i]: P @ X) & (?[X:$i]: Q @ X))"
+res = ~f"![P:$i>$o, Q:$i>$o]: (((?[X:$i]: ((P @ X) & (Q @ X))) => (?[X:$i]: (P @ X)) & (?[X:$i]: (Q @ X))))"
 |> prove
 format_result res
 ```
@@ -172,7 +172,7 @@ render res
 **Cantor:** $\nexists F. \forall Y. \exists X. F X = Y$
 
 ```elixir
-res = ~f"~?[F : $i>$i>$o]: ![Y: $i>$o]: ?[X: $i]: F @ X = Y"
+res = ~f"~?[F : $i>$i>$o]: (![Y: $i>$o]: (?[X: $i]: (F @ X = Y)))"
 |> prove()
 format_result res
 ```
@@ -199,7 +199,7 @@ render res
 **Extensionality:** $\forall X Y. p~X \land p~Y \supset p (X \land Y)$
 
 ```elixir
-res = ~f"![X : $o, Y : $o]: p @ X & p @ Y => p @ (X & Y)" |> prove
+res = ~f"![X : $o, Y : $o]: (p @ X & p @ Y => p @ (X & Y))" |> prove
 format_result res
 ```
 
