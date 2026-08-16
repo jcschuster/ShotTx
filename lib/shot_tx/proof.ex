@@ -422,7 +422,7 @@ defmodule ShotTx.Proof do
   end
 
   defp interior_event({src, {:gamma_finite, _, _}, [_ | _] = instances}, {evs, segs}) do
-    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
+    {fold_rule_events(concrete_gamma_finite(src), src, instances, evs), segs}
   end
 
   defp interior_event({_src, {:gamma_finite, _, _}, []}, state), do: state
@@ -520,6 +520,13 @@ defmodule ShotTx.Proof do
     case TF.get_term!(src_id) do
       negated(_) -> :nexists
       _ -> :forall
+    end
+  end
+
+  defp concrete_gamma_finite(src_id) do
+    case TF.get_term!(src_id) do
+      negated(_) -> :nexists_fin
+      _ -> :forall_fin
     end
   end
 
@@ -1032,6 +1039,8 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:nequiv), do: "¬≡"
   defp rule_symbol(:forall), do: "∀"
   defp rule_symbol(:nexists), do: "¬∃"
+  defp rule_symbol(:forall_fin), do: "∀ₒ"
+  defp rule_symbol(:nexists_fin), do: "¬∃ₒ"
   defp rule_symbol(:exists), do: "∃"
   defp rule_symbol(:nforall), do: "¬∀"
   defp rule_symbol(:beta_variant), do: "β-var"
