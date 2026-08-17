@@ -285,7 +285,25 @@ defmodule ShotTx.Prover.Branch do
 
   defp distinguishable?({s, t}, equations) do
     base_typed_rigid?(s) and base_typed_rigid?(t) and
-      not Map.has_key?(equations, s) and not Map.has_key?(equations, t)
+      not Map.has_key?(equations, s) and not Map.has_key?(equations, t) and
+      rigid_terms_distinct?(s, t, equations)
+  end
+
+  # Rigidity of the *head* is not enough: `h ⊤` and `h ⊥` are two closed rigid
+  # base-typed terms, yet no model keeps them apart unless `f ⊤` and `f ⊥` are
+  # already apart — and at type `o` they never are, the domain having two
+  # elements and `h` no obligation to be injective. Distinct rigid constants
+  # separate outright; equal heads only through an argument pair that separates
+  # in turn.
+  defp rigid_terms_distinct?(s, t, equations) do
+    term_s = TF.get_term!(s)
+    term_t = TF.get_term!(t)
+
+    cond do
+      term_s.head != term_t.head -> true
+      length(term_s.args) != length(term_t.args) -> false
+      true -> Enum.any?(Enum.zip(term_s.args, term_t.args), &distinguishable?(&1, equations))
+    end
   end
 
   defp base_typed_rigid?(term_id) do

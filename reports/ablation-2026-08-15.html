@@ -1,0 +1,769 @@
+<title>Unsound Saturation in ShotTx</title>
+<style>
+  :root {
+    --paper:        #f6f7f8;
+    --surface:      #ffffff;
+    --surface-sunk: #eceef1;
+    --ink:          #14181e;
+    --ink-soft:     #4a545f;
+    --ink-faint:    #78838f;
+    --rule:         #d8dde3;
+    --rule-strong:  #b9c1ca;
+    --accent:       #33507d;
+    --accent-soft:  #e6ebf4;
+    --critical:     #a51f14;
+    --critical-bg:  #fbeceb;
+    --warn:         #7d5a10;
+    --warn-bg:      #faf2df;
+    --ok:           #23624a;
+    --ok-bg:        #e6f1eb;
+
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+
+    --measure: 68ch;
+    --step-0: 1rem;
+    --step-1: 1.1875rem;
+    --step-2: 1.5rem;
+    --step-3: 2rem;
+    --step-4: 2.75rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:        #0e1116;
+      --surface:      #161a21;
+      --surface-sunk: #1c222b;
+      --ink:          #e4e8ee;
+      --ink-soft:     #a3adb9;
+      --ink-faint:    #77828f;
+      --rule:         #2a313b;
+      --rule-strong:  #3d4652;
+      --accent:       #8fb0e0;
+      --accent-soft:  #1b2635;
+      --critical:     #f0857a;
+      --critical-bg:  #2c1614;
+      --warn:         #d9b25f;
+      --warn-bg:      #2a2313;
+      --ok:           #7cc3a2;
+      --ok-bg:        #12261d;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:        #0e1116;
+    --surface:      #161a21;
+    --surface-sunk: #1c222b;
+    --ink:          #e4e8ee;
+    --ink-soft:     #a3adb9;
+    --ink-faint:    #77828f;
+    --rule:         #2a313b;
+    --rule-strong:  #3d4652;
+    --accent:       #8fb0e0;
+    --accent-soft:  #1b2635;
+    --critical:     #f0857a;
+    --critical-bg:  #2c1614;
+    --warn:         #d9b25f;
+    --warn-bg:      #2a2313;
+    --ok:           #7cc3a2;
+    --ok-bg:        #12261d;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: var(--step-0);
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.5rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 62rem;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+
+  header.masthead {
+    padding-top: 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 1.5rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: var(--step-4);
+    line-height: 1.06;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: var(--step-1);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: var(--measure);
+  }
+
+  dl.meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem 1.5rem;
+    margin: 0.5rem 0 0;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+  }
+  dl.meta div { display: flex; flex-direction: column; gap: 0.15rem; }
+  dl.meta dt { color: var(--ink-faint); letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.6875rem; }
+  dl.meta dd { margin: 0; color: var(--ink); }
+
+  /* ---------- sections ---------- */
+
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: var(--step-2);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule-strong);
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: var(--step-1);
+    font-weight: 600;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  p { margin: 0; max-width: var(--measure); }
+  section > p, section > ul, section > ol { max-width: var(--measure); }
+
+  ul, ol { margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  li { padding-left: 0.15rem; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.875em;
+    background: var(--surface-sunk);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+  }
+
+  strong { font-weight: 600; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  /* ---------- finding callouts ---------- */
+
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule-strong);
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .finding.critical { border-left-color: var(--critical); background: var(--critical-bg); }
+  .finding.warn     { border-left-color: var(--warn);     background: var(--warn-bg); }
+  .finding.ok       { border-left-color: var(--ok);       background: var(--ok-bg); }
+
+  .finding .tag {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .finding.critical .tag { color: var(--critical); }
+  .finding.warn .tag     { color: var(--warn); }
+  .finding.ok .tag       { color: var(--ok); }
+  .finding p { max-width: var(--measure); }
+
+  /* ---------- data tables ---------- */
+
+  .scroller {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.45;
+  }
+
+  caption {
+    caption-side: top;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0 0 0.6rem;
+  }
+
+  th, td { padding: 0.5rem 0.85rem; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--rule); }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--surface-sunk);
+    font-weight: 600;
+    font-size: 0.6875rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  tr.is-baseline td { background: var(--accent-soft); font-weight: 600; }
+  tr.is-bad td { background: var(--critical-bg); }
+
+  .pos { color: var(--ok); font-weight: 600; }
+  .neg { color: var(--critical); font-weight: 600; }
+  .zero { color: var(--ink-faint); }
+
+  .pill {
+    display: inline-block;
+    font-size: 0.6875rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 2px;
+  }
+  .pill.bad  { background: var(--critical); color: var(--paper); }
+  .pill.good { background: var(--ok);       color: var(--paper); }
+
+  /* ---------- code blocks ---------- */
+
+  pre {
+    margin: 0;
+    background: var(--surface-sunk);
+    border: 1px solid var(--rule);
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre .add { color: var(--ok); }
+  pre .del { color: var(--critical); }
+  pre .dim { color: var(--ink-faint); }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+  figcaption { font-size: 0.875rem; color: var(--ink-soft); max-width: var(--measure); }
+
+  /* ---------- rating bars ---------- */
+
+  .bars { display: flex; flex-direction: column; gap: 0.4rem; max-width: 34rem; }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 3.5rem 1fr 3rem;
+    align-items: center;
+    gap: 0.75rem;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-track { background: var(--surface-sunk); height: 1.1rem; position: relative; }
+  .bar-fill { background: var(--accent); height: 100%; }
+  .bar-row .lbl { color: var(--ink-soft); }
+  .bar-row .val { text-align: right; color: var(--ink-soft); }
+
+  /* ---------- misc ---------- */
+
+  hr.section-break { border: none; border-top: 1px solid var(--rule); margin: 0; }
+
+  details {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 0.85rem 1.15rem;
+  }
+  summary { cursor: pointer; font-family: var(--mono); font-size: 0.875rem; font-weight: 600; }
+  details > *:not(summary) { margin-top: 0.85rem; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    max-width: var(--measure);
+    line-height: 1.7;
+  }
+
+  @media (max-width: 40rem) {
+    :root { --step-4: 2rem; --step-3: 1.6rem; --step-2: 1.3rem; }
+    body { padding: 0 1rem 4rem; }
+    header.masthead { padding-top: 2.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">ShotTx · TPTP TH0/TH1 ablation · 2026-08-15</div>
+    <h1>Unsound Saturation in ShotTx</h1>
+    <p class="standfirst">The sweep produced five answers that contradict the TPTP ground truth. All five are
+      <code>CounterSatisfiable</code> verdicts on problems that are theorems, all five reproduce on today's
+      <code>HEAD</code>, and one of them fires under the default parameters.</p>
+    <dl class="meta">
+      <div><dt>Sweep commit</dt><dd>2a05f05</dd></div>
+      <div><dt>Verified against</dt><dd>eb30581 (HEAD)</dd></div>
+      <div><dt>Configurations</dt><dd>16</dd></div>
+      <div><dt>Problems / config</dt><dd>5 109</dd></div>
+      <div><dt>Budget</dt><dd>2 000 ms, uniform</dd></div>
+      <div><dt>Wall clock</dt><dd>≈ 36 h</dd></div>
+    </dl>
+  </header>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>The headline</h2>
+
+    <div class="finding critical">
+      <div class="tag">Critical · still live</div>
+      <p><strong>ShotTx reports <code>CounterSatisfiable</code> for problems that are theorems.</strong> Five such
+        answers appear in the sweep, spanning four distinct conjectures. The demodulation fix in <code>7736c67</code>
+        did not close them: I re-ran all five against the current working tree and every one still returns
+        <code>CounterSatisfiable</code>.</p>
+      <p>The most serious is <code>SYO040^2</code> — the Kaminski equation — which fails under the
+        <em>baseline</em> configuration, i.e. stock <code>%Parameters{}</code>, in about 100 ms.</p>
+    </div>
+
+    <p class="prose">Three structural observations shape everything below.</p>
+
+    <ul class="prose">
+      <li><strong>The refutation side is clean.</strong> Across all 81 744 rows there is not one bogus
+        <code>Theorem</code>. Every violation is a bogus countermodel. Whatever is wrong lives entirely in the
+        SAT-exit path, not in the tableau closure rules.</li>
+      <li><strong>No countermodel was ever checked.</strong> Of the 991 <code>csa</code> answers in the sweep,
+        <strong>zero</strong> had <code>csp_calls &gt; 0</code> — while 39 254 rows overall did call the CSP solver
+        during closure. The countermodel verdict rests entirely on one syntactic predicate,
+        <code>Branch.model_certain?/2</code>, and is never validated by anything.</li>
+      <li><strong>All four conjectures are Boolean-extensionality problems.</strong> They are theorems only because
+        <code>$o</code> has exactly two elements. <code>SYO017^1</code>'s own TPTP header spells out the failure
+        mode: <em>“Without Boolean extensionality : CounterSatisfiable.”</em> That is precisely the answer ShotTx
+        gives.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>The five violations</h2>
+
+    <div class="scroller">
+      <table>
+        <caption>Every (config, problem) pair whose answer contradicts the TPTP status</caption>
+        <thead>
+          <tr>
+            <th>Problem</th><th>Expected</th><th>Answered</th>
+            <th class="num">Configs</th><th>Conjecture</th><th class="num">Fastest</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="is-bad">
+            <td>SYO/SYO040^2.p</td><td>Theorem</td><td><span class="pill bad">csa</span></td>
+            <td class="num">13 / 16</td><td>Kaminski, <code>h(f³x) = h(fx)</code></td><td class="num">12 ms</td>
+          </tr>
+          <tr>
+            <td>SYO/SYO017^1.p</td><td>Theorem</td><td><span class="pill bad">csa</span></td>
+            <td class="num">6 / 16</td><td>Ex. 18b, <code>h(h⊤ = h⊥) = h⊥</code></td><td class="num">63 ms</td>
+          </tr>
+          <tr>
+            <td>SYO/SYO345^5.p</td><td>Theorem</td><td><span class="pill bad">csa</span></td>
+            <td class="num">1 / 16</td><td>TPS THM615 — same conjecture as SYO017^1</td><td class="num">12 ms</td>
+          </tr>
+          <tr>
+            <td>SYO/SYO041^2.p</td><td>Theorem</td><td><span class="pill bad">csa</span></td>
+            <td class="num">1 / 16</td><td>Kaminski variant 3, <code>f,g : $o&gt;$o</code></td><td class="num">200 ms</td>
+          </tr>
+          <tr>
+            <td>SEU/SEU541^2.p</td><td>Theorem</td><td><span class="pill bad">csa</span></td>
+            <td class="num">1 / 16</td><td><code>prop2setI ⊃ ∀φ:$o. φ ⊃ set2prop(prop2set φ)</code></td><td class="num">8 ms</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="prose">Only <code>no_contradiction_agent</code> and <code>no_demodulation</code> come through clean,
+      and the first of those is not evidence of anything — it solves 381 problems against baseline's 746, so it
+      simply never gets far enough to be wrong. <code>no_atom_decomposition</code> is the worst at three violations;
+      it saturates <code>SEU541^2</code> in 8 ms after 10 steps, having closed no branches at all.</p>
+
+    <div class="finding warn">
+      <div class="tag">Compounding · the scorer under-reports</div>
+      <p><code>TptpRunner.score/2</code> (<code>tptp_runner.ex:662</code>) only scores <code>Theorem</code> and
+        <code>CounterSatisfiable</code>. A <code>csa</code> against an <code>Unsatisfiable</code> or
+        <code>ContradictoryAxioms</code> problem, or a <code>thm</code> against a <code>Satisfiable</code> one,
+        all record as <code>na</code> rather than as violations. I re-scored the sweep under the full SZS table:
+        no additional violations surfaced, and there were no claims at all on <code>Unknown</code>/<code>Open</code>
+        problems — so five is the true count. But the truth table should be widened before the next sweep, or a
+        future regression in those classes will be invisible.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Root cause 1 — distinct terms are not distinct elements</h2>
+
+    <p class="prose"><code>model_certain?/2</code> admits a branch as a countermodel when every same-head,
+      opposite-polarity literal pair is <em>separated</em>: some argument position holds two terms a free term model
+      may read as distinct domain elements. That test delegates to <code>base_typed_rigid?/1</code>, whose docstring
+      promises <em>“distinct rigid constants at a base type.”</em> The implementation does not check arity:</p>
+
+<pre><code>defp base_typed_rigid?(term_id) do
+  term = TF.get_term!(term_id)
+
+  match?(%Type{goal: goal, args: []} when goal != :o, term.type) and
+    term.bvars == [] and term.head.kind == :co and MapSet.size(term.fvars) == 0
+end                                     <span class="dim"># branch.ex:291 — no `term.args == []`</span></code></pre>
+
+    <p class="prose">So <code>h ⊤</code> and <code>h ⊥</code> qualify. They are closed, rigid-headed and
+      <code>$i</code>-typed — and syntactically distinct, so the predicate rules that a model may keep them apart.
+      No model need do so. <code>h</code> is not injective, and its argument type has two elements.</p>
+
+    <h3>What the prover actually handed back</h3>
+
+    <figure>
+<pre><code><span class="dim">$ mix run -e 'ShotTx.Cli.main(["--verbose","--timeout","4000",
+    "/opt/TPTP/Problems/SYO/SYO040^2.p"])'</span>
+
+CSA
+[C[VL33B] &lt;- ⊤, C[219MBO] &lt;- ⊤, C[27N7EJ] &lt;- ⊥, C[1KWLON] &lt;- ⊥, C[WGPE] &lt;- ⊥]
+Model: ¬(P (h (f C[1KWLON]))), P (h ⊤), ¬(P (h ⊥)), ¬C[WGPE], C[VL33B],
+       ¬(P (h (f (f C[VL33B])))), C[219MBO], P (h C[219MBO]),
+       ¬(P (h C[WGPE])), ¬C[1KWLON]        <span class="dim"># P = C[FPFHS], the Leibniz Skolem</span></code></pre>
+      <figcaption>Unfolding the definitions collapses this to four constraints on <code>P</code>.</figcaption>
+    </figure>
+
+    <p class="prose">After unfolding: <code>P(h ⊤)</code> holds, and <code>P(h ⊥)</code>, <code>P(h (f ⊥))</code>,
+      <code>P(h (f (f ⊤)))</code> all fail. Now push it through a two-element <code>$o</code>. From
+      <code>¬P(h (f ⊥))</code>, <code>f ⊥</code> cannot be <code>⊤</code>, so <code>f ⊥ = ⊥</code>. From
+      <code>¬P(h (f (f ⊤)))</code>, <code>f (f ⊤)</code> cannot be <code>⊤</code> either, which with
+      <code>f ⊥ = ⊥</code> forces <code>f ⊤ = ⊥</code>. So <code>f ≡ λ_.⊥</code> — and under that reading both sides
+      of the conjecture reduce to <code>h ⊥</code>. <strong>The countermodel satisfies the conjecture it was
+      supposed to refute.</strong> The predicate accepted it because it counted <code>h ⊤</code>,
+      <code>h ⊥</code>, <code>h (f ⊥)</code> and <code>h (f (f ⊤))</code> as four separate elements of
+      <code>$i</code>, when <code>h</code> ranges over at most two.</p>
+
+    <h3>Fix, tested</h3>
+
+    <p class="prose">Separation has to recurse. Distinct rigid constants separate outright; equal heads separate
+      only through an argument pair that separates in turn — which <code>$o</code>-typed arguments never do.</p>
+
+<pre><code><span class="add">+ defp rigid_terms_distinct?(s, t, equations) do</span>
+<span class="add">+   term_s = TF.get_term!(s)</span>
+<span class="add">+   term_t = TF.get_term!(t)</span>
+<span class="add">+</span>
+<span class="add">+   cond do</span>
+<span class="add">+     term_s.head != term_t.head -&gt; true</span>
+<span class="add">+     length(term_s.args) != length(term_t.args) -&gt; false</span>
+<span class="add">+     true -&gt; Enum.any?(Enum.zip(term_s.args, term_t.args), &amp;distinguishable?(&amp;1, equations))</span>
+<span class="add">+   end</span>
+<span class="add">+ end</span></code></pre>
+
+    <div class="finding ok">
+      <div class="tag">Verified · costs nothing</div>
+      <ul>
+        <li>All five violations become <code>GaveUp</code>.</li>
+        <li>All <strong>61 / 61</strong> legitimate <code>CounterSatisfiable</code> answers survive — re-run
+          individually at the same 2 s budget.</li>
+        <li><code>mix test</code>: 169 passed, 12 excluded.</li>
+        <li>60-problem <code>Theorem</code> sample: 58 unchanged, 2 timeouts — and both of those also time out on
+          unpatched <code>HEAD</code>, so neither is a regression.</li>
+      </ul>
+      <p>The naïve version of this fix — just adding <code>term.args == []</code> — also closes all five, but costs
+        18 of the 61 real countermodels. The recursive form is strictly better.</p>
+    </div>
+
+    <p class="prose">The change is sitting uncommitted in the working tree
+      (<code>lib/shot_tx/prover/branch.ex</code>, +19/−1). It is yours to keep or drop — but read the next section
+      first, because it is not sufficient.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Root cause 2 — pairwise separation is not satisfiability</h2>
+
+    <div class="finding critical">
+      <div class="tag">Critical · survives the fix</div>
+      <p>With the recursion in place, <code>SYO041^2</code> <em>still</em> returns <code>CounterSatisfiable</code>
+        at default parameters — 2 of 8 runs with the full worker pool, 3 of 4 in serial mode. There is a second,
+        independent unsound path.</p>
+    </div>
+
+    <p class="prose"><code>SYO041^2</code> is entirely Boolean: <code>f, g : $o &gt; $o</code> and every variable is
+      <code>$o</code>-typed, so no <code>$i</code> term ever reaches <code>distinguishable?</code>. Separation here
+      is decided by the head clause — different rigid heads, therefore separated:</p>
+
+<pre><code>CSA
+[C[W8FGZ] &lt;- ⊤, C[TIM87] &lt;- ⊤, C[QALYF] &lt;- ⊤, C[27H6QF] &lt;- ⊤,
+ C[6WCN6] &lt;- ⊤, C[1O1MKG] &lt;- ⊤, C[PCVG4] &lt;- ⊤, y &lt;- ⊥]
+Model: ¬y, C[6WCN6], ¬(g C[6WCN6]), ¬(g (f C[6WCN6])), ¬(f (f (f C[6WCN6])))</code></pre>
+
+    <p class="prose">Those five literals are pairwise non-complementary, and as an isolated Boolean assignment they
+      are satisfiable (<code>f ≡ g ≡ λ_.⊥</code> works). But they are not the branch. The negated conjecture's other
+      conjuncts — <code>x ≠ y</code>, <code>g x = y</code>, <code>g y = x</code> — were consumed into abbreviation
+      constants earlier in the derivation and are simply absent from the literal set the predicate inspects.</p>
+
+    <p class="prose">This is the general defect, and root cause 1 is a special case of it:
+      <strong><code>model_certain?/2</code> is a pairwise syntactic non-complementarity test being used as a
+      satisfiability test.</strong> It does not enforce congruence, it does not know that <code>$o</code> has two
+      elements, it does not see the constraints already discharged into <code>branch.defs</code>, and it never
+      consults the unifier. Two prior patches in this same file — the <code>unfold_equations/4</code> comment at
+      <code>branch.ex:697</code> and the demodulate-on-ingest comment at <code>branch.ex:689</code> — each fixed one
+      more way for an unsound <code>CounterSatisfiable</code> to slip through. This is the third and fourth. They
+      will keep coming until the verdict is checked rather than inferred.</p>
+
+    <div class="finding warn">
+      <div class="tag">Related · nondeterminism</div>
+      <p><code>SYO017^1</code> returned <code>CounterSatisfiable</code>, <code>GaveUp</code>, <code>Theorem</code>,
+        <code>GaveUp</code>, <code>Theorem</code> across five identical invocations. <code>SYO041^2</code> and
+        <code>SYO500^1</code> vary the same way, and <code>SYO041^2</code> keeps varying at
+        <code>worker_pool_size: 1</code> — so worker scheduling is not the whole story. A prover that answers
+        differently run to run cannot be trusted on the runs where it happens to be right, and it makes the ablation
+        deltas below noisier than their precision suggests.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Proof reconstruction was hiding violations</h2>
+
+    <p class="prose"><code>ShotTx.Proof.interior_event/2</code> has no clause for <code>{:instantiate, …}</code>
+      trace entries, so any refutation whose proof tree contains one raises and the whole result is discarded as
+      <code>prover_error</code>. That happened 57 times across the sweep — around four per configuration — and the
+      inspected payload shows an unevaluated <code>#Stream&lt;…&gt;</code> leaking into the trace.</p>
+
+    <p class="prose">The consequence is worse than lost results. Two of baseline's five <code>prover_error</code>
+      rows — <code>SYO041^2</code> and <code>SYO500^1</code> — now return an unsound <code>csa</code> on
+      <code>HEAD</code> instead of crashing. The crash was masking the bug. <strong>Fixing proof reconstruction
+      made the observable soundness picture worse, not better</strong>, which means the sweep's count of five is a
+      floor on <code>HEAD</code>, not a ceiling.</p>
+  </section>
+
+  <hr class="section-break" />
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Ablation results</h2>
+
+    <p class="prose">Deltas are against baseline, counting only answers that agree with the TPTP status. Gains and
+      losses are set differences, not net — a configuration can be flat overall while trading a large number of
+      problems in both directions, which several of them do.</p>
+
+    <div class="scroller">
+      <table>
+        <caption>16 configurations · 5 109 problems each · 2 000 ms uniform budget</caption>
+        <thead>
+          <tr>
+            <th>Configuration</th>
+            <th class="num">Solved</th><th class="num">Δ</th>
+            <th class="num">Gained</th><th class="num">Lost</th>
+            <th class="num">Unsound</th><th class="num">Only-solver</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="is-baseline"><td>baseline</td><td class="num">746</td><td class="num zero">—</td><td class="num">—</td><td class="num">—</td><td class="num">1</td><td class="num">3</td></tr>
+          <tr><td>eager_unfold_defs</td><td class="num">794</td><td class="num pos">+48</td><td class="num">72</td><td class="num">24</td><td class="num">2</td><td class="num">44</td></tr>
+          <tr><td>no_beta_variant</td><td class="num">768</td><td class="num pos">+22</td><td class="num">42</td><td class="num">20</td><td class="num">1</td><td class="num">16</td></tr>
+          <tr><td>prim_batch_16</td><td class="num">749</td><td class="num pos">+3</td><td class="num">21</td><td class="num">18</td><td class="num">1</td><td class="num">2</td></tr>
+          <tr><td>prim_batch_4</td><td class="num">747</td><td class="num pos">+1</td><td class="num">24</td><td class="num">23</td><td class="num">2</td><td class="num">0</td></tr>
+          <tr><td>no_prim_subst</td><td class="num">745</td><td class="num zero">−1</td><td class="num">23</td><td class="num">24</td><td class="num">1</td><td class="num">2</td></tr>
+          <tr><td>no_suggestions</td><td class="num">745</td><td class="num zero">−1</td><td class="num">34</td><td class="num">35</td><td class="num">2</td><td class="num">11</td></tr>
+          <tr><td>serial</td><td class="num">744</td><td class="num zero">−2</td><td class="num">36</td><td class="num">38</td><td class="num">2</td><td class="num">10</td></tr>
+          <tr><td>no_instance_based_gamma</td><td class="num">743</td><td class="num zero">−3</td><td class="num">16</td><td class="num">19</td><td class="num">2</td><td class="num">1</td></tr>
+          <tr><td>no_atom_decomposition</td><td class="num">734</td><td class="num neg">−12</td><td class="num">26</td><td class="num">38</td><td class="num">3</td><td class="num">3</td></tr>
+          <tr><td>gamma_limit_3</td><td class="num">725</td><td class="num neg">−21</td><td class="num">17</td><td class="num">38</td><td class="num">1</td><td class="num">1</td></tr>
+          <tr><td>no_finite_o_quantification</td><td class="num">725</td><td class="num neg">−21</td><td class="num">17</td><td class="num">38</td><td class="num">1</td><td class="num">0</td></tr>
+          <tr><td>gamma_limit_5</td><td class="num">721</td><td class="num neg">−25</td><td class="num">18</td><td class="num">43</td><td class="num">1</td><td class="num">3</td></tr>
+          <tr><td>no_demodulation</td><td class="num">705</td><td class="num neg">−41</td><td class="num">20</td><td class="num">61</td><td class="num">0</td><td class="num">6</td></tr>
+          <tr><td>no_iterative_deepening</td><td class="num">652</td><td class="num neg">−94</td><td class="num">15</td><td class="num">109</td><td class="num">2</td><td class="num">0</td></tr>
+          <tr><td>no_contradiction_agent</td><td class="num">381</td><td class="num neg">−365</td><td class="num">5</td><td class="num">370</td><td class="num">0</td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>What the components are worth</h3>
+
+    <ul class="prose">
+      <li><strong>The contradiction agent is the prover.</strong> Removing it costs 365 of 746 solves. Nothing else
+        is within an order of magnitude. Global closure via the CSP, not local ground closure, is doing the work.</li>
+      <li><strong>Iterative deepening (−94) and demodulation (−41) are the next real contributors.</strong> Both
+        earn their keep.</li>
+      <li><strong>Eager definition unfolding is the one clear win (+48)</strong> and by far the largest source of
+        uniquely-solved problems (44). Discount it somewhat: 10 of its 72 gains overran the 2 s budget, some as far
+        as 6 s. The gain is real but smaller than +48.</li>
+      <li><strong><code>beta_variant</code> is a net negative (+22 when removed)</strong> at this budget. Worth
+        re-examining — it costs 42 problems to buy 20.</li>
+      <li><strong>Four components are indistinguishable from noise:</strong> primitive substitution (−1),
+        suggestions (−1), parallelism (−2) and instance-based gamma (−3). Each still trades 16–36 problems in both
+        directions, so they are doing <em>something</em> — just nothing that nets out. <code>serial</code> matching
+        a 16-worker pool on solved count is the one to look at hardest: the parallel search is buying no coverage,
+        only latency.</li>
+      <li><strong>Both tuning sweeps say “leave it alone.”</strong> Gamma limits 3 and 5 are worse than 1 (−21,
+        −25); prim-subst batch 4/8/16 spans 3 problems total. Neither knob is worth exposing as a tuning surface.</li>
+    </ul>
+
+    <div class="finding warn">
+      <div class="tag">Do not read the timing columns</div>
+      <p>Baseline ran first in the sweep and paid the parse cost that populated <code>parse_cache</code> for
+        everyone after it: 11 765 s of wall clock against ≈ 8 400 s for every later configuration. Per-problem
+        medians are comparable (23–27 ms); per-configuration totals are not.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Hard problems: nothing near 1.0</h2>
+
+    <p class="prose">Taking the union of sound solves across all 16 configurations — 908 distinct problems — and
+      joining against the TPTP rating in each problem file:</p>
+
+    <div class="bars">
+      <div class="bar-row"><span class="lbl">0.0</span><span class="bar-track"><span class="bar-fill" style="width:100%"></span></span><span class="val">553</span></div>
+      <div class="bar-row"><span class="lbl">0.1</span><span class="bar-track"><span class="bar-fill" style="width:43.6%"></span></span><span class="val">241</span></div>
+      <div class="bar-row"><span class="lbl">0.2</span><span class="bar-track"><span class="bar-fill" style="width:11.6%"></span></span><span class="val">64</span></div>
+      <div class="bar-row"><span class="lbl">0.3</span><span class="bar-track"><span class="bar-fill" style="width:7.2%"></span></span><span class="val">40</span></div>
+      <div class="bar-row"><span class="lbl">0.4</span><span class="bar-track"><span class="bar-fill" style="width:0.9%"></span></span><span class="val">5</span></div>
+      <div class="bar-row"><span class="lbl">0.5</span><span class="bar-track"><span class="bar-fill" style="width:0.7%"></span></span><span class="val">4</span></div>
+      <div class="bar-row"><span class="lbl">0.6+</span><span class="bar-track"><span class="bar-fill" style="width:0.2%"></span></span><span class="val">1</span></div>
+    </div>
+
+    <p class="prose"><strong>No problem rated at or near 1.0 was solved.</strong> The ceiling is 0.67, and 87 % of
+      solves sit at 0.1 or below. The top of the table:</p>
+
+    <div class="scroller">
+      <table>
+        <caption>Highest-rated problems solved, any configuration</caption>
+        <thead>
+          <tr><th class="num">Rating</th><th>Problem</th><th>Answer</th><th class="num">Configs</th><th class="num">Fastest</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">0.67</td><td>SEU/SEU994^5.p</td><td><span class="pill good">csa</span></td><td class="num">16 / 16</td><td class="num">34 ms</td></tr>
+          <tr><td class="num">0.50</td><td>ITP/ITP114^2.p</td><td>thm</td><td class="num">16 / 16</td><td class="num">359 ms</td></tr>
+          <tr><td class="num">0.50</td><td>ITP/ITP001^7.p</td><td>thm</td><td class="num">15 / 16</td><td class="num">134 ms</td></tr>
+          <tr><td class="num">0.50</td><td>ALG/ALG247^2.p</td><td>thm</td><td class="num">15 / 16</td><td class="num">385 ms</td></tr>
+          <tr><td class="num">0.50</td><td>SYO/SYO213^5.p</td><td>thm</td><td class="num">14 / 16</td><td class="num">86 ms</td></tr>
+          <tr><td class="num">0.42</td><td>SEU/SEU698^1.p</td><td>thm</td><td class="num">1 / 16</td><td class="num">2 038 ms</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="prose">The single hardest solve is a <code>CounterSatisfiable</code> — the answer class that is never
+      validated. <code>SEU994^5</code> is a TPS lattice problem whose expected status is
+      <code>CounterSatisfiable</code>, so the answer is right, and it does survive the root-cause-1 fix. But it
+      rests on the same unchecked predicate as the five wrong ones, so it should not be quoted as a headline result
+      until countermodels are validated.</p>
+
+    <p class="prose">Below that, 45 solves across the sweep were reported <em>past</em> the 2 s budget, up to 6 s —
+      the cooperative timeout is not enforced. <code>SCT171^3</code> takes ~4.8 s in every configuration, and
+      <code>eager_unfold_defs</code> accounts for 11 of the overruns on its own. Those are the solves to re-check
+      before anyone quotes them.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>Corpus coverage</h2>
+
+    <p class="prose">One in six problems never reached the prover, which caps what the sweep can say about
+      coverage:</p>
+
+    <div class="scroller">
+      <table>
+        <caption>Baseline outcome distribution · 5 109 problems</caption>
+        <thead><tr><th>Outcome</th><th class="num">Count</th><th class="num">Share</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>timeout</td><td class="num">3 423</td><td class="num">67.0 %</td><td>reached the prover, ran out of budget</td></tr>
+          <tr><td>thm</td><td class="num">685</td><td class="num">13.4 %</td><td>682 verified correct, 3 unverifiable</td></tr>
+          <tr><td>parse_timeout</td><td class="num">628</td><td class="num">12.3 %</td><td>parser exceeded 60 s</td></tr>
+          <tr><td>parser_error</td><td class="num">221</td><td class="num">4.3 %</td><td>parse failed outright</td></tr>
+          <tr><td>no_conjecture</td><td class="num">77</td><td class="num">1.5 %</td><td>not attemptable as posed</td></tr>
+          <tr><td>csa</td><td class="num">62</td><td class="num">1.2 %</td><td>61 correct, <strong>1 unsound</strong></td></tr>
+          <tr><td>unk</td><td class="num">8</td><td class="num">0.2 %</td><td></td></tr>
+          <tr><td>prover_error</td><td class="num">5</td><td class="num">0.1 %</td><td>proof reconstruction crashed</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="prose">Excluding parse failures and conjecture-free problems leaves 4 183 genuine attempts, of which
+      baseline solved 746 — <strong>17.8 %</strong>. Fixing the parser is the single largest available coverage win,
+      worth up to 849 problems, and it is a prerequisite for any corpus-level claim.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>What to do</h2>
+
+    <ol class="prose">
+      <li><strong>Stop emitting <code>CounterSatisfiable</code> until it is checked.</strong> Gate the SZS status
+        behind an actual model check and report <code>GaveUp</code> otherwise. A prover that never claims
+        countermodels is weaker; one that claims them wrongly is unusable. This is the only change that makes
+        today's binary trustworthy.</li>
+      <li><strong>Take the <code>distinguishable?</code> recursion.</strong> It is in the working tree, closes root
+        cause 1, and costs none of the 61 real countermodels.</li>
+      <li><strong>Build the real check for root cause 2.</strong> Unfold definitions, ground the <code>$o</code>-typed
+        subterms over <code>{⊤, ⊥}</code>, and test the literal conjunction with the ROBDD already in
+        <code>ShotTx.Util.PropSimplify</code>. All four failing conjectures live in a decidable fragment —
+        <code>SYO040^2</code>'s own header says so — so this is a decision procedure for exactly the family that is
+        breaking, not a heuristic.</li>
+      <li><strong>Add an <code>{:instantiate, …}</code> clause to <code>Proof.interior_event/2</code>.</strong>
+        57 discarded results, and it was concealing two violations.</li>
+      <li><strong>Pin the five as regression tests.</strong> They run in under 150 ms each and would have caught
+        both root causes.</li>
+      <li><strong>Widen <code>TptpRunner.score/2</code></strong> to the full SZS truth table so the classes it
+        currently scores <code>na</code> cannot regress unseen.</li>
+      <li><strong>Chase the nondeterminism.</strong> It persists at <code>worker_pool_size: 1</code>, so it is not
+        scheduling alone. Until it is gone, every delta in the table above carries unquantified run-to-run noise.</li>
+      <li><strong>Then re-run the sweep</strong> with a hard-enforced timeout and a working parser. The current
+        numbers rank the components correctly, but the absolute figures rest on a 16.6 % unparsed corpus and a soft
+        budget that 45 solves exceeded.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>Sources: <code>ablation_results/2026-08-15/*.csv</code> (81 744 rows, 16 configurations) · TPTP v9.3.0 at
+      <code>/opt/TPTP</code> · sweep commit <code>2a05f05</code> · live reproduction and fix testing against
+      <code>eb30581</code>. Countermodel transcripts, the 61-problem countermodel re-run and the 60-problem theorem
+      regression sample were all produced with <code>mix run -e 'ShotTx.Cli.main(…)'</code> on this machine.</p>
+  </footer>
+
+</div>
