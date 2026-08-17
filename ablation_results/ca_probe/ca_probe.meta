@@ -1,0 +1,12 @@
+started_at: 2026-08-17T08:35:41.201027Z
+git_sha: 4a9c4f337e0e220613174125f41a2efeb2c85313
+schedulers_online: 16
+timeout_ms: 2000
+repeats: 3
+problem_set: csp_calls > 0 in baseline or serial of ablation_results/2026-08-15
+note: tree is dirty relative to git_sha above. One uncommitted change in
+      lib/shot_tx/prover/contradiction_agent.ex:428 adds
+      Stats.incr(:csp_calls_inflight_suppressed) to the already-in-flight
+      clause of check_global_closure/1, per the patch documented in
+      scripts/ca_probe.exs. Without it the csp_inflight_suppressed column
+      would be 0 throughout.

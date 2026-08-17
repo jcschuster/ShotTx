@@ -426,6 +426,10 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp check_global_closure(%__MODULE__{pending_search: %Task{}} = state) do
+    # At most one search runs at a time; every check arriving while one is in
+    # flight is dropped. Counting them separates "the agent is busy searching"
+    # from "the agent had nothing to search for" (`:csp_calls_skipped`).
+    Stats.incr(state.ets_tables, :csp_calls_inflight_suppressed)
     {:noreply, state}
   end
 

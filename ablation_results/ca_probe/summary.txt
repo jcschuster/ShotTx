@@ -1,0 +1,58 @@
+
+ca_probe summary over 10062 run(s) from ablation_results/ca_probe/ca_probe.csv
+==============================================================================
+
+probe_auto  (5031 runs)
+  steps total                  14353411
+  peak open branches, median   196.00
+  global closure searches      9347
+  ... per 1000 steps           0.65
+  skipped, no options          208292
+  suppressed, search in flight 5559732 
+  time inside closure search   3997654 ms
+  ... as share of wall clock   46.51 %
+  longest single search        1982 ms
+  branches per search, mean    21.41
+  candidates per search, mean  996.84
+  solved                       1166
+
+probe_serial  (5031 runs)
+  steps total                  2460501
+  peak open branches, median   30.00
+  global closure searches      8317
+  ... per 1000 steps           3.38
+  skipped, no options          175057
+  suppressed, search in flight 677507 
+  time inside closure search   4113722 ms
+  ... as share of wall clock   51.55 %
+  longest single search        1977 ms
+  branches per search, mean    10.37
+  candidates per search, mean  161.05
+  solved                       1146
+
+------------------------------------------------------------------------------
+Reading: a large and pool-sensitive 'share of wall clock' means the
+agent is time-saturated. A small share with 'skipped' or 'suppressed'
+rising against a flat search count means it is trigger-starved.
+
+Repeated pairs: 3354; answering differently across repeats: 84
+  probe_auto SEU/SEU544^2.p: timeout, timeout, thm
+  probe_auto SYO/SYO255^5.p: thm, timeout, timeout
+  probe_serial SYO/SYO307^5.p: thm, timeout, thm
+  probe_auto DAT/DAT333^6.p: timeout, thm, thm
+  probe_auto SEU/SEU597^2.p: thm, thm, timeout
+  probe_auto SEU/SEU853^5.p: timeout, timeout, thm
+  probe_auto SYO/SYO096^5.p: thm, timeout, thm
+  probe_serial SYN/SYN055^5.p: timeout, timeout, thm
+  probe_serial SEV/SEV417^5.p: timeout, thm, thm
+  probe_auto NUM/NUM770^1.p: thm, thm, timeout
+  probe_serial SEU/SEU810^2.p: thm, timeout, thm
+  probe_auto LCL/LCL721^1.p: timeout, thm, timeout
+  probe_auto SEV/SEV417^5.p: timeout, thm, thm
+  probe_auto NUM/NUM660^1.p: thm, thm, timeout
+  probe_serial NUM/NUM663^1.p: thm, timeout, thm
+  probe_auto LCL/LCL588^1.p: thm, timeout, thm
+  probe_serial SEU/SEU592^2.p: timeout, thm, timeout
+  probe_auto SEV/SEV410^5.p: thm, timeout, timeout
+  probe_auto SEU/SEU609^2.p: thm, timeout, thm
+  probe_auto SEU/SEU886^5.p: timeout, thm, thm
