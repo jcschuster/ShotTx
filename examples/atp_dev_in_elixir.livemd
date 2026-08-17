@@ -64,7 +64,7 @@ form
 
 ```elixir
 # TPTP encoding for ∀ x, y. ∃ p. (p x) ⊃ (p y)
-~f"![X: $i, Y: $i]: ?[P: $i>$o]: P @ X => P @ Y"
+~f"![X: $i, Y: $i]: ?[P: $i>$o]: ((P @ X) => (P @ Y))"
 |> format! |> IO.puts
 ```
 
@@ -75,7 +75,7 @@ thf(p_type, type, p: $i>$o).
 thf(c_type, type, c: $i).
 thf(ax1, axiom, p @ c).
 thf(conj, conjecture,
-  ?[X: $i]: P @ X
+  ?[X: $i]: (P @ X)
 ).
 """ |> format! |> IO.puts
 ```
@@ -123,7 +123,7 @@ IO.puts format! parsed_formula_or_problem
 ## Proof Tree Rendering with Kino and Mermaid
 
 ```elixir
-res = prove ~f"![P, Q]: P & Q => Q & P", simplification: :none
+res = prove ~f"![P, Q]: ((P & Q) => (Q & P))", simplification: :none
 IO.puts format_result res
 ```
 
@@ -132,7 +132,7 @@ render res
 ```
 
 ```elixir
-res = prove ~f"![P: $i>$o]: P @ a | P @ b => P @ b", simplification: :none
+res = prove ~f"![P: $i>$o]: (((P @ a) | (P @ b)) => (P @ b))", simplification: :none
 IO.puts format_result res
 ```
 

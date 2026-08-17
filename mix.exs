@@ -1,7 +1,7 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
-  @version "0.0.3"
+  @version "0.0.4"
   @source_url "https://github.com/jcschuster/ShotTx"
 
   def project do
@@ -16,8 +16,7 @@ defmodule ShotTx.MixProject do
       docs: docs(),
       package: package(),
       name: "ShotTx",
-      description:
-        "Tableau component of Shot, a parallel Church Simple Type Theory theorem prover.",
+      description: "Tableau component of Shot, a parallel higher-order theorem prover.",
       source_url: @source_url
     ]
   end
@@ -112,11 +111,11 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, github: "jcschuster/ShotDs", override: true},
+      {:shot_ds, "~> 1.3"},
       # Unification algorithm
-      {:shot_un, "~> 0.1"},
+      {:shot_un, "~> 0.2"},
       # NCPO Term Ordering
-      {:shot_to, "~> 0.1"},
+      {:shot_to, "~> 0.2"},
       # Isabelle client — powers `ShotTx.Prover.ModelAgent.Backend.Nitpick`.
       # Optional: absence leaves the ModelAgent stubbed. Enable with
       # `config :shot_tx, isabelle_backend: :nitpick` after installing.

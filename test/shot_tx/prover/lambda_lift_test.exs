@@ -50,7 +50,7 @@ defmodule ShotTx.Prover.LambdaLiftTest do
       ctx = ~e"p: $i>$o"
 
       ShotDs.Hol.Sigils.with_context(ctx, fn ->
-        formula = ~f"![X:$i]: p @ X"
+        formula = ~f"![X:$i]: (p @ X)"
         assert {^formula, []} = LambdaLift.lift(formula)
       end)
     end

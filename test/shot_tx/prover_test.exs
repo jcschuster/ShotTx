@@ -77,6 +77,36 @@ defmodule ShotTx.ProverTest do
       thf(c, conjecture, p & ~p).
       """)
     end
+
+    # Demodulating with the branch's own `a = ~a` used to rewrite one side of
+    # the clash into the other, leaving a literal set that looked clash-free —
+    # reported as a countermodel for a theorem.
+    test "self-negation is unequal without propositional simplification" do
+      assert_thm(
+        ~p"""
+        thf(a_t, type, a: $o).
+        thf(c, conjecture, ~ (a = (~ a))).
+        """,
+        simplification: :none
+      )
+    end
+
+    # `:rename` abbreviates `a & b` as a fresh `C` and `:instantiate` then
+    # enumerates the truth values of `a`, `b` and `C`; the child choosing
+    # `a := $true, b := $true, C := $false` must close on its own renaming
+    # equation. That is a pure tableau argument, so it may not depend on
+    # propositional simplification evaluating `$true & $true`.
+    test "boolean argument case analysis closes without propositional simplification" do
+      assert_thm(
+        ~p"""
+        thf(p_t, type, p: $o>$o).
+        thf(a_t, type, a: $o).
+        thf(b_t, type, b: $o).
+        thf(c, conjecture, ((p @ a) & (p @ b)) => (p @ (a & b))).
+        """,
+        simplification: :none
+      )
+    end
   end
 
   describe "first-order gamma / delta" do
@@ -120,7 +150,7 @@ defmodule ShotTx.ProverTest do
       thf(a_t, type, a: $i).
       thf(p_t, type, p: $i>$o).
       thf(ax, axiom, p @ a).
-      thf(c, conjecture, ?[X:$i]: p @ X).
+      thf(c, conjecture, ?[X:$i]: (p @ X)).
       """)
     end
 
@@ -139,7 +169,7 @@ defmodule ShotTx.ProverTest do
       assert_thm(
         ~p"""
         thf(p_t, type, p: $i>$o).
-        thf(c, conjecture, ?[X:$i]: ((p @ X) => ![Y:$i]: p @ Y)).
+        thf(c, conjecture, ?[X:$i]: ((p @ X) => (![Y:$i]: (p @ Y)))).
         """,
         timeout: 10_000
       )
@@ -153,7 +183,7 @@ defmodule ShotTx.ProverTest do
       thf(l_def, definition,
         l = ^[X:$i, Y:$i]: ![P:$i>$o]: ((P @ X) => (P @ Y))
       ).
-      thf(c, conjecture, ![X:$i]: l @ X @ X).
+      thf(c, conjecture, ![X:$i]: (l @ X @ X)).
       """)
     end
 

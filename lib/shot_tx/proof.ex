@@ -403,7 +403,9 @@ defmodule ShotTx.Proof do
     {[{:branch, src, concrete_beta(src), b2} | evs], rest}
   end
 
-  defp interior_event({_src, {:instantiate, _, 0}, _}, state), do: state
+  # No child spawned (empty stream, or dual-atomizing the source closed the
+  # branch): nothing to linearize, and no `_I{idx}` segment to consume.
+  defp interior_event({_src, {:instantiate, _, _}, []}, state), do: state
 
   defp interior_event(
          {src, {:instantiate, _, _}, produced},
@@ -420,7 +422,7 @@ defmodule ShotTx.Proof do
   end
 
   defp interior_event({src, {:gamma_finite, _, _}, [_ | _] = instances}, {evs, segs}) do
-    {fold_rule_events(concrete_gamma(src), src, instances, evs), segs}
+    {fold_rule_events(concrete_gamma_finite(src), src, instances, evs), segs}
   end
 
   defp interior_event({_src, {:gamma_finite, _, _}, []}, state), do: state
@@ -436,12 +438,6 @@ defmodule ShotTx.Proof do
   end
 
   defp interior_event({_src, {:atomic, _}, []}, state), do: state
-
-  defp interior_event({_src, :paramodulation, []}, state), do: state
-
-  defp interior_event({src, :paramodulation, [_ | _] = paramodulants}, {evs, segs}) do
-    {fold_rule_events(:paramodulation, src, paramodulants, evs), segs}
-  end
 
   defp interior_event({_src, :demodulation, []}, state), do: state
 
@@ -524,6 +520,13 @@ defmodule ShotTx.Proof do
     case TF.get_term!(src_id) do
       negated(_) -> :nexists
       _ -> :forall
+    end
+  end
+
+  defp concrete_gamma_finite(src_id) do
+    case TF.get_term!(src_id) do
+      negated(_) -> :nexists_fin
+      _ -> :forall_fin
     end
   end
 
@@ -673,8 +676,15 @@ defmodule ShotTx.Proof do
   # head of each row for left alignment; prose (`(1)`, `(β on 3)`) lives
   # inside `\text{…}`.
   #
-  # Two Mermaid/KaTeX renderer quirks are worked around here (same as
+  # Three Mermaid/KaTeX renderer quirks are worked around here (same as
   # `ShotUn.Trace.Mermaid`):
+  #
+  #   * A control sequence spelled with letters (`\mapsto`, `\leftarrow`)
+  #     must be closed by a non-letter before the next fragment, or TeX
+  #     lexes the two together (`\mapsto` <> `c` → `\mapstoc`). KaTeX then
+  #     raises "Undefined control sequence" and Mermaid replaces the whole
+  #     diagram with its generic "Syntax error in text" graphic. Every such
+  #     command is therefore emitted flanked by `\;`.
   #
   #   * `\\` row separators are halved by Mermaid's quoted-label parser
   #     (`\\` → `\`). Emitting four backslashes in the label source (i.e.
@@ -758,6 +768,10 @@ defmodule ShotTx.Proof do
     wrap_math([tex_text("(#{l}) given") <> "\\;" <> tex_formula(f)])
   end
 
+  defp mermaid_label(%Step{kind: :rule, label: l, formula: f, rule: r, sources: []}) do
+    wrap_math([tex_text("(#{l})") <> "\\;" <> tex_formula(f), tex_text("(#{rule_symbol(r)})")])
+  end
+
   defp mermaid_label(%Step{kind: :rule, label: l, formula: f, rule: r, sources: srcs}) do
     head = tex_text("(#{l})") <> "\\;" <> tex_formula(f)
     footer = tex_text("(#{rule_symbol(r)} on #{Enum.join(srcs, ", ")})")
@@ -794,7 +808,7 @@ defmodule ShotTx.Proof do
 
     lines =
       Enum.map(sub, fn {k, v} ->
-        @bullet <> "\\;" <> tex_formula(k) <> "\\mapsto" <> tex_formula(v)
+        @bullet <> "\\;" <> tex_formula(k) <> "\\;\\mapsto\\;" <> tex_formula(v)
       end)
 
     "\n  Sub[\"" <> wrap_math([header | lines]) <> "\"]:::subst;"
@@ -1025,6 +1039,8 @@ defmodule ShotTx.Proof do
   defp rule_symbol(:nequiv), do: "¬≡"
   defp rule_symbol(:forall), do: "∀"
   defp rule_symbol(:nexists), do: "¬∃"
+  defp rule_symbol(:forall_fin), do: "∀ₒ"
+  defp rule_symbol(:nexists_fin), do: "¬∃ₒ"
   defp rule_symbol(:exists), do: "∃"
   defp rule_symbol(:nforall), do: "¬∀"
   defp rule_symbol(:beta_variant), do: "β-var"
@@ -1039,7 +1055,7 @@ defmodule ShotTx.Proof do
   # Specialised / non-classical rules
   defp rule_symbol(:bdd_oracle), do: "bdd⊢"
   defp rule_symbol(:prim_subst), do: "π"
-  defp rule_symbol(:paramodulation), do: "para"
+  defp rule_symbol(:demodulation), do: "demod"
   defp rule_symbol(:rename), do: "ren"
   defp rule_symbol(:instantiate), do: "inst"
   defp rule_symbol(:suggested_instantiate), do: "sug-inst"
