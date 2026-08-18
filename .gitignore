@@ -20,13 +20,18 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-shot_main-*.tar
+shot_tx-*.tar
 
 
 .claude-config
+.claude
+
+external
 
 # Benchmark output. Regenerate with scripts/run_hol_benchmark.sh; the figures
 # it produces are recorded in reports/.
 /bench_results/
 
-/ablation_results/
+# /ablation_results/
+
+shot_tx

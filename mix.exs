@@ -1,7 +1,7 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
-  @version "0.0.4"
+  @version "0.1.0"
   @source_url "https://github.com/jcschuster/ShotTx"
 
   def project do
@@ -26,7 +26,15 @@ defmodule ShotTx.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       maintainers: ["Johannes Schuster"],
-      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md)
+      files: [
+        "lib",
+        "mix.exs",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md",
+        "examples/structured_hol_problems.livemd",
+        "scripts"
+      ]
     ]
   end
 
@@ -44,8 +52,10 @@ defmodule ShotTx.MixProject do
 
   defp docs do
     [
-      main: "ShotTx",
-      extras: ["README.md"],
+      main: "readme",
+      extras: ~w(README.md CHANGELOG.md),
+      source_url: @source_url,
+      source_ref: "v#{@version}",
       groups_for_modules: [
         "Public API": [
           ShotTx,
@@ -111,11 +121,11 @@ defmodule ShotTx.MixProject do
   defp deps do
     [
       # Data structures and semantics for HOL objects
-      {:shot_ds, "~> 1.3"},
+      {:shot_ds, "~> 1.3.1"},
       # Unification algorithm
-      {:shot_un, "~> 0.2"},
+      {:shot_un, "~> 0.2.1"},
       # NCPO Term Ordering
-      {:shot_to, "~> 0.2"},
+      {:shot_to, "~> 0.2.0"},
       # Isabelle client — powers `ShotTx.Prover.ModelAgent.Backend.Nitpick`.
       # Optional: absence leaves the ModelAgent stubbed. Enable with
       # `config :shot_tx, isabelle_backend: :nitpick` after installing.

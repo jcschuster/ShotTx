@@ -9,8 +9,8 @@ defmodule ShotTx.Config do
   every invocation.
 
       ShotTx.Config.configure(timeout: 30_000, suggestions_enabled: true)
-      ShotTx.Prover.prove(problem)                     # uses the globals
-      ShotTx.Prover.prove(problem, [], timeout: 1_000) # per-call wins
+      ShotTx.Prover.prove(problem)                  # uses the globals
+      ShotTx.Prover.prove(problem, timeout: 1_000)  # per-call wins
 
   Storage is `Application.put_env(:shot_tx, :prover_defaults, ...)`, so the
   scope is the whole OTP node — two Livebooks sharing a runtime share

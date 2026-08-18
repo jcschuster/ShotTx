@@ -106,12 +106,61 @@ Session-wide defaults can be set with `ShotTx.Config`:
 
 ```elixir
 ShotTx.Config.configure(timeout: 30_000, suggestions_enabled: true)
-Prover.prove(problem)                       # uses the globals
-Prover.prove(problem, [], timeout: 1_000)   # per-call still wins
+Prover.prove(problem)                    # uses the globals
+Prover.prove(problem, timeout: 1_000)    # per-call still wins
 ```
 
 See `ShotTx.Prover` for the full public API and `ShotTx.Proof` for
 proof-tree inspection (text / Mermaid renderers).
+
+---
+
+## Operational notes
+
+Two properties of the prover surprise people who treat it as a pure
+function from problem to verdict. Neither is a bug, but both change how
+you should call it.
+
+### Verdicts are not reproducible near the timeout
+
+Proof search is parallel: a pool of workers races on a shared queue, and
+the answer depends on which worker closes a branch first inside the
+wall-clock budget. A problem that needs almost all of its budget may be
+decided on one run and time out on the next, on the same input and the
+same settings.
+
+A 10,062-run probe over the TPTP corpus repeated 3,354 problem /
+configuration pairs. 84 of them (2.5%) answered differently across
+repeats, and **every one of those was `Theorem` versus `Timeout`** — the
+budget ran out, not the calculus changing its mind. No problem was ever
+decided two different ways.
+
+So `Timeout` and `GaveUp` mean "not decided within this budget", not "not
+provable"; only `Theorem` and `CounterSatisfiable` are claims about the
+problem. If you need repeatable runs, give the search enough headroom
+that it is not finishing at the edge of the budget, and set
+`worker_pool_size: 1` to remove the scheduling race — the wall clock
+still bounds the search, so a problem right at the limit can still flip.
+
+### The term pool grows across proofs
+
+`ShotDs` hash-conses every term into `:term_pool`, a node-wide ETS table.
+A session frees its own tables when it exits, but the term pool is shared
+and only ever grows: it accumulates every term of every problem the node
+has seen. Measured on repeated proofs of one problem, ETS grew by roughly
+0.7 MB per proof and was never reclaimed — 2 MB to 23 MB over 30 proofs.
+
+This never matters for the escript, which is one fresh BEAM per problem.
+It matters for a long-lived node — a Livebook session, a benchmark sweep,
+an application that keeps proving. Reclaim it with:
+
+```elixir
+ShotTx.Prover.release_term_pool()
+```
+
+Term IDs do not survive a release: any `ShotTx.Proof`, `ShotDs.Data.Problem`
+or bare term ID you are still holding becomes unreadable. Call it between
+problems, once you have consumed the previous result.
 
 ---
 
@@ -157,18 +206,18 @@ component. Rendered docs are produced by `mix docs`.
 All proof-search knobs live in the `ShotTx.Data.Parameters` struct. The
 common ones:
 
-| Field                    | Default              | Purpose                                                 |
-| ------------------------ | -------------------- | ------------------------------------------------------- |
-| `timeout`                | `5_000`              | Wall-clock ms before returning `:timeout`               |
-| `initial_gamma_limit`    | `1`                  | Starting γ-rule instantiation depth                     |
-| `initial_prim_limit`     | `1`                  | Starting primitive-substitution binding depth           |
-| `unfold_defs`            | `:lazy`              | `:eager` unfolds definitions immediately                |
-| `demodulation`           | `true`               | Binding-free equational rewriting (forward + backward)  |
+| Field                    | Default              | Purpose                                                                |
+| ------------------------ | -------------------- | ---------------------------------------------------------------------- |
+| `timeout`                | `5_000`              | Wall-clock ms before returning `:timeout`                              |
+| `initial_gamma_limit`    | `1`                  | Starting γ-rule instantiation depth                                    |
+| `initial_prim_limit`     | `1`                  | Starting primitive-substitution binding depth                          |
+| `unfold_defs`            | `:lazy`              | `:eager` unfolds definitions immediately                               |
+| `demodulation`           | `true`               | Binding-free equational rewriting (forward + backward)                 |
 | `equivalence_processing` | `:bidirectional_imp` | `↔` expansion mode: `:same_polarity`, `:bidirectional_imp`, or `:dual` |
-| `contradiction_agent`    | `true`               | Enable global CSP-based closure                         |
-| `worker_pool_size`       | `:auto`              | `System.schedulers_online()`                            |
-| `iterative_deepening`    | `true`               | Whether to bump limits when workers stall               |
-| `formula_cost_strategy`  | `:default`           | `:default`, `:uniform`, `:depth_first`, `{:custom, fn}` |
+| `contradiction_agent`    | `true`               | Enable global CSP-based closure                                        |
+| `worker_pool_size`       | `:auto`              | `System.schedulers_online()`                                           |
+| `iterative_deepening`    | `true`               | Whether to bump limits when workers stall                              |
+| `formula_cost_strategy`  | `:default`           | `:default`, `:uniform`, `:depth_first`, `{:custom, fn}`                |
 
 The full table (with all 33 fields) is in
 `ShotTx.Data.Parameters`'s moduledoc. The soundness argument for why
@@ -222,7 +271,7 @@ the sweep matrix and per-problem CSV format.
 
 ## Dependencies
 
-- [`shot_ds`](https://github.com/jcschuster/ShotDs) — HOL data
+- [`shot_ds`](https://hex.pm/packages/shot_ds) — HOL data
   structures, term factory, TPTP / THF parser, semantics.
 - [`shot_un`](https://hex.pm/packages/shot_un) — higher-order
   unification and CSP solver.
@@ -230,6 +279,21 @@ the sweep matrix and per-problem CSV format.
 - [`isabelle_elixir`](https://hex.pm/packages/isabelle_elixir)
   (optional) — enables the `ShotTx.Prover.ModelAgent.Backend.Nitpick`
   backend.
+
+---
+
+## Installation
+
+This package can be installed by adding `shot_tx` to your list of dependencies
+in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:shot_tx, "~> 0.1"}
+  ]
+end
+```
 
 ---
 

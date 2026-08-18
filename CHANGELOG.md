@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-08-18
+
+### Added
+
+- README section on the two operational properties that surprise callers:
+  verdicts near the timeout are not reproducible, because a worker pool races
+  on a shared queue under a wall-clock budget; and the node-wide `:term_pool`
+  accumulates every term the node has seen until
+  `ShotTx.Prover.release_term_pool/0` clears it.
+
+### Changed
+
+- Dependencies bumped to `shot_ds` 1.3.1, `shot_un` 0.2.1 and `shot_to` 0.2.0.
+- Clearer `gamma_finite` labels; harder parse timeouts and a parse bug report.
+- Ablation-study driver improvements and the in-flight CSP counter.
+
+### Fixed
+
+- Demodulation rewrote connectives unsoundly.
+- Unsound models reported as `CounterSatisfiable`.
+- Unreliable termination and timeouts.
+- Resource leaks.
+- Parentless nodes in the proof-tree rendering.
+- The README and `ShotTx.Config` documented `Prover.prove(problem, [], opts)`,
+  which raises `FunctionClauseError`. A `ShotDs.Data.Problem` is proved
+  through `prove/2`.
+- An unclosed code fence in the README swallowed the License section.
+
 ## [0.0.3] - 2026-08-09
 
 Supersedes the unreleased 0.0.2; entries cover everything since 0.0.1.
