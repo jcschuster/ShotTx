@@ -25,6 +25,8 @@ shot_tx-*.tar
 
 .claude-config
 .claude
+.start_claudeman.sh
+.mcp.json
 
 external
 
