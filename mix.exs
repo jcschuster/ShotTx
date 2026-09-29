@@ -1,7 +1,7 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/jcschuster/ShotTx"
 
   def project do
@@ -32,6 +32,7 @@ defmodule ShotTx.MixProject do
         "README.md",
         "LICENSE",
         "CHANGELOG.md",
+        "CITATION.cff",
         "examples/structured_hol_problems.livemd",
         "scripts"
       ]

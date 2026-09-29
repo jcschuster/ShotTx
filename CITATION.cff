@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "ShotTx"
+abstract: >-
+  ShotTx is the tableau component of Shot, a concurrent automated theorem prover
+  for higher-order logic (Church's simple type theory) on the BEAM. It
+  implements a parallel, actor-based refutation search with iterative deepening,
+  Skolemisation, primitive substitution and demodulation on top of ShotDs,
+  ShotUn and ShotTo, and includes proof reconstruction, a TPTP benchmark runner
+  and an ablation harness.
+type: software
+authors:
+  - family-names: Schuster
+    given-names: Johannes
+    orcid: "https://orcid.org/0009-0003-5339-7216"
+    affiliation: "Otto-Friedrich-Universität Bamberg, Germany"
+version: "0.1.1"
+date-released: "2026-09-29"
+license: MIT
+repository-code: "https://github.com/jcschuster/ShotTx"
+url: "https://hexdocs.pm/shot_tx"
+keywords:
+  - automated theorem proving
+  - higher-order logic
+  - tableau
+  - concurrency
+  - actor model
+  - TPTP
+  - Elixir
+  - BEAM
