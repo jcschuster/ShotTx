@@ -1,5 +1,7 @@
 # ShotTx
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23044601.svg)](https://doi.org/10.5281/zenodo.23044601)
+
 **Shot** is a Church Simple Type Theory (STT) automated theorem prover.
 This package, `ShotTx`, is the **tableau** component of the Shot
 ecosystem — the `Tx` suffix reads as "Tableaux". Sibling packages cover
