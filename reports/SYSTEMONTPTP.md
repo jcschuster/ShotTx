@@ -73,9 +73,13 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds �
   builds it, runs a smoke test on a base image without Erlang (`--target check`), and
   exports `Shot---0.1.1.tgz` (`--target dist`). The source archive is a `git archive`
   one-liner in the Containerfile header.
-  *Caveats:* no container tool was available here, so the Containerfile itself is
-  untested; the release it builds was built and run directly. Built on the default
-  (trixie) image, the bundled ERTS needs glibc ≥ 2.38, plus `libtinfo6`, `zlib1g` and
+  The package bundles `libsctp.so.1`: ERTS `dlopen`s it at boot and, where it is
+  missing, prints `=ESOCK WARNING MSG` on **stdout** (`esock_warning_msg` in OTP's
+  `socket_util.c`). `bin/shot` puts `lib/` on `LD_LIBRARY_PATH` and sets
+  `-kernel standard_io_encoding unicode`, since without a locale the BEAM writes
+  latin1 (`¬` as a raw byte, `⊥` as `\x{22A5}`); the escript gets the same flag.
+  *Caveats:* built on the default (trixie) image, the package needs glibc ≥ 2.38
+  (`beam.smp`, `erl_child_setup`, `inet_gethost`), plus `libtinfo6`, `zlib1g` and
   `libstdc++6`, which Debian base images include. For an older server, build with an
   older `BUILDER` image (see the Containerfile header).
 
@@ -123,6 +127,11 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds �
 - [x] **I4 — The time limit covers the whole run.** Measured from VM start; the search
   gets `t − max(10 %, 500 ms)`, the rest is a hard `Task.yield` deadline that prints
   `WCTimeout`. Measured: `-t 3000` → 2.7 s wall clock with the release.
+  *Caveat:* "VM start" is `:erlang.statistics(:wall_clock)`, which misses the shell
+  scripts and `erlexec` before the emulator, and the halt after the status line. When
+  the hard deadline fires, the process exits up to 121 ms past `-t` (sweep, §4.3:
+  1785 of 4321 `WCTimeout` runs over 2000 ms). Every decided answer came in by
+  1734 ms, so only `WCTimeout` lines are at risk from a harness that kills at the limit.
 - [x] **I5 — Clean stdout.** The Logger handler writes to stderr.
 
 ### Detail corrections
@@ -147,8 +156,11 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds �
 
 ## 4. Verification
 
-1. **Release without Erlang on the host** — release built and run; the Containerfile's
-   `check` stage is written but not run (no container tool here).
+1. **Release without Erlang on the host** — `podman build --target check` and
+   `--target dist -o dist` pass (podman 5.4.2, default build args). The first run of
+   `check` failed: the CounterSatisfiable assertion missed because the ESOCK warning
+   came first on stdout, and the proof printed in latin1. Both fixed (B1); `check` now
+   also asserts that `⊥` survives, on an image with no locale and no `libsctp`.
 2. **B3 problems** — see B3.
 3. **THF sweep** — release build, `--szs -t 2000 --worker-pool-size 2`, 4 problems in
    parallel, TPTP v9.3.1. Every run printed exactly one status line.
@@ -158,8 +170,19 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds �
    - *With the B3 fixes* (stopped after 1877 problems in alphabetical order, up to `KRS`): **zero disagreements**; 36 Theorem (35 Theorem, 1 ContradictoryAxioms),
      1 Incomplete, 1 GaveUp, 105 Inappropriate, 1734 WCTimeout. On the same problems
      the earlier build proved 32 (5 gained, 1 lost to a timeout).
-   - **To do before submission:** finish the sweep on the remaining 3402 problems. Only
-     2 workers per problem, so the counts are a lower bound.
+   - *Full sweep at HEAD* (all 5279 problems; the `dist` package; `--szs --proof
+     -t 2000 --worker-pool-size 2` in an empty environment, i.e. no locale; 16 cores):
+     **zero disagreements**. 683 Theorem (681 Theorem, 2 ContradictoryAxioms),
+     8 Unsatisfiable, 6 CounterSatisfiable, 1 Satisfiable — all matching the problem
+     status; 63 GaveUp, every one on a CounterSatisfiable (55) or Satisfiable (8)
+     problem, i.e. models withheld by the pure-*o* gate; 6 Incomplete (3 Theorem,
+     1 Unsatisfiable, 2 CounterSatisfiable); 191 Inappropriate, all ShotDs parse or
+     type errors; 4321 WCTimeout. Exactly one status line per run, exit code as in §2,
+     nothing on stderr, every stdout line a `%` comment in valid UTF-8, and exactly one
+     `Comment` block per decided answer. On the 1877-problem prefix: 44 Theorem,
+     1 Incomplete, 1 GaveUp, 105 Inappropriate, 1726 WCTimeout — more theorems than
+     above, but on twice the cores. Only 2 workers per problem, so the counts are a
+     lower bound.
 
 4. **Clean stdout** — the `check` stage asserts that every non-status line starts with
    `%`; spot-checked with `--proof` on theorems and countermodels.

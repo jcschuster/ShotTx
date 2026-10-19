@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pure_o_models_only` parameter (default `true`, CLI `--[no-]pure-o-models-only`).
 - `ShotTx.Config.tptp_root/0`: `$TPTP`, falling back to `$TPTP_ROOT`.
 - Self-contained release (`mix release`, `bin/shot` wrapper) and a
-  `Containerfile` that packages it as `Shot---<version>.tgz`.
+  `Containerfile` that packages it as `Shot---<version>.tgz`. The package
+  bundles `libsctp`, without which ERTS prints a warning on stdout, and writes
+  UTF-8 whatever the locale.
 - CLI SZS statuses `Satisfiable`, `Unsatisfiable`, `Incomplete`, `Forced`,
   `Inappropriate`, `InputError` and `UsageError`.
 
@@ -51,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `PropSimplify` now evaluates `=` between truth values.
 - `.gitignore` entry for the escript no longer hides `lib/shot_tx/` and
   `test/shot_tx/` from tools such as `rg` and `fd`.
+- Without a UTF-8 locale the escript printed proofs in latin1 (`¬` as a raw
+  byte, `⊥` as `\x{22A5}`). Its stdout is now UTF-8 regardless of the locale.
 
 ## [0.1.1] - 2026-09-29
 

@@ -45,10 +45,10 @@ defmodule ShotTx.MixProject do
       main_module: ShotTx.Cli,
       name: "shot_tx",
       app: :shot_tx,
-      # Force UTF-8 filename encoding so the script runs cleanly regardless
-      # of the caller's locale — otherwise the BEAM prints a runtime warning
-      # about latin1 encoding on every invocation.
-      emu_args: "+fnu"
+      # Force UTF-8 filename and stdout encoding so the script runs cleanly
+      # regardless of the caller's locale — otherwise the BEAM prints a runtime
+      # warning about latin1 encoding on every invocation and garbles proofs.
+      emu_args: "+fnu -kernel standard_io_encoding unicode"
     ]
   end
 
