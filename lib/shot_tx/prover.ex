@@ -6,6 +6,8 @@ defmodule ShotTx.Prover do
 
     * `prove/1`, `prove/2`, `prove/3` — attempt to prove `conclusion` from
       `assumptions` (or a `ShotDs.Data.Problem`). Returns a `t:proof_result/0`.
+    * `refute/2` — run the tableau on a formula set without negating a
+      conclusion. Returns a `t:proof_result/0`, like `prove/3`.
     * `sat/1`, `sat/2`, `sat/3` — check a list of formulas for satisfiability
       without negating a conclusion. Returns the raw `Manager` result.
     * `prove_string/1`, `prove_string/2`, `prove_string/3` — thin convenience
@@ -26,6 +28,8 @@ defmodule ShotTx.Prover do
 
   import ShotDs.Hol.Dsl
   alias ShotTx.Data.Parameters
+  alias ShotTx.Generation.TypeUniverse
+  alias ShotTx.Prover.Rules
   use ShotDs.Hol.Patterns
   import ShotDs.Util.Formatter
   alias ShotDs.Stt.TermFactory, as: TF
@@ -37,7 +41,7 @@ defmodule ShotTx.Prover do
   @type proof_result ::
           {:thm, ShotTx.Proof.t()}
           | {:csa, String.t(), ShotTx.Proof.t()}
-          | :unknown
+          | {:unknown, term()}
           | {:timeout, ShotTx.Proof.t()}
           | {:error, term()}
 
@@ -89,8 +93,6 @@ defmodule ShotTx.Prover do
           proof_result() | {proof_result(), map()}
   def prove(conclusion, assumptions, opts)
       when is_integer(conclusion) and is_list(assumptions) and is_list(opts) do
-    {defs, params} = Keyword.pop(opts, :defs, %{})
-
     # Thunked: `format!/2` runs over every assumption, so a problem with
     # thousands of axioms would render all of them even when nothing logs.
     Logger.info(fn ->
@@ -103,52 +105,65 @@ defmodule ShotTx.Prover do
     closed_conclusion = close_formula(conclusion)
     closed_assms = Enum.map(assumptions, &close_formula/1)
 
-    formulas = [neg(closed_conclusion) | closed_assms]
+    refute([neg(closed_conclusion) | closed_assms], opts)
+  end
 
-    to_res = fn
-      {:sat,
-       %{
-         model_branch_id: bid,
-         model_atoms: atoms,
-         model_defs: ds,
-         model_trace: mt,
-         closed_traces: ct
-       }} ->
-        proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, mt, {atoms, ds})
-        {:csa, format_model(atoms, ds), proof}
+  @doc """
+  Runs the tableau on `formulas` exactly as given — no conclusion is negated —
+  and reconstructs the proof or model like `prove/3` does.
 
-      {:sat,
-       %{
-         model_branch_id: bid,
-         model_source: :model_agent,
-         model_witness: witness,
-         closed_traces: ct
-       }} ->
-        proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, [], {[], %{}})
-        {:csa, format_agent_witness(witness), proof}
-
-      {:unsat, global_subst, flex_pairs, traces} ->
-        proof = ShotTx.Proof.from_refutation(traces, formulas, global_subst, flex_pairs)
-        {:thm, proof}
-
-      {:unknown, _partial_model} ->
-        :unknown
-
-      {:timeout, partial_proof} ->
-        {:timeout, partial_proof}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  `{:thm, proof}` means the set is unsatisfiable; `{:csa, model, proof}` means
+  a model was found. Accepts the same options as `prove/3`, including `:defs`
+  and `:stats`.
+  """
+  @spec refute([Term.term_id()], keyword()) :: proof_result() | {proof_result(), map()}
+  def refute(formulas, opts) when is_list(formulas) and is_list(opts) do
+    {defs, params} = Keyword.pop(opts, :defs, %{})
 
     if opts[:stats] do
-      {sat_res, stats} = sat(formulas, defs, params)
-      {to_res.(sat_res), stats}
+      {raw, stats} = sat(formulas, defs, params)
+      {to_result(raw, formulas), stats}
     else
-      sat_res = sat(formulas, defs, params)
-      to_res.(sat_res)
+      formulas |> sat(defs, params) |> to_result(formulas)
     end
   end
+
+  defp to_result(
+         {:sat,
+          %{
+            model_branch_id: bid,
+            model_atoms: atoms,
+            model_defs: ds,
+            model_trace: mt,
+            closed_traces: ct
+          }},
+         formulas
+       ) do
+    proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, mt, {atoms, ds})
+    {:csa, format_model(atoms, ds), proof}
+  end
+
+  defp to_result(
+         {:sat,
+          %{
+            model_branch_id: bid,
+            model_source: :model_agent,
+            model_witness: witness,
+            closed_traces: ct
+          }},
+         formulas
+       ) do
+    proof = ShotTx.Proof.from_countermodel(ct, formulas, bid, [], {[], %{}})
+    {:csa, format_agent_witness(witness), proof}
+  end
+
+  defp to_result({:unsat, global_subst, flex_pairs, traces}, formulas) do
+    {:thm, ShotTx.Proof.from_refutation(traces, formulas, global_subst, flex_pairs)}
+  end
+
+  defp to_result({:unknown, reason}, _formulas), do: {:unknown, reason}
+  defp to_result({:timeout, partial_proof}, _formulas), do: {:timeout, partial_proof}
+  defp to_result({:error, reason}, _formulas), do: {:error, reason}
 
   @doc """
   Convenience wrapper that returns a human-readable string result,
@@ -169,7 +184,7 @@ defmodule ShotTx.Prover do
   @spec format_result(proof_result()) :: String.t()
   def format_result({:thm, _proof}), do: "THM"
   def format_result({:csa, model, _proof}), do: "CSA\n" <> model
-  def format_result(:unknown), do: "UNK"
+  def format_result({:unknown, _reason}), do: "UNK"
   def format_result({:timeout, _partial_proof}), do: "Timeout"
   def format_result({:error, reason}), do: "Error: #{inspect(reason)}"
 
@@ -212,8 +227,8 @@ defmodule ShotTx.Prover do
         {:unsat, global_substitution, remaining_flex, traces} ->
           {:unsat, global_substitution, remaining_flex, traces}
 
-        {:unknown, _} ->
-          {:unknown, []}
+        {:unknown, reason} ->
+          {:unknown, reason}
 
         {:timeout, partial_proof} ->
           {:timeout, partial_proof}
@@ -222,21 +237,32 @@ defmodule ShotTx.Prover do
           other
       end
 
-    if return_stats?, do: {unwrapped, stats}, else: unwrapped
+    gated = gate_model(unwrapped, formulas, defs, params)
+
+    if return_stats?, do: {gated, stats}, else: gated
   end
 
   def sat(formula, defs, opts), do: sat([formula], defs, opts)
 
-  # The session tree hangs off a node-wide supervisor, so only the reaper ties
-  # its lifetime to the caller's. `after` covers every exit the caller can
-  # observe; the reaper covers `Process.exit(caller, :kill)`, which it cannot.
-  #
-  # The reaper starts the session itself, once its monitor is in place. Handing
-  # it an already-started session instead leaves a window — caller killed after
-  # `start_child` returns but before the monitor is set — in which a fully
-  # running session, workers and ETS tables and all, is orphaned for the
-  # lifetime of the node. That window is precisely what a harness enforcing a
-  # wall-clock budget on `prove/3` aims at.
+  # A saturated branch is only a model if bounded γ-instantiation could not
+  # have missed anything — guaranteed when every type is pure-`o`, since those
+  # domains are finite and enumerated. See `Parameters.pure_o_models_only`.
+  defp gate_model({:sat, _} = result, formulas, defs, %Parameters{pure_o_models_only: true}) do
+    if pure_o_problem?(formulas, defs), do: result, else: {:unknown, :saturation_not_pure_o}
+  end
+
+  defp gate_model(result, _formulas, _defs, _params), do: result
+
+  defp pure_o_problem?(formulas, defs) do
+    (formulas ++ Map.values(defs))
+    |> TypeUniverse.from_formulas()
+    |> Enum.all?(&Rules.pure_o_type?/1)
+  end
+
+  # The session hangs off a node-wide supervisor; the reaper ties it to the
+  # caller. `after` covers normal exits, the reaper covers `:kill`. The reaper
+  # starts the session itself, after its monitor is set, so no window exists
+  # in which a killed caller orphans a running session.
   defp start_session(session_spec) do
     caller = self()
     ref = make_ref()
@@ -316,15 +342,10 @@ defmodule ShotTx.Prover do
   @spec format_stats(map(), keyword()) :: String.t()
   defdelegate format_stats(stats, opts \\ []), to: ShotTx.Prover.Stats, as: :format
 
-  # NCPO-LNF soundness: paramodulation is always ordered, so the
-  # `accessible` and `basic_sorts` fields of `params.term_order` must
-  # satisfy the compatibility conditions of Definitions 5–6 of
-  # Niederhauser & Middeldorp, *NCPO goes Beta-Eta-Long Normal Form* (2025).
-  # The permissive defaults (`accessible: :all`, `basic_sorts: :all`)
-  # satisfy them vacuously; a user-supplied restriction is validated
-  # against the constants appearing in the input problem. Violations
-  # abort the proof — silently reducing under an unsound order would be
-  # worse than refusing to run.
+  # NCPO-LNF soundness: a user-restricted `accessible` / `basic_sorts` must meet
+  # Definitions 5–6 of Niederhauser & Middeldorp (2025) for the input's
+  # constants. The `:all` defaults hold vacuously. Violations abort the proof
+  # rather than reduce under an unsound order.
   defp validate_term_order!(formulas, %Parameters{term_order: %ShotTo.Parameters{} = to_params}) do
     if to_params.accessible == :all and to_params.basic_sorts == :all do
       :ok

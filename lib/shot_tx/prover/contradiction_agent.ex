@@ -108,8 +108,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
      }}
   end
 
-  # Derived from the timestamp `EtsKeeper` stamps at session start, so the agent
-  # shares the manager's notion of the deadline without extra plumbing.
+  # Same deadline as the manager, from the session start stamped by `EtsKeeper`.
   defp proof_deadline_us(ets_tables, %Parameters{timeout: timeout}) do
     case :ets.lookup(ets_tables.stats, :proof_started_at_us) do
       [{_key, started_us}] -> started_us + timeout * 1000
@@ -153,11 +152,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   # --- CALL CALLBACKS ---------------------------------------------------------
 
-  # When `params.contradiction_agent` is `false`, global unification-based
-  # closure is disabled: the agent still tracks branch lifecycle for SAT/
-  # unsat coordination via ground closures, but never invokes the CSP. Settle
-  # calls reply `:open` immediately so the manager either deepens or reports
-  # `:unknown`.
+  # With global closure disabled, settle answers `:open` at once.
   defp do_settle(_from, %{params: %Parameters{contradiction_agent: false}} = state) do
     Stats.incr(state.ets_tables, :csp_calls_skipped)
     {:reply, :open, state}
@@ -181,15 +176,11 @@ defmodule ShotTx.Prover.ContradictionAgent do
 
   # --- INFO CALLBACKS ---------------------------------------------------------
   #
-  # Worker lifecycle events arrive here via the `branch_evidence_<session>`
-  # topic. They used to be `handle_call`/`handle_cast` on a direct CA edge;
-  # after the peer-architecture refactor the topic is authoritative.
+  # Worker lifecycle events arrive via the `branch_evidence_<session>` topic.
 
   defp do_handle_info({:branch_split, parent_id, child_ids}, state) do
-    # Cross-sender ordering isn't guaranteed on BEAM, so a child may already
-    # sit in `branch_closures` (its `:branch_closed` overtook this split).
-    # Excluding it here preserves the invariant that closed branches never
-    # re-enter `active_branches`.
+    # A child's `:branch_closed` may overtake this split; closed branches must
+    # not re-enter `active_branches`.
     live_children = Enum.reject(child_ids, &Map.has_key?(state.branch_closures, &1))
 
     new_active =
@@ -214,12 +205,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
     new_active = MapSet.delete(state.active_branches, branch_id)
 
     # A saturated branch is only a countermodel if nothing recorded against it
-    # can still close it. The manager-coordinated `:verify_csa` path applies
-    # exactly this filter through `csa_or_unknown/2`; the eager path used to
-    # skip it and answer `:sat` off the first saturation event, so a branch
-    # carrying unification clash candidates — which the CSP might well have
-    # closed under a global substitution — could win the race against its own
-    # refutation and be reported as a model.
+    # (clash candidates included) can still close it — same filter as
+    # `csa_or_unknown/2`.
     if closable?(branch_id, state) do
       {:noreply, %{state | active_branches: new_active}}
     else
@@ -266,12 +253,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
     Process.demonitor(ref, [:flush])
     cleared = %{state | pending_search: nil}
 
-    # `check_global_closure/1` is a no-op while a search is in flight, so any
-    # clash or split that arrived during this one was recorded but never acted
-    # on. Answering the waiter `:open` from that stale snapshot would let the
-    # manager deepen past a closure it already had the evidence for. Re-running
-    # once is bounded: a waiter only exists when every worker is idle, so no
-    # further evidence can arrive while the second search runs.
+    # Evidence that arrived during the search was not searched yet; rerun once
+    # before answering `:open`. Bounded: with a waiter, all workers are idle.
     if waiter != nil and stale_search?(cleared) do
       redispatch_for_waiter(cleared)
     else
@@ -340,10 +323,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
             send_proof_result({:sat, results}, state)
 
           unknown ->
-            # Without the `else` the manager was left waiting on a verdict that
-            # never came: its `saturated_branches` map is never empty again, so
-            # every later stall re-entered this same branch and iterative
-            # deepening stopped for the rest of the session.
+            # The manager must always hear back, or deepening stalls.
             if all_saturated?,
               do: send_proof_result(unknown, state),
               else: notify_manager(:csa_undecided, state)
@@ -426,25 +406,18 @@ defmodule ShotTx.Prover.ContradictionAgent do
   end
 
   defp check_global_closure(%__MODULE__{pending_search: %Task{}} = state) do
-    # At most one search runs at a time; every check arriving while one is in
-    # flight is dropped. Counting them separates "the agent is busy searching"
-    # from "the agent had nothing to search for" (`:csp_calls_skipped`).
+    # One search at a time; checks arriving meanwhile are dropped (and counted).
     Stats.incr(state.ets_tables, :csp_calls_inflight_suppressed)
     {:noreply, state}
   end
 
   defp check_global_closure(%__MODULE__{params: %Parameters{contradiction_agent: false}} = state) do
-    # Ablation: never dispatch a CSP; local ground closures still route through
-    # `record_branch_closure` / `react_to_closure`, so a purely ground-closable
-    # proof still succeeds without the agent.
+    # Ablation: no CSP; ground closures still work.
     {:noreply, state}
   end
 
   defp check_global_closure(%__MODULE__{} = state) do
-    # Empty `active_branches` is a transient eager-path event — the last open
-    # branch just closed, but other workers may still be mid-step. The
-    # manager's `:verify_all_closed` cast is the authoritative settle point;
-    # let it confirm closure rather than racing it from here.
+    # No active branches is transient here; `:verify_all_closed` confirms closure.
     if MapSet.size(state.active_branches) == 0 do
       {:noreply, state}
     else
@@ -454,8 +427,6 @@ defmodule ShotTx.Prover.ContradictionAgent do
         Stats.incr(state.ets_tables, :csp_calls_skipped)
         {:noreply, state}
       else
-        # Fires after every clash and split, so `:warning` put it on by default
-        # and rendered both lists whether or not anything was listening.
         Logger.debug(fn ->
           "Dispatching CSP. Branches: #{inspect(MapSet.to_list(state.active_branches))}. " <>
             "Candidates: #{inspect(Enum.map(option_lists, &length/1))}"
@@ -510,18 +481,12 @@ defmodule ShotTx.Prover.ContradictionAgent do
     %{state | pending_search: nil, settle_waiter: nil}
   end
 
-  # Each branch contributes a list of *options*; each option is itself a list
-  # of pairs to unify (currently always a single pair from `branch_options/2`).
-  # The CSP picks one option per branch, concatenates the selected pairs, and
-  # tries `ShotUn.unify/2`. Branches already discharged by ground closure are
-  # absent from `active_branches` and therefore never appear in `option_lists`.
+  # Each open branch contributes options (lists of pairs to unify). The CSP
+  # picks one option per branch and unifies their union.
   @typep option :: [{Term.term_id(), Term.term_id()}]
 
-  # The cartesian product is exponential in the number of open branches, so the
-  # synchronous `:verify_csa` / `:verify_exhausted` callers could run well past
-  # the proof's deadline. Abandoning yields `:error` — the same verdict a search
-  # that completed without a unifier gives — costing completeness at the current
-  # deepening round, never soundness.
+  # The product is exponential in the open branches, so the search stops at
+  # the deadline with `:error` — incomplete, never unsound.
   @spec find_global_closure([[option()]], non_neg_integer(), integer()) ::
           {:ok, UnifSolution.t()} | :error
   defp find_global_closure(option_lists, depth, deadline_us) do
@@ -575,10 +540,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
     end
   end
 
-  # An empty `option_lists` (no active branches left) is **not** insufficient —
-  # it means every branch has already discharged itself and the CSP trivially
-  # succeeds with the empty substitution. Insufficiency means some active
-  # branch has no way to close.
+  # Insufficient: some active branch has no way to close. (No branches at all
+  # is fine — the CSP trivially succeeds.)
   defp insufficient_options?(option_lists) do
     Enum.any?(option_lists, &Enum.empty?/1)
   end
@@ -605,10 +568,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
   # SHARED HELPERS
   ##############################################################################
 
-  # Removes a closed branch from `active_branches` and records its (possibly
-  # non-empty) closure substitution. Closed branches no longer constrain the
-  # global CSP — keeping them in `active_branches` would force the CSP to pick
-  # a dummy option for each, inflating the cartesian product unnecessarily.
+  # Records a branch's closure substitution and drops it from the CSP.
   defp record_branch_closure(state, branch_id, solution \\ %UnifSolution{}) do
     new_closures =
       Map.update(state.branch_closures, branch_id, [solution], &[solution | &1])
@@ -620,11 +580,8 @@ defmodule ShotTx.Prover.ContradictionAgent do
     }
   end
 
-  # Drains the closure side-effects after a `record_branch_closure/3`. If the
-  # closure emptied `active_branches`, every leaf has discharged itself — the
-  # tableau is closed under the empty substitution and we can broadcast `:unsat`
-  # immediately. Otherwise we re-run the eager CSP, since removing a branch may
-  # have unblocked the remaining constraints.
+  # After a closure: if no branch is left the tableau is closed, otherwise
+  # retry the CSP on the rest.
   defp react_to_closure(%__MODULE__{active_branches: active} = state) do
     if MapSet.size(active) == 0 do
       {:noreply, broadcast_state} = broadcast_unsat(%UnifSolution{}, state)
@@ -639,11 +596,7 @@ defmodule ShotTx.Prover.ContradictionAgent do
     Enum.map(branches, &branch_options(&1, state))
   end
 
-  # A branch's options are the unifiable clash pairs it (or any ancestor)
-  # observed. Ground closures are tracked separately via `branch_closures` and
-  # discharge the branch from `active_branches` outright, so they need no
-  # representation here. If a still-active branch has no clashes, it cannot be
-  # closed under the current state and the caller skips the CSP entirely.
+  # A branch's options: the clash pairs it or any ancestor observed.
   defp branch_options(branch_id, %__MODULE__{} = state) do
     branch_id
     |> get_inherited_clashes(state)

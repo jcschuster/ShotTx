@@ -99,7 +99,7 @@ defmodule Util do
   defp outcome({:thm, _}), do: "THM"
   defp outcome({:csa, _, _}), do: "CSA"
   defp outcome({:timeout, _}), do: "TIMEOUT"
-  defp outcome(:unknown), do: "UNK"
+  defp outcome({:unknown, _}), do: "UNK"
   defp outcome(other), do: inspect(other)
 end
 ```

@@ -105,9 +105,7 @@ defmodule ShotTx.Prover.ModelAgent do
     do_handle_verdict(branch_id, verdict, state)
   end
 
-  # A monitored probe Task terminated. Clean the branch out of in_flight so
-  # it's eligible for a future re-probe. Normal exits fire here too (Task
-  # completed successfully) — those are silent. Abnormal exits log a warning.
+  # A probe Task ended: free its branch for re-probing. Abnormal exits warn.
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case pop_by_task_ref(state.in_flight, ref) do
@@ -242,11 +240,9 @@ defmodule ShotTx.Prover.ModelAgent do
         {:noreply, cleared}
 
       {:error, _reason} ->
-        # Transient backend errors (bridge starting, temporarily unavailable,
-        # timeout) shouldn't burn the branch's probe slot. Clear the
-        # last_probed_version so the next tick retries. If the backend is
-        # permanently broken this will retry on every tick — the backend
-        # itself is responsible for its own backoff behavior.
+        # Transient backend errors do not use up the probe: clear
+        # `last_probed_version` so the next tick retries. Backoff is the
+        # backend's job.
         retryable = %{
           cleared
           | last_probed_version: Map.delete(cleared.last_probed_version, branch_id)
@@ -284,11 +280,8 @@ defmodule ShotTx.Prover.ModelAgent do
     GenServer.cast(manager_via, {:proof_result, result})
   end
 
-  # Called when MA is about to declare :sat. If `:aborted` is already true, CA
-  # (or something else) beat us to the punch — that's a soundness alarm because
-  # Fitting's theorem forbids simultaneous :sat and :unsat verdicts on a
-  # consistent problem. Log at :error so it's noticeable in dev; kept out of
-  # the terminal flow so we don't disrupt existing behavior.
+  # MA is about to declare `:sat` but the session already aborted: a `:sat`
+  # and an `:unsat` verdict on one problem is a soundness alarm, so log it.
   defp maybe_flag_conflict(state) do
     case Map.get(state.ets_tables, :stats) do
       nil ->

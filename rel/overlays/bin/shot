@@ -1,0 +1,8 @@
+#!/bin/sh
+# Shot entry point for the self-contained release. Usage as for `shot_tx`:
+#   bin/shot --szs --proof -t 30000 problem.p
+SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
+BIN_DIR=$(dirname "$SELF")
+export RELEASE_DISTRIBUTION=none
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
+exec "$BIN_DIR/shot_tx" eval 'ShotTx.Cli.main(System.argv())' "$@"

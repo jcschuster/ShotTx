@@ -51,10 +51,13 @@ defmodule ShotTx.SoundnessTest do
   # CSP call inside the ContradictionAgent cannot make one non-theorem
   # dominate the whole suite. Verdict `:thm` is the soundness signal;
   # everything else (including hard-kill) is acceptable.
-  defp verdict_within!(problem, prover_timeout_ms, wall_ms) do
+  defp verdict_within!(problem, prover_timeout_ms, wall_ms, opts \\ []) do
     task =
       Task.async(fn ->
-        elem(Prover.prove(problem, timeout: prover_timeout_ms, progress_interval_ms: 0), 0)
+        elem(
+          Prover.prove(problem, [timeout: prover_timeout_ms, progress_interval_ms: 0] ++ opts),
+          0
+        )
       end)
 
     case Task.yield(task, wall_ms) || Task.shutdown(task, :brutal_kill) do
@@ -180,16 +183,16 @@ defmodule ShotTx.SoundnessTest do
     end
 
     test "a = b for two distinct base constants" do
-      assert :csa =
-               verdict_within!(
-                 ~p"""
-                 thf(a_t, type, a: $i).
-                 thf(b_t, type, b: $i).
-                 thf(conj, conjecture, a = b).
-                 """,
-                 2_000,
-                 4_000
-               )
+      problem = ~p"""
+      thf(a_t, type, a: $i).
+      thf(b_t, type, b: $i).
+      thf(conj, conjecture, a = b).
+      """
+
+      # `$i` is not pure-`o`, so saturation is not trusted as a countermodel…
+      assert :unknown = verdict_within!(problem, 2_000, 4_000)
+      # …unless the caller opts out of the gate.
+      assert :csa = verdict_within!(problem, 2_000, 4_000, pure_o_models_only: false)
     end
 
     test "unwarranted p ⇒ q" do

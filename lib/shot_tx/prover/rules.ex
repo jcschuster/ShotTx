@@ -547,14 +547,9 @@ defmodule ShotTx.Prover.Rules do
   @spec closed_term?(Term.term_id()) :: boolean()
   defp closed_term?(term_id), do: MapSet.size(TF.get_term!(term_id).fvars) == 0
 
-  # True when `term_id` contains no loose de Bruijn index — i.e. every bound
-  # variable it mentions is bound by one of its own `bvars`. `closed_term?/1`
-  # is *not* enough for this: it inspects `fvars`, which tracks free variables
-  # only, and says nothing about indices reaching a binder further out.
-  #
-  # Computed bottom-up: a term `λ..λ. h a₁ … aₙ` introduces `length(bvars)`
-  # binders over its head and arguments, so the deepest index still loose below
-  # it is the largest index mentioned there, less the binders it just bound.
+  # True when `term_id` has no loose de Bruijn index (`closed_term?/1` only
+  # checks free variables). Bottom-up: the deepest index mentioned, less the
+  # binders the term introduces.
   @spec bound_var_free?(Term.term_id()) :: boolean()
   defp bound_var_free?(term_id) do
     {loose, _cache} = TermTraversal.fold_term!(term_id, &loose_index_depth/2)
@@ -569,9 +564,14 @@ defmodule ShotTx.Prover.Rules do
     |> max(0)
   end
 
+  @doc """
+  A type is pure-`o` iff its goal is `o` and every argument type is pure-`o`
+  (`o`, `o>o`, `(o>o)>o`, …). Such types have finitely many inhabitants up to
+  extensionality. A type variable is never pure-`o`.
+  """
   @spec pure_o_type?(Type.t()) :: boolean()
-  defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
-  defp pure_o_type?(_), do: false
+  def pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
+  def pure_o_type?(_), do: false
 
   defp non_signature_o_constant?(term_id) do
     term = TF.get_term!(term_id)
@@ -581,14 +581,8 @@ defmodule ShotTx.Prover.Rules do
       not Enum.member?(gen_o(term.type), term_id)
   end
 
-  # `:instantiate` records `{term.head, instance}` as a branch definition, so
-  # the instance must inhabit the *head's* type, not the candidate's own. They
-  # differ once the candidate is applied: `p a` with `p : (o>o>o) > o` has type
-  # `o`, and pairing `p := ⊥` makes a later `p a` unfold to `⊥ a`.
-  #
-  # `classify_atom/1` therefore draws from `gen_o(head.type)`, which requires
-  # the head's type to be enumerable — not implied by the candidate's own type
-  # being pure-`o`, since `p : i > o` applied to `a : i` also has type `o`.
+  # `:instantiate` binds the *head*, so the instance must inhabit the head's
+  # type, which must be enumerable — `p a : o` does not make `p`'s type pure-`o`.
   defp instantiable_o_constant?(term_id) do
     term = TF.get_term!(term_id)
 

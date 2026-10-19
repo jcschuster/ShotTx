@@ -229,10 +229,8 @@ defmodule ShotTx.IsabelleBridge do
   # WARMUP
   ##############################################################################
 
-  # Runs in a spawn_linked worker so the bridge process stays responsive to
-  # `:status` calls while Isabelle loads its HOL image. On success the shared
-  # client is unlinked from the worker (so worker's normal exit doesn't take
-  # it down) and re-linked to the bridge on the receiving side.
+  # Runs in a linked worker so the bridge keeps answering `:status` while
+  # Isabelle loads. On success the client is re-linked to the bridge.
   defp warmup_worker(bridge_pid) do
     case start_shared() do
       {:ok, shared, scratch_dir} ->
@@ -261,10 +259,8 @@ defmodule ShotTx.IsabelleBridge do
     end
   end
 
-  # Creates a per-bridge scratch dir, copies isabelle_elixir's TPTP.thy into
-  # it, and returns the path. All probes reuse this dir as their `master_dir`
-  # so Isabelle finds TPTP alongside their probe theory. The dir is cleaned up
-  # in `terminate/2`.
+  # Per-bridge scratch dir holding a copy of TPTP.thy, used as every probe's
+  # `master_dir`; removed in `terminate/2`.
   defp setup_scratch_dir do
     tptp_mod = Module.concat(@isabelle_client_module, TPTP)
 
@@ -318,9 +314,8 @@ defmodule ShotTx.IsabelleBridge do
   # VERDICT CLASSIFICATION
   ##############################################################################
 
-  # The false-friend to watch is `"Nitpick found no model"` which means Nitpick
-  # exhausted bounded search without finding one, NOT that it found a model.
-  # Match on the specific SAT phrases so `"found no model"` never matches.
+  # Match SAT phrases specifically: "Nitpick found no model" means bounded
+  # search failed, not that a model exists.
   @sat_phrases [
     "Nitpick found a model",
     "Nitpick found a genuine model",

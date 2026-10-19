@@ -44,13 +44,13 @@
 #
 # ## Usage
 #
-#     export TPTP_ROOT=/opt/TPTP
+#     export TPTP=/opt/TPTP
 #     mix run scripts/ca_probe.exs             # run the probe
 #     mix run scripts/ca_probe.exs --summarise # print the comparison
 #
 # Environment:
 #
-#   TPTP_ROOT           required, the TPTP directory containing Problems/
+#   TPTP / TPTP_ROOT    required, the TPTP directory containing Problems/ ($TPTP wins)
 #   CA_PROBE_SWEEP      sweep dir to take the problem set from
 #                       (default ablation_results/2026-08-15)
 #   CA_PROBE_OUT        output dir (default ablation_results/ca_probe)
@@ -112,8 +112,8 @@ defmodule CaProbe do
     Logger.configure(level: :none)
 
     tptp_root =
-      System.get_env("TPTP_ROOT") ||
-        raise "TPTP_ROOT is missing. Set it to your TPTP directory."
+      ShotTx.Config.tptp_root() ||
+        raise "Neither TPTP nor TPTP_ROOT is set. Set one to your TPTP directory."
 
     sweep_dir = env("CA_PROBE_SWEEP", "ablation_results/2026-08-15")
     out_dir = env("CA_PROBE_OUT", "ablation_results/ca_probe")
@@ -280,7 +280,7 @@ defmodule CaProbe do
     case result do
       {:thm, _} -> {:thm, "", stats}
       {:csa, model, _} -> {:csa, String.slice(model, 0, 120), stats}
-      :unknown -> {:unk, "", stats}
+      {:unknown, _} -> {:unk, "", stats}
       {:timeout, _} -> {:timeout, "", stats}
       {:error, reason} -> {:prover_error, inspect(reason), stats}
     end

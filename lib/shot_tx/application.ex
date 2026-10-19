@@ -15,10 +15,8 @@ defmodule ShotTx.Application do
     Supervisor.start_link(children, opts)
   end
 
-  # Add the app-level Isabelle server owner when the user opts in via config
-  # (`config :shot_tx, isabelle_backend: :nitpick`). Absent config leaves the
-  # supervision tree untouched so users who don't need model finding pay
-  # nothing at boot.
+  # Start the Isabelle server owner only when configured
+  # (`config :shot_tx, isabelle_backend: :nitpick`).
   defp maybe_isabelle_bridge do
     case Application.get_env(:shot_tx, :isabelle_backend, :none) do
       :none -> []

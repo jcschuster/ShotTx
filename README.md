@@ -28,16 +28,30 @@ Skolemisation, primitive substitution, and demodulation.
 ```bash
 mix deps.get
 mix compile
-mix escript.build          # produces the `shot_tx` executable
+mix escript.build          # produces the `shot_tx` executable (needs Erlang/OTP)
+```
+
+A self-contained package (bundled Erlang runtime, started via `bin/shot`) is
+built with the `Containerfile`:
+
+```bash
+podman build --target dist -o dist .   # dist/Shot---<version>.tgz
 ```
 
 ### Solve a problem
 
 ```bash
-./shot_tx problem.p                  # short output: THM / CSA / UNK / Timeout
+./shot_tx problem.p                  # short output: THM / CSA / UNK / Timeout / ...
 ./shot_tx --szs problem.p            # SZS status line
-./shot_tx --szs --proof problem.p    # + reconstructed proof tree
-./shot_tx --szs -t 30000 problem.p   # 30-second wall-clock budget
+./shot_tx --szs --proof problem.p    # + proof tree as TPTP comment lines
+./shot_tx --szs -t 30000 problem.p   # 30-second wall-clock budget for the whole run
+```
+
+`include` directives and relative problem paths are resolved against `$TPTP`
+(or `$TPTP_ROOT`):
+
+```bash
+TPTP=/opt/TPTP ./shot_tx --szs Problems/SYO/SYO002^1.p
 ```
 
 Inline problems and stdin are also accepted:
@@ -50,15 +64,40 @@ echo "P | ~P" | ./shot_tx -
 ### Sample SZS output
 
 ```
-% SZS status Theorem for PUZ001+1.p
-% SZS status CounterSatisfiable for SET001+3.p
-% SZS status Timeout for HOL024^4.p
-% SZS status GaveUp for LCL083-1.p
+% SZS status Theorem for SYO002^1.p
+% SZS status WCTimeout for SYO001^1.p
+% SZS status Inappropriate for PUZ001+1.p : Unexpected token: 'fof' (:atom)
 ```
 
-Exit codes: `0` for `Theorem` / `CounterSatisfiable`, `1` for `GaveUp` /
-`Timeout`, `2` for parsing or option errors — matching the convention
-used by the CASC prover competitions.
+With `--proof`, the proof follows in a `Comment` block. For a countermodel,
+the model comes first, then the open branch:
+
+```
+% SZS status CounterSatisfiable for pq.p
+% SZS output start Comment for pq.p
+% p, ¬q
+% 1. ¬(p ⊃ q)                         [given]
+% 2. p ∧ (¬q)                         [bdd⊢ on 1]
+% 3. p                                [∧ on 2]
+% 4. ¬q                               [∧ on 2]
+% 5. ★ open                           [model: p, ¬q]
+% SZS output end Comment for pq.p
+```
+
+The block is Shot's own derivation tree, not a TSTP derivation.
+
+| Status                           | When                                              | Exit |
+| -------------------------------- | ------------------------------------------------- | ---- |
+| `Theorem` / `CounterSatisfiable` | Problem has a conjecture                          | 0    |
+| `Unsatisfiable` / `Satisfiable`  | No conjecture, or `--sat`                         | 0    |
+| `Incomplete`                     | Search space exhausted without a model            | 1    |
+| `GaveUp`                         | A model could not be trusted (below), and other   | 1    |
+| `WCTimeout`                      | Time limit reached                                | 1    |
+| `Forced`                         | Stopped by SIGTERM                                | 1    |
+| `Inappropriate`                  | Input is not THF Shot can parse (e.g. FOF/CNF)    | 2    |
+| `InputError`                     | Missing file, unreadable include                  | 2    |
+| `UsageError`                     | Bad command-line options (also explained on stderr) | 2  |
+| `Error`                          | Internal error                                    | 2    |
 
 ---
 
@@ -74,7 +113,7 @@ shot_tx [OPTIONS] <FILE | "STRING" | ->
 | `--sat`              | Check satisfiability instead of proving (skip conjecture negation) |
 | `--proof`            | Print the reconstructed proof / countermodel                       |
 | `--stats`            | Print search statistics after the result                           |
-| `-t`, `--timeout MS` | Wall-clock budget (default 5000)                                   |
+| `-t`, `--timeout MS` | Wall-clock budget for the whole run (default 5000)                 |
 | `-v`, `--verbose`    | Enable prover debug logging on stderr                              |
 | `-h`, `--help`       | Show the full option listing                                       |
 
@@ -97,11 +136,12 @@ Prover.prove(~f"![P : $o]: (P | ~P)")
 #=> {:thm, %ShotTx.Proof{...}}
 
 # Parse and prove a TPTP problem.
-{:ok, problem} = Tptp.parse_tptp_file("PUZ001+1.p", :tptp_problem)
+{:ok, problem} = Tptp.parse_tptp_file("SYO/SYO002^1.p", :tptp_problem)
 Prover.prove(problem, timeout: 30_000)
 
-# Ask for satisfiability instead.
-Prover.sat(problem_formulas, definitions, timeout: 10_000)
+# Refute a formula set as given (no conjecture is negated).
+# {:thm, proof} means unsatisfiable, {:csa, model, proof} satisfiable.
+Prover.refute(formulas, defs: definitions, timeout: 10_000)
 ```
 
 Session-wide defaults can be set with `ShotTx.Config`:
@@ -138,8 +178,8 @@ budget ran out, not the calculus changing its mind. No problem was ever
 decided two different ways.
 
 So `Timeout` and `GaveUp` mean "not decided within this budget", not "not
-provable"; only `Theorem` and `CounterSatisfiable` are claims about the
-problem. If you need repeatable runs, give the search enough headroom
+provable"; only `Theorem`, `CounterSatisfiable`, `Unsatisfiable` and
+`Satisfiable` are claims about the problem. If you need repeatable runs, give the search enough headroom
 that it is not finishing at the edge of the budget, and set
 `worker_pool_size: 1` to remove the scheduling race — the wall clock
 still bounds the search, so a problem right at the limit can still flip.
@@ -198,6 +238,14 @@ ShotTx.Prover (public API)
 - **SAT exit**: a branch with an empty queue and no sleeping γ-rules is
   saturated; the agent extracts a countermodel.
 
+### Countermodels are conservative
+
+A saturated branch is only a model if bounded γ-instantiation cannot have
+missed an instance. That is guaranteed when every type in the problem is
+pure-`o` (`$o`, `$o>$o`, …), whose domains are finite and enumerated. For
+any other problem a saturated branch is reported as `:unknown` (`GaveUp`). Pass `pure_o_models_only: false` (`--no-pure-o-models-only`) to
+get the v0.1 behaviour, which reports every saturated branch.
+
 See the `ShotTx.Prover.*` module documentation for the details of every
 component. Rendered docs are produced by `mix docs`.
 
@@ -220,8 +268,9 @@ common ones:
 | `worker_pool_size`       | `:auto`              | `System.schedulers_online()`                                           |
 | `iterative_deepening`    | `true`               | Whether to bump limits when workers stall                              |
 | `formula_cost_strategy`  | `:default`           | `:default`, `:uniform`, `:depth_first`, `{:custom, fn}`                |
+| `pure_o_models_only`     | `true`               | Only report countermodels for pure-`o` problems (see above)            |
 
-The full table (with all 33 fields) is in
+The full table is in
 `ShotTx.Data.Parameters`'s moduledoc. The soundness argument for why
 ShotTx does binding-free demodulation instead of classical paramodulation
 lives in `ShotTx.Prover.Paramodulation`'s moduledoc — the rigid-variable
@@ -246,7 +295,7 @@ the primary test harness while the formal test suite grows.
 An ablation-study driver over the TPTP TH0 / TH1 corpus is included:
 
 ```bash
-export TPTP_ROOT=/path/to/TPTP
+export TPTP=/path/to/TPTP
 ./scripts/run_ablation.sh
 ```
 

@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `ShotTx.Prover.refute/2`: runs the tableau on a formula set as given and
+  returns a proof or model like `prove/3`.
+- `pure_o_models_only` parameter (default `true`, CLI `--[no-]pure-o-models-only`).
+- `ShotTx.Config.tptp_root/0`: `$TPTP`, falling back to `$TPTP_ROOT`.
+- Self-contained release (`mix release`, `bin/shot` wrapper) and a
+  `Containerfile` that packages it as `Shot---<version>.tgz`.
+- CLI SZS statuses `Satisfiable`, `Unsatisfiable`, `Incomplete`, `Forced`,
+  `Inappropriate`, `InputError` and `UsageError`.
+
+### Changed
+
+- **Countermodels are conservative.** A saturated branch is reported as a model
+  only for pure-`o` problems; otherwise the result is `{:unknown, reason}`
+  (`GaveUp`). Set
+  `pure_o_models_only: false` for the old behaviour.
+- `prove/3` and `refute/2` return `{:unknown, reason}` instead of `:unknown`.
+- CLI: `--version` prints `Shot---<version>`.
+- CLI: timeouts are reported as `WCTimeout`; `-t` bounds the whole run (VM
+  start, parsing, search, proof reconstruction).
+- CLI: `--proof` output is a single SZS `Comment` block with every line
+  prefixed by `% `; countermodels print the model first. Sat mode now renders
+  proofs and models too.
+- CLI: problems without a conjecture are checked for satisfiability.
+- CLI: log output goes to stderr, so stdout carries only the result.
+- CLI: includes are resolved against the problem's own directory first, then
+  `$TPTP` / `$TPTP_ROOT`.
+- Benchmark tooling accepts `$TPTP` as well as `$TPTP_ROOT`.
+- Code comments trimmed.
+
+### Fixed
+
+- Wrong `CounterSatisfiable` answers for the TPTP theorems `SYO017^1` and
+  `SYO041^2`, from three interacting defects:
+  - an `:instantiate` child kept rewrites mentioning the constant it had just
+    defined (`⊤ → c` next to `c := ⊤`), so demodulation undid every unfolding.
+    Branch definitions are now unfolded inside equations;
+  - the default precedence could orient `⊤ = t` as `⊤ → t`. `⊤` and `⊥` now rank
+    below every other constant (`TermOrder.default_precedence/1`);
+  - `⊤ = ⊥` was never evaluated, so `:rename` abbreviated it instead.
+    `PropSimplify` now evaluates `=` between truth values.
+- `.gitignore` entry for the escript no longer hides `lib/shot_tx/` and
+  `test/shot_tx/` from tools such as `rg` and `fd`.
+
 ## [0.1.1] - 2026-09-29
 
 ### Added

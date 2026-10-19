@@ -23,18 +23,17 @@ defmodule ShotTx.CsaSoundnessTest do
 
   defp refute_csa(id) do
     {:ok, problem} = ShotTx.Benchmark.HolSuite.fetch(id)
-    parsed = ShotDs.Tptp.parse_tptp_string!(problem.thf)
+    refute_csa_thf(id, problem.thf)
+  end
+
+  defp refute_csa_thf(id, thf) do
+    parsed = ShotDs.Tptp.parse_tptp_string!(thf)
 
     verdicts =
       for _ <- 1..@repeats do
         task =
           Task.async(fn ->
-            # `:unknown` comes back as a bare atom; every other verdict is a
-            # tagged tuple.
-            case Prover.prove(parsed, timeout: 5_000, progress_interval_ms: 0) do
-              verdict when is_atom(verdict) -> verdict
-              tagged -> elem(tagged, 0)
-            end
+            elem(Prover.prove(parsed, timeout: 5_000, progress_interval_ms: 0), 0)
           end)
 
         case Task.yield(task, 20_000) || Task.shutdown(task, :brutal_kill) do
@@ -98,6 +97,31 @@ defmodule ShotTx.CsaSoundnessTest do
     @tag timeout: 120_000
     test "powerset of the empty set, Leibniz-iff" do
       refute_csa("set_powerset_empty_leibniz_iff")
+    end
+  end
+
+  # An `:instantiate` child kept `⊤ → c` next to `c := ⊤`, so demodulation
+  # undid every unfolding of `c` and hid the clash.
+  describe "TPTP theorems once answered CounterSatisfiable" do
+    @tag timeout: 120_000
+    test "SYO017^1 — boolean extensionality, Example 18b [BB05]" do
+      refute_csa_thf("SYO017^1", """
+      thf(h, type, h: $o > $o).
+      thf(conj, conjecture, (h @ ((h @ $true) = (h @ $false))) = (h @ $false)).
+      """)
+    end
+
+    @tag timeout: 120_000
+    test "SYO041^2 — no boolean function permutes like this" do
+      refute_csa_thf("SYO041^2", """
+      thf(f, type, f: $o > $o).
+      thf(g, type, g: $o > $o).
+      thf(x, type, x: $o).
+      thf(y, type, y: $o).
+      thf(3, conjecture,
+        ~ ((x != y) & ((g @ x) = y) & ((g @ y) = x)
+           & ((f @ (f @ (f @ x))) = (g @ (f @ x))))).
+      """)
     end
   end
 end

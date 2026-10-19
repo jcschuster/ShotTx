@@ -12,7 +12,8 @@
 #   scripts/run_ablation.sh [OUTPUT_DIR]
 #
 # Environment variables:
-#   TPTP_ROOT        Required. Path to the TPTP directory containing Problems/.
+#   TPTP, TPTP_ROOT  One is required: the TPTP directory containing Problems/.
+#                    $TPTP wins when both are set.
 #   BASE_TIMEOUT     Optional. Per-problem timeout in ms (default: 2000). Applied
 #                    uniformly to every configuration — the matrix does not sweep
 #                    the timeout, so that solved-count differences between rows
@@ -65,18 +66,20 @@ stamp() { date '+[%m-%d %H:%M:%S]'; }
 # literal: an integer when set, `nil` (TptpRunner's "no limit") when not.
 PROBLEM_LIMIT_LITERAL="${PROBLEM_LIMIT:-nil}"
 
-if [ -z "${TPTP_ROOT:-}" ]; then
-    echo "ERROR: TPTP_ROOT environment variable is not set." >&2
+TPTP_ROOT="${TPTP:-${TPTP_ROOT:-}}"
+export TPTP_ROOT
+if [ -z "$TPTP_ROOT" ]; then
+    echo "ERROR: neither TPTP nor TPTP_ROOT is set." >&2
     exit 1
 fi
 
-# TPTP_ROOT being set proves nothing: the devcontainer exports it unconditionally,
+# The variable being set proves nothing: the devcontainer exports it unconditionally,
 # so a container started without the corpus bind-mount still passes the check
 # above and then silently produces empty result directories. Insist on the
 # directory the runner actually globs.
 if [ ! -d "$TPTP_ROOT/Problems" ]; then
     echo "ERROR: no TPTP corpus at $TPTP_ROOT (expected a Problems/ subdirectory)." >&2
-    echo "       TPTP_ROOT is set but the corpus is not mounted there — most likely" >&2
+    echo "       The variable is set but the corpus is not mounted there — most likely" >&2
     echo "       this container was not started from the elixir-isabelle profile." >&2
     exit 1
 fi

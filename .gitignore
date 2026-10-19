@@ -36,4 +36,7 @@ external
 
 # /ablation_results/
 
-shot_tx
+/shot_tx
+
+# Release packages built with the Containerfile.
+/dist/

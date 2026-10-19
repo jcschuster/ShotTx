@@ -15,7 +15,7 @@ defmodule ShotTx.Data.Parameters do
   | `formula_cost` | `&Rules.rule_cost/1` | Cost function used by `FormulaPqueue`; lower cost = higher priority. |
   | `simplification` | `:deep` | Propositional simplification depth: `:none`, `:shallow`, or `:deep`. |
   | `orient` | `:none` | Orientation of commutative connectives (∧, ∨, ↔, =) by term order before classifying. `:none` skips orientation entirely. `:shallow` orients only the outermost connective of each formula. `:deep` recurses into all subterms bottom-up, normalising every nested commutative connective (including those embedded in atom arguments). |
-  | `term_order` | `%ShotTo.Parameters{const_precedence: &:erlang.phash2/1}` | Parameters forwarded to the `ShotTo` term-order module. The default `const_precedence` is `&:erlang.phash2/1` — every constant name gets a stable hash-based rank. This gives NCPO-LNF a total well-founded precedence on symbols so it can orient equations between arbitrary distinct constants (including Skolem constants generated during δ). The paper's other soundness conditions (basicness, accessibility) remain at their permissive defaults (`:all`), which hold vacuously. A user-supplied map or function overrides this — see `ShotTo.Parameters`. |
+  | `term_order` | `%ShotTo.Parameters{const_precedence: &TermOrder.default_precedence/1}` | Parameters forwarded to the `ShotTo` term-order module. The default `const_precedence` gives every constant name a stable hash-based rank, with `⊤` and `⊥` below all others so equations always rewrite towards truth values. This gives NCPO-LNF a total well-founded precedence on symbols so it can orient equations between arbitrary distinct constants (including Skolem constants generated during δ). The paper's other soundness conditions (basicness, accessibility) remain at their permissive defaults (`:all`), which hold vacuously. A user-supplied map or function overrides this — see `ShotTo.Parameters`. |
   | `finite_o_quantification` | `true` | When `true`, quantifiers whose bound variable has a pure `o`-type are handled by the finite γ-rule (full enumeration of the propositional domain); when `false`, they are instantiated by the ordinary γ-rule like any other type. Purity is recursive — `o`, `o>o` and `o>o>o` all qualify, so a quantifier over a boolean connective is enumerated (16 instances at `o>o>o`) rather than left to prim-subst. Steps rendered `∀ₒ`/`¬∃ₒ` come from this rule, not from `primitive_substitution`. |
   | `equivalence_processing` | `:bidirectional_imp` | How `↔` is expanded. `:same_polarity` keeps the current β-split into `{p∧q, ¬p∧¬q}` (and dually for negation). `:bidirectional_imp` rewrites `p↔q` as `(p→q) ∧ (q→p)`, producing an α on the positive side. `:dual` does both: emits an α with both implications and the same-polarity disjunction so the prover can exploit either path. |
   | `instance_based_gamma` | `true` | When `true`, the first firing of a γ-rule is also instantiated with every closed term of the matching type currently known on the branch, and prim-subst unit-set bindings (`λy. H(y) = c`) are generated for branch constants. Ground terms discovered later are picked up the next time the same γ-rule fires under iterative deepening. When `false`, only the fresh-variable instantiation is performed and no instance-driven steps are added. |
@@ -36,10 +36,11 @@ defmodule ShotTx.Data.Parameters do
   | `primitive_substitution` | `true` | When `true`, γ-rules whose bound type has goal `:o` schedule a `:prim_subst` companion after `prim_subst_after` firings. When `false`, prim-subst is never scheduled regardless of `initial_prim_limit`. Hard off-switch for the general-bindings enumeration; equality/higher-order reasoning falls back to Leibniz/extensional expansion and paramodulation. |
   | `iterative_deepening` | `true` | When `true`, the `Manager` bumps `gamma_limit` and `prim_depth_limit` by 1 every time all workers stall, then wakes parked branches. When `false`, deepening never fires: once workers are all idle the prover returns `:unknown` with the initial limits. Use with elevated `initial_gamma_limit` / `initial_prim_limit` to run at a fixed depth. |
   | `formula_cost_strategy` | `:default` | Named cost function used by `FormulaPqueue`; resolved at prove-time to `formula_cost`. `:default` → `Rules.rule_cost/1`. `:uniform` → constant cost (breadth-first over the rule queue). `:depth_first` → penalises rules that generate many children (β / prim-subst) so simple decompositions run to completion first. `{:custom, fun}` bypasses the strategy and uses `fun` directly. |
+  | `pure_o_models_only` | `true` | When `true`, a saturated open branch (or an external model finder) is reported as a model only if every type in the input is pure-`o` (see `ShotTx.Prover.Rules.pure_o_type?/1`). For any other problem the answer is `{:unknown, :saturation_not_pure_o}`: saturation under bounded γ-instantiation is not a certified countermodel once infinite domains are involved. Set to `false` to report every saturated branch as a model (the v0.1 behaviour). |
   | `progress_interval_ms` | `2_000` | Interval at which the `Manager` logs a one-line progress report during a proof. Set to `0` to silence the log entirely (useful for benchmark sweeps). |
   """
 
-  alias ShotTx.Prover.Rules
+  alias ShotTx.Prover.{Rules, TermOrder}
 
   defstruct timeout: 5_000,
             initial_gamma_limit: 1,
@@ -52,7 +53,7 @@ defmodule ShotTx.Data.Parameters do
             formula_cost: &Rules.rule_cost/1,
             simplification: :deep,
             orient: :none,
-            term_order: %ShotTo.Parameters{const_precedence: &:erlang.phash2/1},
+            term_order: %ShotTo.Parameters{const_precedence: &TermOrder.default_precedence/1},
             finite_o_quantification: true,
             equivalence_processing: :bidirectional_imp,
             instance_based_gamma: true,
@@ -73,6 +74,7 @@ defmodule ShotTx.Data.Parameters do
             primitive_substitution: true,
             iterative_deepening: true,
             formula_cost_strategy: :default,
+            pure_o_models_only: true,
             progress_interval_ms: 2_000
 
   @type t :: %__MODULE__{
@@ -109,6 +111,7 @@ defmodule ShotTx.Data.Parameters do
           iterative_deepening: boolean(),
           formula_cost_strategy:
             :default | :uniform | :depth_first | {:custom, (Rules.rule_t() -> non_neg_integer())},
+          pure_o_models_only: boolean(),
           progress_interval_ms: non_neg_integer()
         }
 end

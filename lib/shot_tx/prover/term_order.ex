@@ -48,6 +48,21 @@ defmodule ShotTx.Prover.TermOrder do
   def strict_gt?(s_id, t_id, %Parameters{} = params), do: ShotTo.gt?(s_id, t_id, params)
 
   @doc """
+  Default constant precedence: a stable hash rank, with `⊤` and `⊥` below every
+  other constant (`⊤ > ⊥`).
+
+  Truth values must be minimal so that an equation `t = ⊤` always rewrites
+  `t → ⊤`. The reverse rewrite `⊤ → t` turns every `⊤` that definition
+  unfolding produces back into `t`, so unfolding never makes progress.
+  """
+  @spec default_precedence(term()) :: integer()
+  # Distinct ranks, `⊤ > ⊥` as under the plain hash: with equal ranks
+  # `h ⊤ = h ⊥` could not be oriented and would never rewrite.
+  def default_precedence("⊤"), do: -1
+  def default_precedence("⊥"), do: -2
+  def default_precedence(name), do: :erlang.phash2(name)
+
+  @doc """
   Returns `:greater`, `:less`, or `:equal` for two term IDs under a total
   extension of NCPO-LNF parameterized by `params`. Never returns
   `:incomparable`.

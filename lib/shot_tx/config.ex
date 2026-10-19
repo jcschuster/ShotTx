@@ -43,6 +43,20 @@ defmodule ShotTx.Config do
   @spec reset() :: :ok
   def reset, do: Application.delete_env(:shot_tx, @env_key)
 
+  @doc """
+  The TPTP directory: `$TPTP` if set, else `$TPTP_ROOT`, else `nil`.
+
+  ShotDs resolves `include` directives through `$TPTP_ROOT` only, so the result
+  is also exported as `$TPTP_ROOT`.
+  """
+  @spec tptp_root() :: String.t() | nil
+  def tptp_root do
+    ["TPTP", "TPTP_ROOT"]
+    |> Enum.map(&System.get_env/1)
+    |> Enum.find(&(&1 not in [nil, ""]))
+    |> tap(&(&1 && System.put_env("TPTP_ROOT", &1)))
+  end
+
   defp validate_keys!(opts) do
     case Enum.reject(Keyword.keys(opts), &(&1 in @valid_keys)) do
       [] ->
