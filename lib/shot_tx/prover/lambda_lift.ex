@@ -19,10 +19,11 @@ defmodule ShotTx.Prover.LambdaLift do
   arrow type) are skipped: lifting them would be useless indirection.
   """
 
-  alias ShotDs.Data.{Declaration, Term, Type}
+  alias ShotDs.Data.{Declaration, Term}
   alias ShotDs.Stt.TermFactory, as: TF
   alias ShotDs.Util.TermTraversal
   alias ShotTx.Generation
+  alias ShotTx.Prover.Rules
   import ShotDs.Hol.Dsl, only: [eq: 2]
 
   @hol_connective_names ~w(⊤ ⊥ ¬ ∨ ∧ ⊃ ≡ = ∀ ∃)
@@ -97,11 +98,8 @@ defmodule ShotTx.Prover.LambdaLift do
   # choosing `:rename` / `:instantiate` candidates; this keeps lifting in step
   # with it.
   defp domain_element?(term_id, type) do
-    pure_o_type?(type) and Enum.member?(Generation.gen_o(type), term_id)
+    Rules.pure_o_type?(type) and Enum.member?(Generation.gen_o(type), term_id)
   end
-
-  defp pure_o_type?(%Type{goal: :o, args: args}), do: Enum.all?(args, &pure_o_type?/1)
-  defp pure_o_type?(_type), do: false
 
   defp closed_abstraction?(%Term{bvars: bvars, max_num: m, fvars: fvars}) do
     MapSet.size(fvars) == 0 and m <= length(bvars)

@@ -14,8 +14,8 @@ authors:
     given-names: Johannes
     orcid: "https://orcid.org/0009-0003-5339-7216"
     affiliation: "Otto-Friedrich-Universität Bamberg, Germany"
-version: "0.1.1"
-date-released: "2026-09-29"
+version: "0.1.2"
+date-released: "2026-10-19"
 license: MIT
 repository-code: "https://github.com/jcschuster/ShotTx"
 url: "https://hexdocs.pm/shot_tx"
@@ -28,4 +28,11 @@ keywords:
   - TPTP
   - Elixir
   - BEAM
-doi: 10.5281/zenodo.23044601
+doi: 10.5281/zenodo.23044599
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23044599
+    description: "Concept DOI: all versions, resolves to the latest."
+  - type: doi
+    value: 10.5281/zenodo.23044601
+    description: "Version 0.1.1, the version described in the Master's thesis."

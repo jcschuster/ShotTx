@@ -1,7 +1,7 @@
 defmodule ShotTx.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.1.2"
   @source_url "https://github.com/jcschuster/ShotTx"
 
   def project do
@@ -13,6 +13,7 @@ defmodule ShotTx.MixProject do
       test_ignore_filters: ["test/prover_case.exs"],
       deps: deps(),
       escript: escript(),
+      releases: releases(),
       docs: docs(),
       package: package(),
       name: "ShotTx",
@@ -44,10 +45,22 @@ defmodule ShotTx.MixProject do
       main_module: ShotTx.Cli,
       name: "shot_tx",
       app: :shot_tx,
-      # Force UTF-8 filename encoding so the script runs cleanly regardless
-      # of the caller's locale — otherwise the BEAM prints a runtime warning
-      # about latin1 encoding on every invocation.
-      emu_args: "+fnu"
+      # Force UTF-8 filename and stdout encoding so the script runs cleanly
+      # regardless of the caller's locale — otherwise the BEAM prints a runtime
+      # warning about latin1 encoding on every invocation and garbles proofs.
+      emu_args: "+fnu -kernel standard_io_encoding unicode"
+    ]
+  end
+
+  # Self-contained build for SystemOnTPTP: bundles ERTS, started via
+  # `bin/shot` (from `rel/overlays`). See `Containerfile`.
+  defp releases do
+    [
+      shot_tx: [
+        include_erts: true,
+        include_executables_for: [:unix],
+        strip_beams: true
+      ]
     ]
   end
 

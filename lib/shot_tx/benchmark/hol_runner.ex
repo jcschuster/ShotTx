@@ -48,11 +48,8 @@ defmodule ShotTx.Benchmark.HolRunner do
   # Evaluation configuration. Defaults as shipped; change here to re-evaluate.
   @params %Parameters{}
 
-  # Safety net for an unattended run: if the prover's own timeout fails to
-  # fire, abandon the problem rather than hanging the sweep. Set well above
-  # `timeout` on purpose — ShotTx routinely overshoots its own deadline by
-  # several multiples, and a tight wall here would silently truncate problems
-  # it was about to solve.
+  # Safety net in case the prover's own timeout fails to fire. Kept well above
+  # `timeout`, since the prover can overshoot its deadline.
   @hard_timeout_factor 12
   @hard_timeout_grace_ms 10_000
 
@@ -174,7 +171,7 @@ defmodule ShotTx.Benchmark.HolRunner do
 
   defp classify({:thm, _proof}, stats), do: {:thm, "", stats}
   defp classify({:csa, model, _proof}, stats), do: {:csa, model, stats}
-  defp classify(:unknown, stats), do: {:unk, "", stats}
+  defp classify({:unknown, _}, stats), do: {:unk, "", stats}
   defp classify({:timeout, _partial}, stats), do: {:timeout, "", stats}
   defp classify({:error, reason}, stats), do: {:prover_error, inspect(reason), stats}
 

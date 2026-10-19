@@ -23,6 +23,30 @@ defmodule ShotTx.ProverTest do
     end
   end
 
+  describe "refute/2 (no conjecture negated)" do
+    test "a contradictory set is refuted" do
+      problem = ~p"""
+      thf(p_t, type, p: $o).
+      thf(a1, axiom, p).
+      thf(a2, axiom, ~p).
+      """
+
+      formulas = Enum.map(problem.axioms, &elem(&1, 1))
+      assert {:thm, %ShotTx.Proof{}} = Prover.refute(formulas, timeout: 5_000)
+    end
+
+    test "a satisfiable pure-o set has a model" do
+      problem = ~p"""
+      thf(p_t, type, p: $o).
+      thf(a1, axiom, p).
+      """
+
+      formulas = Enum.map(problem.axioms, &elem(&1, 1))
+      assert {:csa, model, %ShotTx.Proof{}} = Prover.refute(formulas, timeout: 5_000)
+      assert model =~ "p"
+    end
+  end
+
   describe "propositional alpha / beta rules" do
     test "modus ponens" do
       assert_thm(~p"""
@@ -202,7 +226,7 @@ defmodule ShotTx.ProverTest do
     test "renders all verdict shapes" do
       assert Prover.format_result({:thm, %ShotTx.Proof{}}) == "THM"
       assert Prover.format_result({:csa, "p", %ShotTx.Proof{}}) =~ "CSA"
-      assert Prover.format_result(:unknown) == "UNK"
+      assert Prover.format_result({:unknown, :exhausted_without_model}) == "UNK"
       assert Prover.format_result({:timeout, %ShotTx.Proof{}}) == "Timeout"
       assert Prover.format_result({:error, :boom}) =~ "Error"
     end
@@ -217,7 +241,7 @@ defmodule ShotTx.ProverTest do
       """
 
       assert {{:thm, _proof}, stats} = Prover.prove(problem, timeout: 5_000, stats: true)
-      assert is_map(stats) or is_list(stats) or is_tuple(stats) or is_struct(stats)
+      assert is_map(stats) or is_list(stats) or is_tuple(stats)
     end
   end
 

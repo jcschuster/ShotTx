@@ -68,4 +68,26 @@ defmodule ShotTx.Util.PropSimplifyTest do
       end)
     end
   end
+
+  # `:rename` used to abbreviate `$true = $false` as a fresh constant, after
+  # which nothing ever evaluated it (SYO017^1 answered CounterSatisfiable).
+  describe "equality between truth values" do
+    test "is evaluated, also inside atom arguments" do
+      ctx = ~e"h: $o>$o, p: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert PropSimplify.simplify(~f"$true = $false") == Definitions.false_term()
+        assert PropSimplify.simplify(~f"$false = $false") == Definitions.true_term()
+        assert PropSimplify.simplify(~f"h @ ($true = $false)") == ~f"h @ $false"
+      end)
+    end
+
+    test "other equations keep their shape" do
+      ctx = ~e"p: $o"
+
+      ShotDs.Hol.Sigils.with_context(ctx, fn ->
+        assert PropSimplify.simplify(~f"p = $false") == ~f"p = $false"
+      end)
+    end
+  end
 end

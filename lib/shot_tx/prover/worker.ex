@@ -80,10 +80,8 @@ defmodule ShotTx.Prover.Worker do
       "Worker #{state.id} waking up. Gamma: #{new_gamma}, Prim depth: #{new_prim_depth}"
     )
 
-    # A deepening round clears the manager's idle set, so every worker must
-    # report its stall again for the next round to be detected. Without this an
-    # already-idle worker would stay silent and the pool would never again
-    # register as fully stalled.
+    # A deepening round clears the manager's idle set, so report the stall
+    # again.
     new_state =
       %{
         state
@@ -167,18 +165,10 @@ defmodule ShotTx.Prover.Worker do
           handle_step_result(step_result, %{state | steps_since_yield: steps + 1})
         rescue
           e ->
-            # Dying here loses the branch outright: `checkout_work/1` already
-            # removed it from the shared queue, and the ContradictionAgent still
-            # counts it among `active_branches` — so the tableau can never be
-            # declared closed and the session can only run to timeout. A
-            # restarted worker does not help either; it comes back with the
-            # round's initial gamma/prim limits.
-            #
-            # A branch whose rule application raises is exactly a branch this
-            # calculus cannot decide, which is what `:branch_exhausted` means.
-            # Reporting it that way keeps the worker pool alive, lets the
-            # manager settle on an honest `:unknown`, and cannot turn into a
-            # wrong verdict — an exhausted branch never yields a countermodel.
+            # Report a crashing branch as exhausted rather than dying: the
+            # branch is already off the queue, so losing it would block closure
+            # until timeout. Exhausted never yields a countermodel, so this
+            # cannot produce a wrong verdict.
             Logger.error(
               "Worker #{state.id} could not apply a rule on branch #{branch.id}, " <>
                 "reporting it as undecidable: #{Exception.format(:error, e, __STACKTRACE__)}"
@@ -195,10 +185,8 @@ defmodule ShotTx.Prover.Worker do
     end
   end
 
-  # Edge-triggered: the manager keeps idle workers in a `MapSet`, so reporting on
-  # every empty poll cost a message and told it nothing new. The ETS row is what
-  # `push_work/2` reads to wake only workers actually waiting, written here so
-  # the two cannot disagree.
+  # Edge-triggered: report idleness once. The ETS row lets `push_work/2` wake
+  # only waiting workers.
   defp mark_idle(%{idle?: true} = state), do: state
 
   defp mark_idle(state) do
@@ -299,11 +287,8 @@ defmodule ShotTx.Prover.Worker do
     {:noreply, %{state | current_branch: nil}, {:continue, :process_next}}
   end
 
-  # A branch with nothing left to fire whose literal set is *not* provably a
-  # model (see `ShotTx.Prover.Branch.model_certain?/2`). It cannot be closed by
-  # this calculus and cannot be reported as a countermodel either, so it is
-  # recorded and dropped: unlike `:idle` it has no sleeping rules, so waking it
-  # after a deepening round would only re-derive the same dead end.
+  # Out of rules but not a certain model (`Branch.model_certain?/2`): neither
+  # closable nor a countermodel. Dropped, since deepening cannot help it.
   defp handle_step_result({:exhausted, branch}, state) do
     Stats.incr(state.ets_tables, :branches_exhausted)
 
@@ -381,10 +366,7 @@ defmodule ShotTx.Prover.Worker do
     end
   end
 
-  # Only parked workers are told. A worker already holding a branch discards
-  # `:work_available` on arrival, so dispatching to the whole topic cost N-1
-  # useless messages per push — worst exactly during a blow-up, when every worker
-  # is busy and this table is empty.
+  # Only parked workers are woken; busy ones would discard the message.
   defp push_work(ets_tables, branch) do
     priority_key = {byte_size(branch.id), branch.id}
     :ets.insert(ets_tables.work_queue, {priority_key, branch})
@@ -409,10 +391,8 @@ defmodule ShotTx.Prover.Worker do
     Enum.scan(segments, fn seg, acc -> acc <> "_" <> seg end)
   end
 
-  # Reads suggestions inherited from `branch.id`'s ancestor prefixes and
-  # splices each as a synthetic `:suggested_instantiate` rule. The
-  # `:ets.update_counter/3` guard enforces the cascade cap atomically —
-  # the racing worker that sees `applied_count > ceiling` skips the splice.
+  # Splices suggestions inherited from ancestors; `:ets.update_counter/3`
+  # enforces the cascade cap atomically.
   defp splice_suggestions(branch, %{params: %Parameters{suggestions_enabled: false}} = _state),
     do: branch
 
@@ -447,11 +427,8 @@ defmodule ShotTx.Prover.Worker do
     GenServer.cast(manager_via, message)
   end
 
-  # Every branch-lifecycle event is delivered as an asynchronous fanout on
-  # `branch_evidence_<session>`. Both CA and SA subscribe; neither knows
-  # about the other. Cross-sender ordering is handled by CA's defensive
-  # split/closed logic — see the "Out-of-order tolerance" note on
-  # `ContradictionAgent`.
+  # Lifecycle events fan out on `branch_evidence_<session>` to CA and SA.
+  # See "Out-of-order tolerance" in `ContradictionAgent`.
   defp broadcast_evidence(session_id, msg) do
     Registry.dispatch(ShotTx.Prover.PubSub, "branch_evidence_#{session_id}", fn entries ->
       for {pid, _} <- entries, do: send(pid, msg)

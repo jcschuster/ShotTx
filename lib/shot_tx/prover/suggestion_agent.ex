@@ -71,9 +71,7 @@ defmodule ShotTx.Prover.SuggestionAgent do
 
   @impl true
   def init({session_id, %Parameters{suggestions_enabled: false} = params}) do
-    # Passive mode: never subscribe, never process. Keep the state so a
-    # future hot-reload could flip the flag without a restart, but the
-    # message handlers all early-return.
+    # Disabled: never subscribe; handlers return early.
     {:ok, %__MODULE__{session_id: session_id, params: params}}
   end
 
@@ -146,10 +144,8 @@ defmodule ShotTx.Prover.SuggestionAgent do
     }
   end
 
-  # Runs pair-level unification on every clash pair reported for `branch_id`
-  # and publishes the derivable `{recipe, term}` suggestions into the
-  # `:suggestions` ETS table, then dispatches `:work_available` so idle
-  # workers pick them up. Scoring and TopK come later — Step 5.
+  # Unifies each clash pair of `branch_id`, publishes the resulting
+  # `{recipe, term}` suggestions to ETS and wakes idle workers.
   defp process_new_clashes(_branch_id, new_pairs, state) do
     depth = state.params.unification_depth
 
@@ -196,14 +192,9 @@ defmodule ShotTx.Prover.SuggestionAgent do
     end
   end
 
-  # A hint fires as `app(recipe, term)`, so the term must inhabit the recipe's
-  # argument type — which a well-typed σ does not guarantee. `Provenance` tags
-  # every hole of a general binding with the recipe that produced it, and those
-  # holes carry the binding's types, not the quantified variable's.
-  #
-  # Dropping the mismatch here costs nothing: a hint is a search shortcut, and
-  # this one names no formula the branch could hold. Publishing it would instead
-  # raise in `Branch.apply_rule/6`, on another branch, and cost it its verdict.
+  # A hint fires as `app(recipe, term)`, so `term` must have the recipe's
+  # argument type, which σ does not guarantee. Drop mismatches rather than
+  # crash `Branch.apply_rule/6` on another branch.
   defp applicable?(recipe, term_id) do
     with {:ok, %Term{type: %Type{args: [arg_type | _]}}} <- TF.get_term(recipe),
          {:ok, %Term{type: ^arg_type}} <- TF.get_term(term_id) do

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Shot entry point for the self-contained release. Usage as for `shot_tx`:
+#   bin/shot --szs --proof -t 30000 problem.p
+SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
+BIN_DIR=$(dirname "$SELF")
+export RELEASE_DISTRIBUTION=none
+# UTF-8 on stdout even without a locale, where the BEAM would fall back to latin1.
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu} -kernel standard_io_encoding unicode"
+# ERTS dlopens libsctp at boot and warns on stdout if it is missing; the
+# Containerfile bundles a copy in lib/.
+export LD_LIBRARY_PATH="$BIN_DIR/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$BIN_DIR/shot_tx" eval 'ShotTx.Cli.main(System.argv())' "$@"

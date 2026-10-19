@@ -146,18 +146,10 @@ defmodule ShotTx.Prover.Demodulation do
     end
   end
 
-  # Leftmost-outermost single rewrite step. Tries two rewrite kinds and
-  # returns the first that succeeds:
-  #
-  #   1. Subterm rewrite via matching — the classical demodulation case.
-  #      Applies when an equation LHS matches a DAG subterm modulo σ.
-  #   2. Head rewrite via primitive η-expansion — applies when an
-  #      equation LHS is `λv̄. h(v̄)`, an applied subterm has head `h`,
-  #      and the resulting instance is strictly smaller under NCPO.
-  #      This is the higher-order case where the equation is on the
-  #      *function symbol* itself (not on any of its instances) and
-  #      matching alone cannot see it because the LHS lives at a
-  #      different type than any subterm of the target.
+  # Leftmost-outermost single rewrite step. Tries, in order:
+  #   1. Subterm rewrite — an equation LHS is exactly a subterm.
+  #   2. Head rewrite — an equation LHS is `λv̄. h(v̄)` and a subterm has head
+  #      `h`; the instance must be strictly smaller under NCPO.
   defp one_step(term_id, equations, order) do
     case match_step(term_id, equations, order) do
       :fixpoint -> head_step(term_id, equations, order)
@@ -187,12 +179,8 @@ defmodule ShotTx.Prover.Demodulation do
     end
   end
 
-  # Structural identity match: the equation LHS must be the exact same
-  # memoized term as the subterm. Term-id equality is precisely
-  # structural equality under `ShotDs.Stt.TermFactory`'s hash-consing,
-  # so this covers every rewrite whose matcher σ would be empty — the
-  # only rewrites this module admits (see the module docs on the
-  # variable-binding restriction).
+  # Exact match only (term-id equality = structural equality under
+  # hash-consing), i.e. rewrites with an empty matcher. See module docs.
   defp match_and_rewrite(term_id, sub_id, equations, order) do
     case Map.get(equations, sub_id) do
       nil -> nil
@@ -254,10 +242,8 @@ defmodule ShotTx.Prover.Demodulation do
   # cannot see this because `λv̄. h(v̄)` and any applied subterm `h(t̄)`
   # live at different types.
 
-  # Returns `[{head_decl, arity, rhs_ids}]` for every equation whose LHS
-  # is a primitive η-expansion `λv̄. h(v̄)` and whose stored RHS was
-  # oriented under NCPO. RHSs that fail the strict-order gate are
-  # filtered out here so the per-subterm loop does not waste work.
+  # `[{head_decl, arity, rhs_ids}]` for equations with LHS `λv̄. h(v̄)`,
+  # keeping only NCPO-strictly-smaller RHSs.
   defp collect_eta_heads(equations, order) do
     Enum.flat_map(equations, fn {lhs_id, rhs_ids} ->
       case eta_head_pattern(lhs_id) do
@@ -309,12 +295,8 @@ defmodule ShotTx.Prover.Demodulation do
     Enum.find_value(rhs_ids, nil, fn rhs_id ->
       rewritten_sub = TF.fold_apply!(rhs_id, args)
 
-      # Per-instance NCPO recheck: the equation's `lhs > rhs` was
-      # verified at the primitive η-expansion level, but the actual
-      # rewrite happens at an applied instance. `λv̄. h(v̄) > rhs`
-      # implies `h(ā) > rhs(ā)` by monotonicity of the paper's `A`
-      # layer, but we double-check on the βη-normal forms so a broken
-      # `TF.fold_apply!` invariant cannot leak an unsound rewrite.
+      # The order was checked on `λv̄. h(v̄)`; recheck on the applied instance
+      # so a broken `TF.fold_apply!` invariant cannot leak an unsound rewrite.
       if TermOrder.strict_gt?(s_id, rewritten_sub, order) do
         new_id = Paramodulation.replace_subterm(term_id, s_id, rewritten_sub)
         if new_id == term_id, do: nil, else: {:rewrote, TF.commit_to_global!(new_id)}

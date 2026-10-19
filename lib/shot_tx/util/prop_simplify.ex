@@ -95,6 +95,9 @@ defmodule ShotTx.Util.PropSimplify do
         bq = term_to_bdd(q)
         bdd_or(bdd_and(bp, bq), bdd_and(bdd_neg(bp), bdd_neg(bq)))
 
+      equality(p, q) ->
+        truth_equality(term_id, p, q)
+
       _atom ->
         atom_for(term_id)
     end
@@ -210,6 +213,10 @@ defmodule ShotTx.Util.PropSimplify do
       term.type.goal != :o ->
         term_id
 
+      term.bvars == [] and match?(equality(_, _), term) ->
+        equality(p, q) = term
+        term_id |> truth_equality(p, q) |> bdd_to_term()
+
       not connective_head?(term.head) ->
         term_id
 
@@ -219,6 +226,25 @@ defmodule ShotTx.Util.PropSimplify do
       true ->
         simplified_body = term |> strip_bvars() |> term_to_bdd() |> bdd_to_term()
         List.foldr(term.bvars, simplified_body, &TF.make_abstr_term!(&2, &1))
+    end
+  end
+
+  # `⊤ = ⊥` and friends: evaluated when both sides are truth values, else an
+  # atom. Other equations keep their shape so they still act as rewrites.
+  defp truth_equality(term_id, p, q) do
+    case {term_to_bdd_const(p), term_to_bdd_const(q)} do
+      {nil, _} -> atom_for(term_id)
+      {_, nil} -> atom_for(term_id)
+      {same, same} -> :bdd_top
+      _ -> :bdd_bot
+    end
+  end
+
+  defp term_to_bdd_const(term_id) do
+    case TF.get_term!(term_id) do
+      truth() -> :bdd_top
+      falsity() -> :bdd_bot
+      _ -> nil
     end
   end
 

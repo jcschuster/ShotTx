@@ -143,11 +143,8 @@ defmodule ShotTx.Prover.Branch do
     |> flush_rewrites()
   end
 
-  # Runs lambda-lifting once per user formula. For each formula that produces
-  # axioms, records a `:lambda_lift` history entry sourced at the original
-  # formula. Returns the expanded formula list (lifted form + axioms in place
-  # of any lifted original) and the history pre-populated in newest-first
-  # order, so chronological replay shows lifts before any rule firing.
+  # Lambda-lifts each user formula, replacing it with its lifted form plus
+  # axioms and recording a `:lambda_lift` history entry for it.
   defp lift_user_formulas(formulas) do
     {expanded_rev, history_chrono} =
       Enum.reduce(formulas, {[], []}, fn formula, {acc_terms, acc_hist} ->
@@ -289,12 +286,9 @@ defmodule ShotTx.Prover.Branch do
       rigid_terms_distinct?(s, t, equations)
   end
 
-  # Rigidity of the *head* is not enough: `h ⊤` and `h ⊥` are two closed rigid
-  # base-typed terms, yet no model keeps them apart unless `f ⊤` and `f ⊥` are
-  # already apart — and at type `o` they never are, the domain having two
-  # elements and `h` no obligation to be injective. Distinct rigid constants
-  # separate outright; equal heads only through an argument pair that separates
-  # in turn.
+  # A rigid head is not enough: `h ⊤` and `h ⊥` may denote the same element,
+  # since `h` need not be injective. Distinct constants separate outright;
+  # equal heads only through an argument pair that separates in turn.
   defp rigid_terms_distinct?(s, t, equations) do
     term_s = TF.get_term!(s)
     term_t = TF.get_term!(t)
@@ -365,15 +359,9 @@ defmodule ShotTx.Prover.Branch do
          _g_limit,
          _p_limit
        ) do
-    # The expansion is inserted against every equation on the branch *except*
-    # the one `source` itself contributed. Demodulating `s ≡ t` with `s = t`
-    # yields `t ≡ t`, i.e. `⊤` — a perfectly valid rewrite that nonetheless
-    # throws away precisely the boolean content this expansion exists to
-    # expose. For `¬c = c` it discards a contradiction: the expansion
-    # `(¬c) ≡ c` simplifies to `⊥` and closes the branch, but only if it
-    # survives long enough to be classified. The equation stays in the branch
-    # for everything else, and an equation reaching the branch from some other
-    # formula still demodulates this one — that case is not circular.
+    # Insert the expansion without the equation `source` itself contributed:
+    # demodulating `s ≡ t` with `s = t` gives `⊤` and loses the content the
+    # expansion exposes (for `¬c = c`, the contradiction `(¬c) ≡ c`).
     without_own = %{branch | equations: drop_equation_of(branch.equations, source, params)}
 
     updated =
@@ -594,10 +582,8 @@ defmodule ShotTx.Prover.Branch do
     current_constants = branch_constants(branch)
     new_constants = MapSet.difference(current_constants, progress.covered_constants)
 
-    # First pass: emit all unit-set bindings (λy. H(y) = c) for every constant
-    # already in the branch, bypassing base/poly heads and the batch cap. This
-    # front-loads the bindings most likely to close Leibniz-style goals without
-    # waiting for propositional heads to exhaust the batch budget.
+    # First pass: unit-set bindings `λy. H(y) = c` for every branch constant,
+    # outside the batch cap — they are the likeliest to close Leibniz goals.
     if progress == @fresh_progress and MapSet.size(new_constants) > 0 and
          params.instance_based_gamma do
       {unit_set, unit_set_h_terms} =
@@ -705,16 +691,9 @@ defmodule ShotTx.Prover.Branch do
   # --- Atoms ------------------------------------------------------------------
 
   defp apply_rule({:atomic, raw_term_id} = rule, source, branch, params, _g_limit, _p_limit) do
-    # An atom is demodulated *here*, on the way into `literals`, and not only
-    # in `insert_formula`. A formula is classified and queued under the
-    # equations that existed when it was inserted, but equations keep arriving
-    # while it waits — `α` even ingests an equation produced by the very same
-    # rule that queued this atom. Normalizing at insert time alone therefore
-    # lets an atom enter `literals` in a form no longer normal, and the clash
-    # check is syntactic, so the clash is missed and the branch is reported
-    # saturated: an unsound `CounterSatisfiable`. `backward_demodulate/3`
-    # covers the opposite order (equation after literal); together the two
-    # keep `literals` in normal form under all equations known to the branch.
+    # Demodulate again here: equations may have arrived since the atom was
+    # queued, and the syntactic clash check would miss a non-normal literal
+    # (an unsound CSA). `backward_demodulate/3` covers the reverse order.
     {term_id, branch} = demodulate_atom(raw_term_id, branch, params)
 
     case unfold_if_possible(term_id, branch.defs) do
@@ -841,8 +820,8 @@ defmodule ShotTx.Prover.Branch do
 
         c_branch =
           %{recorded | id: "#{recorded.id}_I#{idx}", defs: defs}
-          |> unfold_literals(recorded.literals, defs, params)
           |> unfold_equations(recorded.equations, defs, params)
+          |> unfold_literals(recorded.literals, defs, params)
           |> insert_formula(b_term, defs, params)
           |> ingest_formula(b_term, params)
           |> flush_rewrites()
@@ -908,11 +887,8 @@ defmodule ShotTx.Prover.Branch do
   # GROUND-TERM INDEXING & GAMMA SATURATION
   ##############################################################################
 
-  # Discover closed subterms of `term_id` that aren't yet in `branch.ground_terms`,
-  # and add them to the type-indexed map. The map is consulted at γ-rule firings
-  # (when `prev == 0`) to seed instance-based instantiation; ground terms added
-  # later are picked up the next time the same γ-rule fires under iterative
-  # deepening.
+  # Indexes new closed subterms by type; γ-rules draw instance-based
+  # instantiations from this index.
   defp register_ground_subterms(%__MODULE__{} = branch, term_id, _params) do
     new_by_type = collect_new_closed_subterms(term_id, branch.ground_terms)
 
@@ -956,14 +932,11 @@ defmodule ShotTx.Prover.Branch do
     %{branch | ground_terms: updated}
   end
 
-  # Truncates the per-fire IBG fan-out so a γ-rule with many candidate
-  # constants does not multiply branch instances combinatorially. `:infinity`
-  # preserves the unbounded behavior.
+  # Caps instance-based γ fan-out per firing.
   defp cap_ground_terms(terms, :infinity), do: terms
   defp cap_ground_terms(terms, limit) when is_integer(limit), do: Enum.take(terms, limit)
 
-  # Promotes a freshly-classified γ-rule to its IBG-derived variant so the cost
-  # function can deprioritize it below β. Non-γ rules pass through unchanged.
+  # Marks a γ-rule as instance-derived so the cost function ranks it below β.
   defp mark_ibg({:gamma, recipe, type, prev, _}, true), do: {:gamma, recipe, type, prev, true}
   defp mark_ibg(rule, _), do: rule
 
@@ -1017,10 +990,8 @@ defmodule ShotTx.Prover.Branch do
         pending_closure: pending
     }
 
-    # `effective` — not `formula` — is what the branch queues, classifies and
-    # eventually closes on. Leaving the rewrite untraced strands the closing
-    # literal outside the proof: it cites a term no recorded step ever produced,
-    # so `⊥` comes out with no justification at all.
+    # Trace the rewrite, or a clash on `effective` cites a term no proof step
+    # produced.
     base
     |> note_rewrite(formula, effective)
     |> register_ground_subterms(effective, params)
@@ -1036,10 +1007,7 @@ defmodule ShotTx.Prover.Branch do
 
   defp maybe_unfold(term_id, _defs, _params), do: term_id
 
-  # Forward demodulation. Reduces `term_id` to its normal form under the
-  # branch's current equations before it enters the priority queue.
-  # Cheap when equations is empty (early-branch or `paramodulation: false`)
-  # — `Demodulation.normalize/3` short-circuits to identity.
+  # Forward demodulation: normalize under the branch's equations before queueing.
   defp maybe_demodulate(term_id, _equations, %Parameters{demodulation: false}), do: term_id
 
   defp maybe_demodulate(term_id, equations, %Parameters{term_order: order}) do
@@ -1068,15 +1036,9 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  # `(s = t) = ⊤` asserts the equality *atom* `s = t`, which licenses `s → t`
-  # as a rewrite. Registering only the outer pair records the weaker fact "this
-  # boolean atom is true" and loses the term-level equation, so literals
-  # mentioning `s` and `t` are never normalized against each other. A branch
-  # holding `((h ⊤) = (h ⊥)) = ⊤` together with `P (h ⊤)` and `¬(P (h ⊥))` then
-  # looks clash-free and gets reported as a countermodel.
-  #
-  # The shape arises whenever `:rename` abbreviates an equality as a constant
-  # and a later `:instantiate` fixes that constant to `⊤`.
+  # `(s = t) = ⊤` also licenses the rewrite `s → t`. Without it, `P (h ⊤)` and
+  # `¬(P (h ⊥))` look clash-free next to `((h ⊤) = (h ⊥)) = ⊤`. Arises when
+  # `:rename` abbreviates an equality and `:instantiate` sets it to `⊤`.
   defp ingest_asserted_equality(branch, lhs, rhs, origin, params) do
     case {TF.get_term!(lhs), TF.get_term!(rhs)} do
       {equality(l, r), truth()} when l != r -> ingest_equation(branch, l, r, origin, params)
@@ -1085,21 +1047,23 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  # Removes the oriented equation `source` would contribute, leaving the rest of
-  # the branch's equation set intact. See `apply_rule/6` for the
-  # `:equality_expansion` rule, its only caller.
+  # Removes the oriented equation `source` would contribute.
   defp drop_equation_of(equations, source, params) do
     case TF.get_term!(source) do
       equality(lhs, rhs) when lhs != rhs ->
         {ol, or_} = orient_pair(lhs, rhs, params.term_order)
 
-        case Map.get(equations, ol) do
-          nil -> equations
-          rhs_set -> prune_equation(equations, ol, MapSet.delete(rhs_set, or_))
-        end
+        delete_equation(equations, ol, or_)
 
       _ ->
         equations
+    end
+  end
+
+  defp delete_equation(equations, lhs, rhs) do
+    case Map.get(equations, lhs) do
+      nil -> equations
+      rhs_set -> prune_equation(equations, lhs, MapSet.delete(rhs_set, rhs))
     end
   end
 
@@ -1110,11 +1074,20 @@ defmodule ShotTx.Prover.Branch do
     end
   end
 
-  # `origin` is the branch formula the equation was read off. The oriented pair
-  # is often no formula the branch ever held — `orient_pair/3` may flip it, and
-  # `ingest_asserted_equality/5` digs it out of an enclosing `(s = t) = ⊤` — so
-  # only the origin gives `unfold_equations/4` a step it can cite.
+  # `origin` is the branch formula the equation came from; the oriented pair
+  # itself may never have been on the branch, so proofs cite the origin.
+  #
+  # Both sides are unfolded first: a rewrite that mentions a defined constant
+  # can fold an unfolded term back into it (`⊤ → c` next to `c := ⊤`), so
+  # unfolding and demodulation would undo each other and hide clashes.
   defp ingest_equation(branch, lhs, rhs, origin, params) do
+    case {Semantics.unfold_defs!(lhs, branch.defs), Semantics.unfold_defs!(rhs, branch.defs)} do
+      {same, same} -> branch
+      {l, r} -> store_equation(branch, l, r, origin, params)
+    end
+  end
+
+  defp store_equation(branch, lhs, rhs, origin, params) do
     {ol, or_} = orient_pair(lhs, rhs, params.term_order)
     new_equations = Map.update(branch.equations, ol, MapSet.new([or_]), &MapSet.put(&1, or_))
 
@@ -1126,21 +1099,9 @@ defmodule ShotTx.Prover.Branch do
     |> backward_demodulate(params)
   end
 
-  # Backward demodulation: when a new equation lands, sweep existing
-  # branch literals and re-normalize them under the enlarged equation
-  # set. A literal that reduces is *replaced* — the old form is removed
-  # from `branch.literals` and the new form re-enters via
-  # `insert_formula` (which will run its own forward-demodulation pass
-  # and pick up the classification / queue entry).
-  #
-  # Normalization uses the branch's *whole* equation set, not just the
-  # equation that triggered this pass. Rewriting under the new equation can
-  # expose a redex for an older one, and an earlier version of this function
-  # passed only the new equation on the assumption that every literal was
-  # already normal under the older set — an invariant the branch does not
-  # actually maintain, since literals also enter via `apply_rule({:atomic,
-  # ...})`. Using the full set makes the normal form independent of the order
-  # equations arrived in.
+  # Backward demodulation: when a new equation lands, re-normalize every
+  # literal under the *whole* equation set (a new rewrite can expose a redex
+  # for an older one). Reduced literals are replaced and re-inserted.
   defp backward_demodulate(branch, %Parameters{demodulation: false}), do: branch
 
   defp backward_demodulate(branch, params) do
@@ -1152,14 +1113,10 @@ defmodule ShotTx.Prover.Branch do
           acc
 
         MapSet.member?(acc.literals, normal) ->
-          # Already present in canonical form; just drop the redundant
-          # non-normal duplicate.
+          # Normal form already present; drop the duplicate.
           %{acc | literals: MapSet.delete(acc.literals, lit)}
 
         true ->
-          # Replace: drop the un-normalized literal, re-enqueue the
-          # normal form through the standard insertion path so it gets
-          # classified and paramodulated correctly.
           acc
           |> Map.update!(:literals, &(&1 |> MapSet.delete(lit) |> MapSet.put(normal)))
           |> note_rewrite(lit, normal)
@@ -1168,14 +1125,9 @@ defmodule ShotTx.Prover.Branch do
     end)
   end
 
-  # Pick a storage direction for `lhs = rhs`. When NCPO-LNF strictly orients
-  # the pair, that direction is used and downstream demodulation will fire
-  # (see `Demodulation.normalize/3`). When the pair is incomparable under
-  # NCPO-LNF, we still store *some* direction so equational reasoning is
-  # not lost — the demodulation gate silently drops it from rewriting, and
-  # the Leibniz/extensional α-expansion becomes the completeness fallback.
-  # The final `gt?` branch uses the total heuristic extension solely to
-  # make the storage direction deterministic.
+  # Storage direction for `lhs = rhs`: the NCPO-LNF direction when strict
+  # (demodulation then uses it), else a deterministic heuristic one (stored
+  # but never used for rewriting).
   defp orient_pair(lhs, rhs, order_params) do
     cond do
       TermOrder.strict_gt?(lhs, rhs, order_params) -> {lhs, rhs}
@@ -1231,12 +1183,8 @@ defmodule ShotTx.Prover.Branch do
     }
   end
 
-  # Buffers a rewrite performed on a formula's way into the branch. The entry
-  # cannot go straight into `history`: normalization happens while the rule
-  # that produced the formula is still assembling its own record, and `record/4`
-  # prepends, so a direct write would place the rewrite *before* the step it
-  # rewrites — proof reconstruction would then label the normal form ahead of
-  # its source and resolve neither.
+  # Buffers a rewrite until `record/4` commits the rule that produced the
+  # formula; writing it straight to `history` would place it before its source.
   defp note_rewrite(branch, formula, formula), do: branch
 
   defp note_rewrite(%__MODULE__{} = branch, formula, effective) do
@@ -1255,13 +1203,8 @@ defmodule ShotTx.Prover.Branch do
     %{branch | history: branch.pending_rewrites ++ branch.history, pending_rewrites: []}
   end
 
-  # Frontier is the coarse "what does this branch commit to for a model finder"
-  # view. Updated whenever a rule consumes its source (α/β/δ/…) or replaces it
-  # with a semantically stronger form (atomic-unfold). γ/prim_subst leave the
-  # frontier untouched because their sources remain the true constraint —
-  # fresh instances are hints, not new commitments. Paramodulants and γ-fresh
-  # atoms flow through `insert_formula` and land in `literals` without ever
-  # entering the frontier, which is exactly what we want for a Nitpick probe.
+  # The frontier is what the branch commits to, for the model finder. Rules
+  # that consume their source update it; γ/prim-subst instances do not.
   defp bump_frontier(%__MODULE__{} = branch, remove, add) do
     new_frontier =
       branch.frontier
@@ -1294,28 +1237,25 @@ defmodule ShotTx.Prover.Branch do
     end)
   end
 
-  # An `:instantiate` child fixes a new definition for a constant, and
-  # `unfold_literals/4` re-expands the branch's literals under it. Its
-  # *equations* need the same treatment. Without it a child can hold a
-  # definition set that its own equations refute and still call itself
-  # saturated — the `:rename` rule abbreviates `a ∧ b` as a fresh constant `C`
-  # and records `a ∧ b = C`, so a child choosing `a := ⊤, b := ⊤, C := ⊥` is
-  # inconsistent, yet every literal in it stays clash-free and the branch is
-  # reported as a countermodel.
+  # Like `unfold_literals/4`, for equations. Otherwise an `:instantiate` child
+  # choosing `a := ⊤, b := ⊤, C := ⊥` ignores its own `a ∧ b = C` and passes
+  # as a countermodel.
   #
-  # Re-inserting the unfolded equality routes it back through classification,
-  # where `(⊤ ∧ ⊤) = ⊥` expands to `(⊤ ∧ ⊤) ≡ ⊥` and closes the branch.
+  # A rewrite that mentions a newly defined constant is replaced, not kept
+  # alongside its unfolding (see `ingest_equation/5`).
   defp unfold_equations(branch, equations, defs, %Parameters{} = params) do
     for {lhs, rhs_set} <- equations, rhs <- rhs_set, reduce: branch do
       acc ->
         equation = equation_origin(acc, lhs, rhs)
 
-        case unfold_if_possible(equation, defs) do
-          nil ->
+        case {unfold_if_possible(lhs, defs), unfold_if_possible(rhs, defs)} do
+          {nil, nil} ->
             acc
 
-          unfolded ->
-            acc
+          _changed ->
+            unfolded = Semantics.unfold_defs!(equation, defs)
+
+            %{acc | equations: delete_equation(acc.equations, lhs, rhs)}
             |> insert_formula(unfolded, defs, params)
             |> ingest_formula(unfolded, params)
             |> record(equation, {:atomic, equation}, [unfolded])

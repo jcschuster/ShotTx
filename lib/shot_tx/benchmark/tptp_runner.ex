@@ -140,8 +140,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
     prove_grace = Keyword.get(opts, :prove_grace, @default_prove_grace)
 
     tptp_root =
-      System.get_env("TPTP_ROOT") ||
-        raise "TPTP_ROOT environment variable is missing. Set it to your TPTP directory."
+      ShotTx.Config.tptp_root() ||
+        raise "Neither TPTP nor TPTP_ROOT is set. Set one to your TPTP directory."
 
     File.mkdir_p!(output_dir)
 
@@ -287,9 +287,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
     end
   end
 
-  # Parsing and proving are rescued separately so the CSV attributes a failure
-  # to the phase it happened in. The previous single `try` wrapped both, so an
-  # exception raised inside `Prover.prove/3` was recorded as `parser_error`.
+  # Parsing and proving are rescued separately so the CSV blames the right phase.
   defp run_one(abs_path, rel_path, ctx) do
     case parse_phase(abs_path, rel_path, ctx) do
       {:ok, problem} -> prove_phase(problem, ctx)
@@ -297,10 +295,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
     end
   end
 
-  # A parse that timed out or failed once does the same again: the parser never
-  # sees `%Parameters{}`, so its outcome is identical under every configuration
-  # of the sweep. Replaying it from the cache turns "one stalled parse per
-  # configuration" into "one stalled parse".
+  # Parse outcomes do not depend on `%Parameters{}`, so a failed parse is
+  # cached and replayed across all configurations of a sweep.
   defp parse_phase(abs_path, rel_path, ctx) do
     case Map.fetch(ctx.parse_cache, rel_path) do
       {:ok, {tag, message}} -> {:error, tag, "cached: " <> message}
@@ -369,7 +365,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
     case result do
       {:thm, _} -> {:thm, "", stats_map}
       {:csa, model, _} -> {:csa, String.slice(model, 0, 200), stats_map}
-      :unknown -> {:unk, "", stats_map}
+      {:unknown, _} -> {:unk, "", stats_map}
       {:timeout, _} -> {:timeout, "", stats_map}
       {:error, reason} -> {:prover_error, inspect(reason), stats_map}
     end
@@ -383,13 +379,9 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # WALL-CLOCK ISOLATION
   ##############################################################################
 
-  # `try/after` cannot bound a runaway computation — `after` runs once the body
-  # returns, however long that takes. The only hard wall-clock guarantee on the
-  # BEAM is a separate process the caller can kill, which is what this is.
-  #
-  # `async_nolink` keeps a crashing phase from taking the runner down with it,
-  # and a killed proof attempt is cleaned up by `Prover`'s session reaper, which
-  # monitors its caller — here, the task.
+  # A separate, killable process is the only hard wall-clock bound on the BEAM.
+  # `async_nolink` keeps a crashing phase from taking the runner down; a killed
+  # proof is cleaned up by `Prover`'s session reaper.
   @spec isolated(pid(), pos_integer(), (-> result)) :: {:ok, result} | {:exit, term()} | :timeout
         when result: term()
   defp isolated(task_sup, timeout, fun) do
@@ -434,11 +426,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # PROGRESS REPORTING
   ##############################################################################
 
-  # The runner's own output goes straight to standard output rather than
-  # through Logger, so that silencing the prover (`log_level: :none`, the
-  # default) never takes the progress report with it. Every line carries the
-  # local wall-clock time: a sweep runs for days, and `elapsed`/`eta` alone
-  # cannot say when a line was printed or whether the run is still moving.
+  # Progress goes to stdout, not Logger, so silencing the prover keeps it.
+  # Each line is timestamped, since sweeps run for days.
   defp notice(message), do: IO.puts(stamp() <> " " <> message)
 
   defp stamp, do: "[" <> Calendar.strftime(NaiveDateTime.local_now(), "%m-%d %H:%M:%S") <> "]"
@@ -450,9 +439,7 @@ defmodule ShotTx.Benchmark.TptpRunner do
 
   defp elapsed(ctx), do: format_duration(System.monotonic_time(:millisecond) - ctx.started_at_ms)
 
-  # Extrapolates from the mean cost of the problems finished so far. That mean
-  # is a poor predictor over the first handful of problems and a decent one by
-  # a few hundred in, which is the regime the estimate is actually read in.
+  # Extrapolates from the mean cost of the problems finished so far.
   defp eta(%{done: done}) when done <= 0, do: "--:--:--"
 
   defp eta(%{done: done, total: total} = ctx) do
@@ -541,10 +528,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
     end
   end
 
-  # Shared across every configuration of a sweep, unlike the per-label CSVs:
-  # one tab-separated `path <TAB> tag <TAB> message` line per problem that
-  # could not be parsed. A malformed line is dropped rather than fatal — the
-  # cache is an optimisation, and re-parsing is always a correct fallback.
+  # Shared by all configurations: one `path <TAB> tag <TAB> message` line per
+  # unparsable problem. Malformed lines are dropped; re-parsing is always safe.
   defp load_parse_cache(parse_cache_path) do
     case File.read(parse_cache_path) do
       {:ok, contents} ->
@@ -587,13 +572,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # HEADER PARSING & DISCOVERY
   ##############################################################################
 
-  # Parses `% Status : Theorem` and `% SPC : TH0_THM_EQU_NAR` from a TPTP file
-  # header. The language lives in the `SPC` field: `Syntax` carries formula
-  # statistics, not a language tag, in every problem of the current corpus.
-  #
-  # 50 lines rather than 40: the header is longer in some problems and the SPC
-  # line sits as deep as line 42. Reading past it would cost a full scan of
-  # every file in the ~5000 problem TH0/TH1 corpus for nothing.
+  # Parses `% Status :` and `% SPC :` from the header (the language is in SPC).
+  # The SPC line can sit as deep as line 42, hence 50 lines.
   defp read_headers(abs_path) do
     lines =
       abs_path
@@ -654,11 +634,8 @@ defmodule ShotTx.Benchmark.TptpRunner do
   # SCORING
   ##############################################################################
 
-  # Maps (expected TPTP status, prover result tag) → correctness verdict.
-  # The truth table is intentionally narrow: SZS "Theorem" and
-  # "CounterSatisfiable" are the only expected statuses that give a definite
-  # ground truth against a `:thm` / `:csa` prover answer. Anything else — an
-  # unknown/open expected status, a timeout, or a parser failure — is `n/a`.
+  # (expected status, prover result) → verdict. Only `Theorem` and
+  # `CounterSatisfiable` give a ground truth; everything else is `n/a`.
   defp score("Theorem", :thm), do: :yes
   defp score("Theorem", :csa), do: :no
   defp score("CounterSatisfiable", :csa), do: :yes
