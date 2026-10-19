@@ -241,7 +241,7 @@ defmodule ShotTx.ProverTest do
       """
 
       assert {{:thm, _proof}, stats} = Prover.prove(problem, timeout: 5_000, stats: true)
-      assert is_map(stats) or is_list(stats) or is_tuple(stats) or is_struct(stats)
+      assert is_map(stats) or is_list(stats) or is_tuple(stats)
     end
   end
 
