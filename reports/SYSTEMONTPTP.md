@@ -1,7 +1,7 @@
 # Shot on SystemOnTPTP â€” readiness and system description
 
-**Basis.** ShotTx after `1dfab38` (v0.1.1) plus the changes listed in `CHANGELOG.md`
-(*Unreleased*), ShotDs 1.3.1 (unchanged), the SZS ontology BNF
+**Basis.** ShotTx 0.1.2 (changes since v0.1.1, the thesis version, in `CHANGELOG.md`),
+ShotDs 1.3.1 (unchanged), the SZS ontology BNF
 (`TPTPWorld/SZSOntologies`, `BNF/SZSOntology.bnf`), the CASC-30 design document and the
 TPTP system-building conventions. Unless marked otherwise, every item below was run on
 x86_64 Linux (Debian trixie, glibc 2.41, 8 cores) against TPTP v9.3.1.
@@ -23,7 +23,7 @@ x86_64 Linux (Debian trixie, glibc 2.41, 8 cores) against TPTP v9.3.1.
 6. `$TPTP`, when set, overrides `$TPTP_ROOT`.
 7. Wall-clock timeouts are reported as `WCTimeout`; an exhausted search space as
    `Incomplete`; termination by SIGTERM as `Forced`.
-8. The system is called `Shot---0.1.1`; `bin/shot -V` prints that string.
+8. The system is called `Shot---0.1.2`; `bin/shot -V` prints that string.
 9. ShotDs stays unchanged; the CLI works around its limitations (Â§3, B4).
 10. `ModelAgent` stays off (`model_agent_backend: :none`).
 
@@ -71,7 +71,7 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds â†
 - [x] **B1 â€” Self-contained package.** `mix release` with `include_erts: true`;
   `rel/overlays/bin/shot` starts it (`eval`, distribution off, `+fnu`). `Containerfile`
   builds it, runs a smoke test on a base image without Erlang (`--target check`), and
-  exports `Shot---0.1.1.tgz` (`--target dist`). The source archive is a `git archive`
+  exports `Shot---0.1.2.tgz` (`--target dist`). The source archive is a `git archive`
   one-liner in the Containerfile header.
   The package bundles `libsctp.so.1`: ERTS `dlopen`s it at boot and, where it is
   missing, prints `=ESOCK WARNING MSG` on **stdout** (`esock_warning_msg` in OTP's
@@ -137,7 +137,7 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds â†
 ### Detail corrections
 
 - [x] **D1 â€” Non-ASCII in comments.** Kept (decision 2).
-- [x] **D2 â€” Naming.** `Shot---0.1.1`: `-V` output, package and top directory name.
+- [x] **D2 â€” Naming.** `Shot---0.1.2`: `-V` output, package and top directory name.
   The executables are `bin/shot` (release) and `shot_tx` (escript).
 - [x] **D3 â€” README.** THF examples, status/exit-code table, CASC claim removed.
 - [x] **D4 â€” `WCTimeout`.**
@@ -170,7 +170,7 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds â†
    - *With the B3 fixes* (stopped after 1877 problems in alphabetical order, up to `KRS`): **zero disagreements**; 36 Theorem (35 Theorem, 1 ContradictoryAxioms),
      1 Incomplete, 1 GaveUp, 105 Inappropriate, 1734 WCTimeout. On the same problems
      the earlier build proved 32 (5 gained, 1 lost to a timeout).
-   - *Full sweep at HEAD* (all 5279 problems; the `dist` package; `--szs --proof
+   - *Full sweep, 0.1.2* (all 5279 problems; the `dist` package; `--szs --proof
      -t 2000 --worker-pool-size 2` in an empty environment, i.e. no locale; 16 cores):
      **zero disagreements**. 683 Theorem (681 Theorem, 2 ContradictoryAxioms),
      8 Unsatisfiable, 6 CounterSatisfiable, 1 Satisfiable â€” all matching the problem
@@ -198,7 +198,7 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds â†
 
 ## 5. System description
 
-> **Shot---0.1.1**
+> **Shot---0.1.2**
 > Johannes Schuster
 > University of Bamberg, Germany
 >
@@ -214,7 +214,7 @@ Proposed command line: `bin/shot --szs --proof -t %d000 %s` (limit in seconds â†
 > Countermodels are reported only from saturated branches of problems whose types are all
 > Boolean. Proofs are printed as a TPTP comment block; no TSTP derivation is produced.
 >
-> Source (MIT): <https://github.com/jcschuster/ShotTx>, DOI 10.5281/zenodo.23044601.
+> Source (MIT): <https://github.com/jcschuster/ShotTx>, DOI 10.5281/zenodo.23044599.
 
 ---
 

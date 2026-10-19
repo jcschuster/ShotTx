@@ -1,6 +1,6 @@
 # ShotTx
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23044601.svg)](https://doi.org/10.5281/zenodo.23044601)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23044599.svg)](https://doi.org/10.5281/zenodo.23044599)
 
 **Shot** is a Church Simple Type Theory (STT) automated theorem prover.
 This package, `ShotTx`, is the **tableau** component of the Shot
@@ -12,7 +12,9 @@ Shot performs automated theorem proving for higher-order logic (HOL) via
 a parallel, actor-based refutation search with iterative deepening,
 Skolemisation, primitive substitution, and demodulation.
 
-- Written for a Master's thesis on parallel HOL tableau reasoning.
+- Written for a Master's thesis on parallel HOL tableau reasoning. The
+  thesis describes v0.1.1, archived as
+  [10.5281/zenodo.23044601](https://doi.org/10.5281/zenodo.23044601).
 - Reads TPTP TH0 / TH1 problem files or plain THF formulas.
 - Emits either a short human-readable verdict or SZS-ontology status
   lines compatible with the standard prover output format used by
