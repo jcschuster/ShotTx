@@ -30,8 +30,7 @@ shot_tx-*.tar
 
 external
 
-# Benchmark output. Regenerate with scripts/run_hol_benchmark.sh; the figures
-# it produces are recorded in reports/.
+# Benchmark output. Regenerate with scripts/run_hol_benchmark.sh.
 /bench_results/
 
 # /ablation_results/

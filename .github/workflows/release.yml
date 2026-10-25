@@ -1,0 +1,39 @@
+# Builds the self-contained packages from the Containerfile, runs its smoke test
+# on a bare Ubuntu 24.04 image (the SystemOnTPTP host), and keeps the archives
+# as workflow artifacts. On a tag they are also attached to the GitHub release.
+
+name: Release packages
+
+on:
+    push:
+        tags: ['v*']
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+jobs:
+    package:
+        name: Build and smoke-test
+        runs-on: ubuntu-24.04
+
+        steps:
+            - uses: actions/checkout@v4
+            - name: Smoke test on a host without Erlang
+              run: docker build --target check -f Containerfile .
+            - name: Export packages
+              run: docker build --target dist -f Containerfile -o dist .
+            - name: Source archive
+              run: |
+                  VERSION=$(grep -m1 '@version "' mix.exs | cut -d'"' -f2)
+                  git archive --prefix="Shot---${VERSION}-src/" -o "dist/Shot---${VERSION}-src.tgz" HEAD
+                  ls -l dist
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: shot-packages
+                  path: dist/*.tgz
+            - name: Attach to release
+              if: startsWith(github.ref, 'refs/tags/v')
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: dist/*.tgz

@@ -2,19 +2,24 @@
 # on the host: the release bundles the Erlang runtime (ERTS).
 #
 #   podman build --target dist -o dist .      # -> dist/Shot---<version>.tgz
+#                                             #    dist/Shot---<version>-starexec.tgz
 #   podman build --target check .             # smoke test on a host without Erlang
+#
+# The first archive unpacks into Shot---<version>/ (SystemOnTPTP); the second
+# has bin/ at its top level, as StarExec requires (bin/starexec_run_default).
 #
 # Source archive to ship alongside:
 #   git archive --prefix=Shot---<version>-src/ -o dist/Shot---<version>-src.tgz HEAD
 #
 # The bundled ERTS links against the builder's glibc, so the package runs only on
-# hosts with that glibc or newer. Pick the oldest builder the target can take, e.g.
+# hosts with that glibc or newer. The defaults target Ubuntu 24.04 (glibc 2.39),
+# the SystemOnTPTP host. For an older host pick an older builder, e.g.
 #   --build-arg BUILDER=docker.io/hexpm/elixir:<elixir>-erlang-<otp>-debian-bullseye-<date>
 #   --build-arg RUNTIME=docker.io/library/debian:bullseye-slim
-# (glibc 2.31). The defaults below are Debian trixie (glibc 2.41).
+# (glibc 2.31).
 
-ARG BUILDER=docker.io/library/elixir:1.20-otp-29
-ARG RUNTIME=docker.io/library/debian:trixie-slim
+ARG BUILDER=docker.io/hexpm/elixir:1.20.0-erlang-29.0.1-ubuntu-noble-20260509.1
+ARG RUNTIME=docker.io/library/ubuntu:24.04
 
 FROM ${BUILDER} AS build
 ENV MIX_ENV=prod LANG=C.UTF-8
@@ -31,7 +36,8 @@ RUN mix release \
  && mkdir -p /out \
  && cp -a _build/prod/rel/shot_tx "/out/Shot---${VERSION}" \
  && cp -L "/usr/lib/$(uname -m)-linux-gnu/libsctp.so.1" "/out/Shot---${VERSION}/lib/" \
- && tar -C /out -czf "/out/Shot---${VERSION}.tgz" "Shot---${VERSION}"
+ && tar -C /out -czf "/out/Shot---${VERSION}.tgz" "Shot---${VERSION}" \
+ && tar -C "/out/Shot---${VERSION}" -czf "/out/Shot---${VERSION}-starexec.tgz" .
 
 # Runs the package on a system without Erlang, libsctp or a locale; fails the
 # build if it misbehaves. The `⊥` check catches latin1 stdout.
@@ -45,7 +51,9 @@ RUN set -e; cd /opt/shot/Shot---*/; \
     grep -q '^% SZS status Theorem for t.p$' /tmp/out; \
     grep -q '⊥' /tmp/out; \
     bin/shot --szs -t 10000 /tmp/c.p | grep -q '^% SZS status CounterSatisfiable for c.p$'; \
-    ! grep -v '^%' /tmp/out
+    ! grep -v '^%' /tmp/out; \
+    STAREXEC_WALLCLOCK_LIMIT=10 bin/starexec_run_default /tmp/t.p | grep -q '^% SZS status Theorem for t.p$'; \
+    ! ls erl_crash.dump core 2>/dev/null
 
 FROM scratch AS dist
 COPY --from=build /out/*.tgz /
