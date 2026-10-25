@@ -9,4 +9,7 @@ export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu} -kernel standard_io_encod
 # ERTS dlopens libsctp at boot and warns on stdout if it is missing; the
 # Containerfile bundles a copy in lib/.
 export LD_LIBRARY_PATH="$BIN_DIR/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Leave nothing behind in the working directory: no erl_crash.dump, no core.
+export ERL_CRASH_DUMP_SECONDS=0
+ulimit -c 0 2>/dev/null
 exec "$BIN_DIR/shot_tx" eval 'ShotTx.Cli.main(System.argv())' "$@"

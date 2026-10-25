@@ -1,0 +1,1 @@
+Shot: a parallel free-variable tableau prover for TH0 (Church's simple type theory), written in Elixir. Countermodels are reported only for problems whose types are all Boolean. https://github.com/jcschuster/ShotTx

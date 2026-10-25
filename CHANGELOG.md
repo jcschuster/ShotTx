@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-10-25
+
+The SystemOnTPTP / StarExec release: `Shot---0.1.3`, listed for `TH0_NAR`.
+
+### Added
+
+- CLI `--cpu-timeout MS`: bounds the CPU time of the whole VM (all threads
+  summed) and reports `Timeout` when it runs out; SystemOnTPTP limits are CPU
+  seconds. Without `-t` it doubles as the wall-clock limit.
+- StarExec entry point `bin/starexec_run_default` (reads `$1` and
+  `$STAREXEC_WALLCLOCK_LIMIT`) and `starexec_description.txt`; the
+  `Containerfile` also emits `Shot---<version>-starexec.tgz` with `bin/` at the
+  archive root.
+- Release workflow (`.github/workflows/release.yml`): on a `v*` tag, runs the
+  Containerfile's smoke test and attaches the packages to the GitHub release.
+
+### Changed
+
+- CLI: internal errors are reported as `GaveUp` with the reason after ` : `;
+  the `Error` status is gone.
+- CLI: problems using `$ite` are rejected as `Inappropriate` — the prover would
+  treat it as an uninterpreted constant, which is sound for proofs but not for
+  models.
+- `bin/shot` disables crash dumps and core files so a killed run leaves
+  nothing in the working directory.
+- `Containerfile` defaults target Ubuntu 24.04 (glibc 2.39), the SystemOnTPTP
+  host.
+
+### Removed
+
+- `reports/`. The system description now lives in the README; the thesis is
+  at <https://github.com/jcschuster/shot-thesis>.
+
 ## [0.1.2] - 2026-10-19
 
 The version prepared for SystemOnTPTP. The version described in the Master's

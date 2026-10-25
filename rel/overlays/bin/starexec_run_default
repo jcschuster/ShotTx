@@ -1,0 +1,5 @@
+#!/bin/sh
+# StarExec configuration "default": $1 is the problem file,
+# $STAREXEC_WALLCLOCK_LIMIT the wall-clock limit in seconds.
+cd "$(dirname "$(readlink -f "$0")")" || exit 2
+exec ./shot --szs --proof -t "$((${STAREXEC_WALLCLOCK_LIMIT:-300} * 1000))" "$1"

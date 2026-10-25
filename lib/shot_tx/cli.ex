@@ -54,21 +54,30 @@ defmodule ShotTx.Cli do
   | No conjecture (or `--sat`), model found       | `Satisfiable`        | 0    |
   | Search space exhausted without a model        | `Incomplete`         | 1    |
   | Saturated but not pure-`o`, other give-ups    | `GaveUp`             | 1    |
-  | Time limit reached                            | `WCTimeout`          | 1    |
+  | Wall-clock limit reached (`-t`)               | `WCTimeout`          | 1    |
+  | CPU-time limit reached (`--cpu-timeout`)      | `Timeout`            | 1    |
   | Stopped by SIGTERM                            | `Forced`             | 1    |
   | Input not parseable as THF                    | `Inappropriate`      | 2    |
   | Missing file, unreadable include, empty input | `InputError`         | 2    |
   | Bad command-line options                      | `UsageError`         | 2    |
-  | Internal error                                | `Error`              | 2    |
 
+  An internal error is reported as `GaveUp` with the reason after ` : `.
   Models are reported only for problems whose types are all pure-`o` (see
-  `:pure_o_models_only` in `ShotTx.Data.Parameters`).
+  `:pure_o_models_only` in `ShotTx.Data.Parameters`). Problems using `$ite`
+  are rejected as `Inappropriate`: Shot would treat it as an uninterpreted
+  constant, which is sound for proofs but not for models.
 
-  ## Time limit
+  ## Time limits
 
-  `-t MS` bounds the whole run — parsing, search and proof reconstruction.
-  The search itself gets a slightly smaller budget so a result can still be
-  printed; if the hard limit is reached anyway, the CLI prints `WCTimeout`.
+  `-t MS` bounds the whole run in wall-clock time — parsing, search and proof
+  reconstruction. The search itself gets a slightly smaller budget so a result
+  can still be printed; if the hard limit is reached anyway, the CLI prints
+  `WCTimeout`.
+
+  `--cpu-timeout MS` bounds the CPU time of the whole VM, summed over all
+  threads, as a CPU-second limit does (SystemOnTPTP). The run is stopped with
+  `Timeout` once the budget is used up. Both limits count from VM start and may
+  be combined; without `-t`, the wall-clock limit equals the CPU limit.
 
   ## Options
 
@@ -92,6 +101,7 @@ defmodule ShotTx.Cli do
 
   alias ShotDs.Data.{Context, Problem}
   alias ShotDs.Parser
+  alias ShotDs.Stt.TermFactory
   alias ShotDs.Tptp
   alias ShotTx.Data.Parameters
   alias ShotTx.Prover
@@ -108,10 +118,10 @@ defmodule ShotTx.Cli do
            | :incomplete
            | :forced
            | :timeout
+           | :cpu_timeout
            | :inappropriate
            | :input_error
            | :usage_error
-           | :error
 
   # Long flags with their OptionParser types. Kept explicit rather than
   # generated from `%Parameters{}` so the CLI surface stays intentional.
@@ -124,8 +134,10 @@ defmodule ShotTx.Cli do
     verbose: :boolean,
     help: :boolean,
     version: :boolean,
-    # Numeric prover parameters
+    # Time limits (ms)
     timeout: :integer,
+    cpu_timeout: :integer,
+    # Numeric prover parameters
     initial_gamma_limit: :integer,
     initial_prim_limit: :integer,
     prim_subst_after: :integer,
@@ -156,7 +168,10 @@ defmodule ShotTx.Cli do
 
   @aliases [h: :help, t: :timeout, s: :szs, v: :verbose, V: :version]
 
-  @cli_only_keys [:szs, :sat, :proof, :stats, :help, :verbose, :version]
+  @cli_only_keys [:szs, :sat, :proof, :stats, :help, :verbose, :version, :cpu_timeout]
+
+  # Granularity of the limit checks while the search runs.
+  @poll_ms 100
 
   @enum_keys [
     :unfold_defs,
@@ -235,25 +250,60 @@ defmodule ShotTx.Cli do
 
   @spec run(argv(), keyword()) :: no_return()
   defp run([input | _], opts) do
-    limit = remaining_time(opts)
-    budgeted_opts = Keyword.put(opts, :timeout, search_budget(limit))
+    wall_limit = wall_limit(opts)
+    cpu_limit = cpu_budget(opts[:cpu_timeout])
+    budgeted_opts = Keyword.put(opts, :timeout, search_budget(remaining_wall(wall_limit)))
     task = Task.async(fn -> attempt(input, budgeted_opts) end)
 
-    report =
-      case Task.yield(task, limit) || Task.shutdown(task, :brutal_kill) do
-        {:ok, finished} -> finished
-        _ -> %{status: :timeout, detail: nil, comment: nil, stats: nil}
-      end
-
+    report = await(task, wall_limit, cpu_limit)
     emit(report, label_for(input), opts)
     System.halt(exit_code(report.status))
   end
 
-  # The limit counts from VM start, so booting the escript is charged to it.
-  defp remaining_time(opts) do
-    limit = opts[:timeout] || Keyword.get(ShotTx.Config.get(), :timeout, %Parameters{}.timeout)
-    {since_boot, _} = :erlang.statistics(:wall_clock)
-    max(limit - since_boot, 1)
+  # Both limits count from VM start, so booting the escript is charged to them.
+  # Without `-t`, the CPU limit doubles as the wall-clock limit.
+  defp wall_limit(opts) do
+    opts[:timeout] || opts[:cpu_timeout] ||
+      Keyword.get(ShotTx.Config.get(), :timeout, %Parameters{}.timeout)
+  end
+
+  defp remaining_wall(limit), do: max(limit - wall_used(), 1)
+
+  defp wall_used, do: :erlang.statistics(:wall_clock) |> elem(0)
+
+  # CPU time of the whole VM, all threads summed, as a CPU-second limit sees it.
+  defp cpu_used, do: :erlang.statistics(:runtime) |> elem(0)
+
+  # Between two polls every scheduler may burn another `@poll_ms` of CPU, and
+  # shutting down costs a little more, so the check fires early enough for the
+  # run to end inside an external CPU limit.
+  defp cpu_budget(nil), do: :infinity
+
+  defp cpu_budget(limit) do
+    margin = max(div(limit, 10), 500 + @poll_ms * System.schedulers_online())
+    max(limit - margin, div(limit, 2))
+  end
+
+  # Polls the search so that either budget can end the run.
+  defp await(task, wall_limit, cpu_limit) do
+    case Task.yield(task, min(@poll_ms, remaining_wall(wall_limit))) do
+      {:ok, report} -> report
+      {:exit, reason} -> gave_up(inspect(reason))
+      nil -> check_budgets(task, wall_limit, cpu_limit)
+    end
+  end
+
+  defp check_budgets(task, wall_limit, cpu_limit) do
+    cond do
+      cpu_used() >= cpu_limit -> stop(task, :cpu_timeout)
+      wall_used() >= wall_limit -> stop(task, :timeout)
+      true -> await(task, wall_limit, cpu_limit)
+    end
+  end
+
+  defp stop(task, status) do
+    Task.shutdown(task, :brutal_kill)
+    %{status: status, detail: nil, comment: nil, stats: nil}
   end
 
   # Leave room to reconstruct and print the proof inside the hard limit.
@@ -263,18 +313,42 @@ defmodule ShotTx.Cli do
   end
 
   # Runs in its own process under the deadline. Never raises: a crash is
-  # reported as `Error` rather than as a stack trace on stdout.
+  # reported as `GaveUp` rather than as a stack trace on stdout.
   defp attempt(input, opts) do
-    case load_problem(input) do
-      {:ok, loaded} -> solve(loaded, opts)
+    with {:ok, loaded} <- load_problem(input),
+         :ok <- reject_ite(loaded) do
+      solve(loaded, opts)
+    else
       {:error, status, reason} -> %{status: status, detail: reason, comment: nil, stats: nil}
     end
   rescue
-    e -> %{status: :error, detail: Exception.message(e), comment: nil, stats: nil}
+    e -> gave_up(Exception.message(e))
   catch
     # SIGTERM shuts the VM down under us.
     :exit, {:shutdown, _} -> %{status: :forced, detail: nil, comment: nil, stats: nil}
-    :exit, reason -> %{status: :error, detail: inspect(reason), comment: nil, stats: nil}
+    :exit, reason -> gave_up(inspect(reason))
+  end
+
+  defp gave_up(reason), do: %{status: :gave_up, detail: reason, comment: nil, stats: nil}
+
+  # `$ite` parses as an uninterpreted constant. A proof stays sound, a model
+  # may not respect the intended semantics, so the problem is turned away.
+  defp reject_ite(loaded) do
+    if Enum.any?(loaded_formulas(loaded), &uses_ite?/1),
+      do: {:error, :inappropriate, "$ite is not supported"},
+      else: :ok
+  end
+
+  defp loaded_formulas({:formula, id}), do: [id]
+
+  defp loaded_formulas({:problem, %Problem{definitions: defs} = problem}),
+    do: problem_formulas(problem) ++ Map.values(defs)
+
+  defp uses_ite?(term_id) do
+    term_id
+    |> TermFactory.get_term!()
+    |> Map.fetch!(:consts)
+    |> Enum.any?(&match?(%{name: "$ite"}, &1))
   end
 
   defp solve(loaded, opts) do
@@ -421,13 +495,13 @@ defmodule ShotTx.Cli do
   defp classify({:unknown, :exhausted_without_model}, _mode), do: {:incomplete, nil}
   defp classify({:unknown, _reason}, _mode), do: {:gave_up, nil}
   defp classify({:timeout, _partial}, _mode), do: {:timeout, nil}
-  defp classify({:error, reason}, _mode), do: {:error, inspect(reason)}
+  defp classify({:error, reason}, _mode), do: {:gave_up, inspect(reason)}
 
   @spec exit_code(status()) :: 0 | 1 | 2
-  defp exit_code(status) when status in [:gave_up, :incomplete, :timeout, :forced], do: 1
+  defp exit_code(status) when status in [:gave_up, :incomplete, :timeout, :cpu_timeout, :forced],
+    do: 1
 
-  defp exit_code(status) when status in [:inappropriate, :input_error, :usage_error, :error],
-    do: 2
+  defp exit_code(status) when status in [:inappropriate, :input_error, :usage_error], do: 2
 
   defp exit_code(_definite), do: 0
 
@@ -486,18 +560,22 @@ defmodule ShotTx.Cli do
     incomplete: "Incomplete",
     forced: "Forced",
     timeout: "WCTimeout",
+    cpu_timeout: "Timeout",
     inappropriate: "Inappropriate",
     input_error: "InputError",
-    usage_error: "UsageError",
-    error: "Error"
+    usage_error: "UsageError"
   }
 
-  @failures [:inappropriate, :input_error, :usage_error, :error]
+  @failures [:inappropriate, :input_error, :usage_error]
 
-  # Only failures carry a reason; it goes after ` : ` on one line.
+  # Failures carry a reason after ` : ` on one line; so does a `GaveUp` that
+  # has one (an internal error).
   defp szs_line(status, label, detail) when status in @failures do
     "% SZS status #{@szs_names[status]} for #{label} : #{one_line(detail || "unknown error")}"
   end
+
+  defp szs_line(:gave_up, label, detail) when is_binary(detail),
+    do: "% SZS status GaveUp for #{label} : #{one_line(detail)}"
 
   defp szs_line(status, label, _detail), do: "% SZS status #{@szs_names[status]} for #{label}"
 
@@ -507,10 +585,12 @@ defmodule ShotTx.Cli do
   defp short_line(:counter_satisfiable, model), do: with_model("CSA", model)
   defp short_line(:satisfiable, model), do: with_model("SAT", model)
   defp short_line(:unsatisfiable, _), do: "UNSAT"
-  defp short_line(:gave_up, _), do: "UNK"
+  defp short_line(:gave_up, nil), do: "UNK"
+  defp short_line(:gave_up, reason), do: "UNK: #{reason}"
   defp short_line(:incomplete, _), do: "UNK"
   defp short_line(:forced, _), do: "Forced"
   defp short_line(:timeout, _), do: "Timeout"
+  defp short_line(:cpu_timeout, _), do: "Timeout"
   defp short_line(status, detail), do: "#{@szs_names[status]}: #{detail || "unknown"}"
 
   defp with_model(verdict, model) when model in [nil, ""], do: verdict
@@ -579,7 +659,9 @@ defmodule ShotTx.Cli do
                             Implied for problems without a conjecture.
 
     Common knobs (see `ShotTx.Data.Parameters` for the full list):
-      -t, --timeout MS                        default 5000 (whole run)
+      -t, --timeout MS                        default 5000 (whole run, wall clock)
+          --cpu-timeout MS                    CPU time of the whole VM; also the
+                                              wall-clock limit unless -t is given
           --initial-gamma-limit N             default 1
           --initial-prim-limit N              default 1
           --unfold-defs lazy|eager            default lazy
@@ -596,8 +678,8 @@ defmodule ShotTx.Cli do
 
     Exit codes:
       0  Theorem, CounterSatisfiable, Satisfiable, Unsatisfiable
-      1  GaveUp, Incomplete, WCTimeout, Forced
-      2  Inappropriate, InputError, UsageError, Error
+      1  GaveUp, Incomplete, WCTimeout, Timeout, Forced
+      2  Inappropriate, InputError, UsageError
     """
   end
 end

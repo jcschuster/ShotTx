@@ -12,7 +12,8 @@ Shot performs automated theorem proving for higher-order logic (HOL) via
 a parallel, actor-based refutation search with iterative deepening,
 Skolemisation, primitive substitution, and demodulation.
 
-- Written for a Master's thesis on parallel HOL tableau reasoning. The
+- Written for a Master's thesis on parallel HOL tableau reasoning
+  ([jcschuster/shot-thesis](https://github.com/jcschuster/shot-thesis)). The
   thesis describes v0.1.1, archived as
   [10.5281/zenodo.23044601](https://doi.org/10.5281/zenodo.23044601).
 - Reads TPTP TH0 / TH1 problem files or plain THF formulas.
@@ -37,7 +38,8 @@ A self-contained package (bundled Erlang runtime, started via `bin/shot`) is
 built with the `Containerfile`:
 
 ```bash
-podman build --target dist -o dist .   # dist/Shot---<version>.tgz
+podman build --target dist -o dist .   # dist/Shot---<version>.tgz (SystemOnTPTP)
+                                       # dist/Shot---<version>-starexec.tgz (StarExec)
 ```
 
 ### Solve a problem
@@ -47,6 +49,7 @@ podman build --target dist -o dist .   # dist/Shot---<version>.tgz
 ./shot_tx --szs problem.p            # SZS status line
 ./shot_tx --szs --proof problem.p    # + proof tree as TPTP comment lines
 ./shot_tx --szs -t 30000 problem.p   # 30-second wall-clock budget for the whole run
+./shot_tx --szs --cpu-timeout 30000 problem.p   # 30 CPU-seconds instead (all cores summed)
 ```
 
 `include` directives and relative problem paths are resolved against `$TPTP`
@@ -93,13 +96,43 @@ The block is Shot's own derivation tree, not a TSTP derivation.
 | `Theorem` / `CounterSatisfiable` | Problem has a conjecture                          | 0    |
 | `Unsatisfiable` / `Satisfiable`  | No conjecture, or `--sat`                         | 0    |
 | `Incomplete`                     | Search space exhausted without a model            | 1    |
-| `GaveUp`                         | A model could not be trusted (below), and other   | 1    |
-| `WCTimeout`                      | Time limit reached                                | 1    |
+| `GaveUp`                         | A model could not be trusted (below), internal error, other | 1 |
+| `WCTimeout`                      | Wall-clock limit (`-t`) reached                   | 1    |
+| `Timeout`                        | CPU-time limit (`--cpu-timeout`) reached          | 1    |
 | `Forced`                         | Stopped by SIGTERM                                | 1    |
 | `Inappropriate`                  | Input is not THF Shot can parse (e.g. FOF/CNF)    | 2    |
 | `InputError`                     | Missing file, unreadable include                  | 2    |
 | `UsageError`                     | Bad command-line options (also explained on stderr) | 2  |
-| `Error`                          | Internal error                                    | 2    |
+
+An internal error is reported as `GaveUp` with the reason after ` : `. Problems
+using `$ite` are rejected as `Inappropriate` (Shot would treat it as an
+uninterpreted constant, which is sound for proofs but not for models).
+
+---
+
+## SystemOnTPTP and StarExec
+
+Shot is listed as `Prover, for TH0_NAR`. SystemOnTPTP limits are CPU seconds,
+so its command line is
+
+```
+bin/shot --szs --proof --cpu-timeout <seconds>000 <problem>
+```
+
+with `$TPTP` set for includes. StarExec runs `bin/starexec_run_default`, which
+takes the problem as `$1` and the wall-clock limit from
+`$STAREXEC_WALLCLOCK_LIMIT`; the `Shot---<version>-starexec.tgz` archive has
+`bin/` at its root, as StarExec requires. Both packages bundle the Erlang runtime
+(built for Ubuntu 24.04 / glibc 2.39) and `libsctp`, and run on a host without
+Erlang. `bin/shot` disables crash dumps and core files, so a run killed by a
+signal leaves nothing behind.
+
+System description:
+
+> Shot is a parallel free-variable tableau prover for TH0 (Church's simple type
+> theory), written in Elixir. Countermodels are reported only for problems whose
+> types are all Boolean. Proofs are printed as a TPTP comment block, not as a
+> TSTP derivation.
 
 ---
 
