@@ -34,15 +34,16 @@ defmodule ShotTx.Cli do
       $ ./shot_tx --szs problem.p
       % SZS status Theorem for problem.p
 
-  With `--szs --proof`, the proof (or the model followed by the open branch)
-  is printed as TPTP comment lines inside a `Comment` output block:
+  With `--szs --proof`, the proof follows in a `Proof` output block; a model
+  (the model, then the open branch) in a `Model` block:
 
       % SZS status Theorem for problem.p
-      % SZS output start Comment for problem.p
-      % ...
-      % SZS output end Comment for problem.p
+      % SZS output start Proof for problem.p
+      1. ...
+      % SZS output end Proof for problem.p
 
-  The block holds Shot's textual derivation tree, not a TSTP derivation.
+  The block holds Shot's textual derivation tree, not a TSTP derivation. Its
+  lines are not `%`-prefixed; everything outside an output block is.
 
   ### Status map
 
@@ -221,7 +222,7 @@ defmodule ShotTx.Cli do
   @spec usage_error(String.t(), argv(), keyword()) :: no_return()
   defp usage_error(message, argv, opts) do
     label = argv |> List.last("shot") |> label_for()
-    report = %{status: :usage_error, detail: message, comment: nil, stats: nil}
+    report = %{status: :usage_error, detail: message, solution: nil, stats: nil}
     if opts[:szs], do: emit(report, label, opts)
     IO.puts(:stderr, "shot_tx: #{message}\nRun `shot_tx --help` for usage.")
     System.halt(exit_code(:usage_error))
@@ -303,7 +304,7 @@ defmodule ShotTx.Cli do
 
   defp stop(task, status) do
     Task.shutdown(task, :brutal_kill)
-    %{status: status, detail: nil, comment: nil, stats: nil}
+    %{status: status, detail: nil, solution: nil, stats: nil}
   end
 
   # Leave room to reconstruct and print the proof inside the hard limit.
@@ -319,17 +320,17 @@ defmodule ShotTx.Cli do
          :ok <- reject_ite(loaded) do
       solve(loaded, opts)
     else
-      {:error, status, reason} -> %{status: status, detail: reason, comment: nil, stats: nil}
+      {:error, status, reason} -> %{status: status, detail: reason, solution: nil, stats: nil}
     end
   rescue
     e -> gave_up(Exception.message(e))
   catch
     # SIGTERM shuts the VM down under us.
-    :exit, {:shutdown, _} -> %{status: :forced, detail: nil, comment: nil, stats: nil}
+    :exit, {:shutdown, _} -> %{status: :forced, detail: nil, solution: nil, stats: nil}
     :exit, reason -> gave_up(inspect(reason))
   end
 
-  defp gave_up(reason), do: %{status: :gave_up, detail: reason, comment: nil, stats: nil}
+  defp gave_up(reason), do: %{status: :gave_up, detail: reason, solution: nil, stats: nil}
 
   # `$ite` parses as an uninterpreted constant. A proof stays sound, a model
   # may not respect the intended semantics, so the problem is turned away.
@@ -357,7 +358,7 @@ defmodule ShotTx.Cli do
     {result, stats} = loaded |> call_prover(mode, params) |> split_stats(opts[:stats])
     {status, detail} = classify(result, mode)
 
-    %{status: status, detail: detail, comment: comment(result, opts), stats: stats}
+    %{status: status, detail: detail, solution: solution(result, opts), stats: stats}
   end
 
   # Without a conjecture there is nothing to prove, only a set to refute.
@@ -507,16 +508,21 @@ defmodule ShotTx.Cli do
 
   # The text of the output block, built under the deadline: the proof tree,
   # preceded by the model for a countermodel.
-  defp comment(result, opts), do: if(opts[:proof], do: comment_text(result))
+  defp solution(result, opts), do: if(opts[:proof], do: solution_text(result))
 
-  defp comment_text({:thm, proof}) when is_map(proof), do: ShotTx.Proof.to_text(proof)
+  defp solution_text({:thm, proof}) when is_map(proof), do: ShotTx.Proof.to_text(proof)
 
-  defp comment_text({:csa, "", proof}) when is_map(proof), do: ShotTx.Proof.to_text(proof)
+  defp solution_text({:csa, "", proof}) when is_map(proof), do: ShotTx.Proof.to_text(proof)
 
-  defp comment_text({:csa, model, proof}) when is_map(proof),
+  defp solution_text({:csa, model, proof}) when is_map(proof),
     do: model <> "\n" <> ShotTx.Proof.to_text(proof)
 
-  defp comment_text(_result), do: nil
+  defp solution_text(_result), do: nil
+
+  # SZS output form of the block: a refutation is a `Proof`, a saturated
+  # branch with its model a `Model`.
+  defp output_form(status) when status in [:theorem, :unsatisfiable], do: "Proof"
+  defp output_form(_status), do: "Model"
 
   ## ---------------------------------------------------------------------------
   ## Output
@@ -526,21 +532,22 @@ defmodule ShotTx.Cli do
     if opts[:szs], do: emit_szs(report, label), else: emit_short(report)
   end
 
-  defp emit_szs(%{status: status, detail: detail, comment: comment, stats: stats}, label) do
+  defp emit_szs(%{status: status, detail: detail, solution: solution, stats: stats}, label) do
     IO.puts(szs_line(status, label, detail))
 
-    if comment do
-      IO.puts("% SZS output start Comment for #{label}")
-      IO.puts(as_tptp_comment(comment))
-      IO.puts("% SZS output end Comment for #{label}")
+    if solution do
+      form = output_form(status)
+      IO.puts("% SZS output start #{form} for #{label}")
+      IO.puts(String.trim_trailing(solution))
+      IO.puts("% SZS output end #{form} for #{label}")
     end
 
     if stats, do: stats |> Prover.format_stats() |> as_tptp_comment() |> IO.puts()
   end
 
-  defp emit_short(%{status: status, detail: detail, comment: comment, stats: stats}) do
+  defp emit_short(%{status: status, detail: detail, solution: solution, stats: stats}) do
     IO.puts(short_line(status, detail))
-    if comment, do: IO.puts(comment)
+    if solution, do: IO.puts(solution)
     if stats, do: IO.puts(Prover.format_stats(stats))
   end
 

@@ -47,7 +47,7 @@ podman build --target dist -o dist .   # dist/Shot---<version>.tgz (SystemOnTPTP
 ```bash
 ./shot_tx problem.p                  # short output: THM / CSA / UNK / Timeout / ...
 ./shot_tx --szs problem.p            # SZS status line
-./shot_tx --szs --proof problem.p    # + proof tree as TPTP comment lines
+./shot_tx --szs --proof problem.p    # + proof tree in an SZS output block
 ./shot_tx --szs -t 30000 problem.p   # 30-second wall-clock budget for the whole run
 ./shot_tx --szs --cpu-timeout 30000 problem.p   # 30 CPU-seconds instead (all cores summed)
 ```
@@ -74,22 +74,23 @@ echo "P | ~P" | ./shot_tx -
 % SZS status Inappropriate for PUZ001+1.p : Unexpected token: 'fof' (:atom)
 ```
 
-With `--proof`, the proof follows in a `Comment` block. For a countermodel,
-the model comes first, then the open branch:
+With `--proof`, the proof follows in a `Proof` block. For a countermodel the
+block is a `Model`: the model comes first, then the open branch:
 
 ```
 % SZS status CounterSatisfiable for pq.p
-% SZS output start Comment for pq.p
-% p, ¬q
-% 1. ¬(p ⊃ q)                         [given]
-% 2. p ∧ (¬q)                         [bdd⊢ on 1]
-% 3. p                                [∧ on 2]
-% 4. ¬q                               [∧ on 2]
-% 5. ★ open                           [model: p, ¬q]
-% SZS output end Comment for pq.p
+% SZS output start Model for pq.p
+p, ¬q
+1. ¬(p ⊃ q)                         [given]
+2. p ∧ (¬q)                         [bdd⊢ on 1]
+3. p                                [∧ on 2]
+4. ¬q                               [∧ on 2]
+5. ★ open                           [model: p, ¬q]
+% SZS output end Model for pq.p
 ```
 
-The block is Shot's own derivation tree, not a TSTP derivation.
+The block is Shot's own derivation tree, not a TSTP derivation. Outside the
+output blocks every stdout line is a `%` comment.
 
 | Status                           | When                                              | Exit |
 | -------------------------------- | ------------------------------------------------- | ---- |
@@ -131,8 +132,8 @@ System description:
 
 > Shot is a parallel free-variable tableau prover for TH0 (Church's simple type
 > theory), written in Elixir. Countermodels are reported only for problems whose
-> types are all Boolean. Proofs are printed as a TPTP comment block, not as a
-> TSTP derivation.
+> types are all Boolean. Proofs are Shot's own derivation trees in an SZS
+> `Proof` block, not TSTP derivations.
 
 ---
 

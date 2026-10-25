@@ -53,7 +53,8 @@ RUN set -e; cd /opt/shot/Shot---*/; \
     grep -q '^% SZS status Theorem for t.p$' /tmp/out; \
     grep -q '⊥' /tmp/out; \
     bin/shot --szs -t 10000 /tmp/c.p | grep -q '^% SZS status CounterSatisfiable for c.p$'; \
-    ! grep -v '^%' /tmp/out; \
+    grep -q '^% SZS output start Proof for t.p$' /tmp/out; \
+    awk '/^% SZS output start/{b=1;next} /^% SZS output end/{b=0;next} !b && !/^%/{bad=1} END{exit bad}' /tmp/out; \
     STAREXEC_WALLCLOCK_LIMIT=10 bin/starexec_run_default /tmp/t.p | grep -q '^% SZS status Theorem for t.p$'; \
     ! ls erl_crash.dump core 2>/dev/null
 

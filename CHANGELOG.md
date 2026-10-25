@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-10-25
+
+### Changed
+
+- CLI: `--proof` prints the derivation tree in an SZS `Proof` output block
+  (`Model` for a countermodel), lines no longer `%`-prefixed; `Comment` is gone.
+
 ## [0.1.3] - 2026-10-25
 
 The SystemOnTPTP / StarExec release: `Shot---0.1.3`, listed for `TH0_NAR`.
