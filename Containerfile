@@ -12,14 +12,16 @@
 #   git archive --prefix=Shot---<version>-src/ -o dist/Shot---<version>-src.tgz HEAD
 #
 # The bundled ERTS links against the builder's glibc, so the package runs only on
-# hosts with that glibc or newer. The defaults target Ubuntu 24.04 (glibc 2.39),
-# the SystemOnTPTP host. For an older host pick an older builder, e.g.
+# hosts with that glibc or newer. The default (Debian trixie) build needs
+# GLIBC_2.38, which the SystemOnTPTP host (Ubuntu 24.04, glibc 2.39) provides.
+# For an older host pick an older builder, e.g.
 #   --build-arg BUILDER=docker.io/hexpm/elixir:<elixir>-erlang-<otp>-debian-bullseye-<date>
 #   --build-arg RUNTIME=docker.io/library/debian:bullseye-slim
-# (glibc 2.31).
+# (glibc 2.31). To smoke-test on the SystemOnTPTP image instead:
+#   --build-arg RUNTIME=docker.io/library/ubuntu:24.04
 
-ARG BUILDER=docker.io/hexpm/elixir:1.20.0-erlang-29.0.1-ubuntu-noble-20260509.1
-ARG RUNTIME=docker.io/library/ubuntu:24.04
+ARG BUILDER=docker.io/library/elixir:1.20-otp-29
+ARG RUNTIME=docker.io/library/debian:trixie-slim
 
 FROM ${BUILDER} AS build
 ENV MIX_ENV=prod LANG=C.UTF-8
