@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-10-26
+
+### Changed
+
+- Defaults: `unfold_defs: :eager` (was `:lazy`) and `beta_variant: false`
+  (was `true`); likewise for the CLI's `--unfold-defs` and `--[no-]beta-variant`.
+
+### Fixed
+
+- Soundness: demodulation no longer uses an equation whose side is a
+  λ-abstracted connective (e.g. `λx. ¬x`) as a rewrite rule. Such a rule
+  rewrote every negation on the branch, which erased closing literals and
+  produced a wrong `CounterSatisfiable` for SYO376^5.
+
 ## [0.1.4] - 2026-10-25
 
 ### Changed

@@ -197,8 +197,12 @@ defmodule ShotTx.Prover.Demodulation do
 
   defp usable_side?(term_id), do: ground?(term_id) and not connective?(term_id)
 
+  # Looks past λ-binders: `λx. ¬x` is `¬` itself, and as a head-rewrite rule
+  # it would rewrite every negation on the branch.
   defp connective?(term_id) do
-    case TF.get_term!(term_id) do
+    %Term{} = term = TF.get_term!(term_id)
+
+    case %Term{term | bvars: []} do
       negated(_) -> true
       conjunction(_, _) -> true
       disjunction(_, _) -> true

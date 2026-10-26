@@ -671,8 +671,8 @@ defmodule ShotTx.Cli do
                                               wall-clock limit unless -t is given
           --initial-gamma-limit N             default 1
           --initial-prim-limit N              default 1
-          --unfold-defs lazy|eager            default lazy
-          --[no-]beta-variant                 default true
+          --unfold-defs lazy|eager            default eager
+          --[no-]beta-variant                 default false
           --[no-]demodulation                 default true
           --[no-]atom-decomposition           default true
           --[no-]contradiction-agent          default true

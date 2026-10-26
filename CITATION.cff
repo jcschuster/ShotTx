@@ -14,8 +14,8 @@ authors:
     given-names: Johannes
     orcid: "https://orcid.org/0009-0003-5339-7216"
     affiliation: "Otto-Friedrich-Universität Bamberg, Germany"
-version: "0.1.4"
-date-released: "2026-10-25"
+version: "0.1.5"
+date-released: "2026-10-26"
 license: MIT
 repository-code: "https://github.com/jcschuster/ShotTx"
 url: "https://hexdocs.pm/shot_tx"

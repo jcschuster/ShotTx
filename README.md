@@ -297,7 +297,7 @@ common ones:
 | `timeout`                | `5_000`              | Wall-clock ms before returning `:timeout`                              |
 | `initial_gamma_limit`    | `1`                  | Starting γ-rule instantiation depth                                    |
 | `initial_prim_limit`     | `1`                  | Starting primitive-substitution binding depth                          |
-| `unfold_defs`            | `:lazy`              | `:eager` unfolds definitions immediately                               |
+| `unfold_defs`            | `:eager`             | `:lazy` defers unfolding definitions                                   |
 | `demodulation`           | `true`               | Binding-free equational rewriting (forward + backward)                 |
 | `equivalence_processing` | `:bidirectional_imp` | `↔` expansion mode: `:same_polarity`, `:bidirectional_imp`, or `:dual` |
 | `contradiction_agent`    | `true`               | Enable global CSP-based closure                                        |

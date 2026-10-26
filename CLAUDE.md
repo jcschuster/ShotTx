@@ -75,8 +75,8 @@ ShotTx.Prover (public API)
   prim_subst_after: 1,
   prim_subst_batch_size: 8,
   unification_depth: 8,
-  unfold_defs: :lazy,          # or :eager
-  beta_variant: true,
+  unfold_defs: :eager,         # or :lazy
+  beta_variant: false,
   formula_cost: &Rules.rule_cost/1
 }
 ```

@@ -10,8 +10,8 @@ defmodule ShotTx.Data.Parameters do
   | `prim_subst_after` | `1` | Number of γ instantiations before prim-subst is scheduled for a formula. |
   | `prim_subst_batch_size` | `8` | Maximum number of general bindings generated per prim-subst step. |
   | `unification_depth` | `8` | Maximum depth passed to the `shot_un` CSP solver. |
-  | `unfold_defs` | `:lazy` | `:eager` unfolds definitions immediately; `:lazy` defers until the atomic rule. |
-  | `beta_variant` | `true` | When `true`, adds `¬B₁` as an extra assumption to the right β-branch. |
+  | `unfold_defs` | `:eager` | `:eager` unfolds definitions immediately; `:lazy` defers until the atomic rule. |
+  | `beta_variant` | `false` | When `true`, adds `¬B₁` as an extra assumption to the right β-branch. |
   | `formula_cost` | `&Rules.rule_cost/1` | Cost function used by `FormulaPqueue`; lower cost = higher priority. |
   | `simplification` | `:deep` | Propositional simplification depth: `:none`, `:shallow`, or `:deep`. |
   | `orient` | `:none` | Orientation of commutative connectives (∧, ∨, ↔, =) by term order before classifying. `:none` skips orientation entirely. `:shallow` orients only the outermost connective of each formula. `:deep` recurses into all subterms bottom-up, normalising every nested commutative connective (including those embedded in atom arguments). |
@@ -48,8 +48,8 @@ defmodule ShotTx.Data.Parameters do
             prim_subst_after: 1,
             prim_subst_batch_size: 8,
             unification_depth: 8,
-            unfold_defs: :lazy,
-            beta_variant: true,
+            unfold_defs: :eager,
+            beta_variant: false,
             formula_cost: &Rules.rule_cost/1,
             simplification: :deep,
             orient: :none,

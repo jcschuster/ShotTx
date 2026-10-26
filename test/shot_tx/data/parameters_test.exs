@@ -13,8 +13,8 @@ defmodule ShotTx.Data.ParametersTest do
     assert p.prim_subst_after == 1
     assert p.prim_subst_batch_size == 8
     assert p.unification_depth == 8
-    assert p.unfold_defs == :lazy
-    assert p.beta_variant == true
+    assert p.unfold_defs == :eager
+    assert p.beta_variant == false
     assert p.simplification == :deep
     assert p.orient == :none
     assert is_function(p.formula_cost, 1)
@@ -39,10 +39,10 @@ defmodule ShotTx.Data.ParametersTest do
   end
 
   test "struct! accepts a keyword list and overrides defaults" do
-    p = struct!(Parameters, timeout: 500, unfold_defs: :eager, orient: true)
+    p = struct!(Parameters, timeout: 500, unfold_defs: :lazy, orient: true)
 
     assert p.timeout == 500
-    assert p.unfold_defs == :eager
+    assert p.unfold_defs == :lazy
     assert p.orient == true
     # untouched fields stay at default
     assert p.initial_gamma_limit == 1
